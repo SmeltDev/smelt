@@ -270,6 +270,13 @@ func (n Notes) PRBody(runID string, o Outcome, stat string) string {
 		b.WriteString(body)
 		b.WriteString("\n\n")
 	}
+	if len(o.Unverified) > 0 {
+		b.WriteString("## Verify before merging\n\n")
+		for _, item := range o.Unverified {
+			b.WriteString("- [ ] " + item + "\n")
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("---\n")
 	b.WriteString(footer(runID, o, stat))
 	b.WriteString("\n")

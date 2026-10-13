@@ -107,7 +107,7 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 		pub.Title = notes.Title
 	}
 	if !flags.bodySet {
-		pub.Body = notes.PRBody(f.RunID, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds}, f.Stat)
+		pub.Body = notes.PRBody(f.RunID, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds, Unverified: f.Unverified}, f.Stat)
 	}
 
 	_, remoteErr := gitremote.URL(ctx, f.Worktree, pub.Remote)

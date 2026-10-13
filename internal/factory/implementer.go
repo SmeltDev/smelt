@@ -29,23 +29,51 @@ const baseImplementerSystemPrompt = `You are working in a disposable copy of the
 Make the requested change by editing files. Leave your changes uncommitted: do not run git commit, git stash, git reset, git checkout, git switch or git rebase. Your changes are collected from the working tree and reviewed.
 Implement everything the request asks for in this run, including every phase, test and acceptance item. Do not stop after part of it, and do not defer parts to a later change.
 A review finding that says part of the request is missing or incomplete is required work, not a matter of scope.
-If something truly cannot be done here (a credential, a manual step, a decision the request leaves open), finish everything else, then end your summary with a line "BLOCKED: <what and why>".
+Use BLOCKED only for work you could not do (a credential the request needs, a manual step, a decision the request leaves open): finish everything else, then end your summary with a line "BLOCKED: <what and why>".
+Not being able to run or observe something in this sandbox (Docker, real credentials, the host's keychain, a real network service) is not a block: finish the work, test it with fakes, and list what still needs a real check on its own "UNVERIFIED: <what to check and how>" line.
 When you finish, reply with a short summary of what you changed.`
 
 // blockedMarker starts the line an implementer ends its summary with when
 // something in the request cannot be done in the run.
 const blockedMarker = "BLOCKED:"
 
+// unverifiedMarker starts a line naming something that is done but can only
+// be proven outside the sandbox. It never changes a run's result.
+const unverifiedMarker = "UNVERIFIED:"
+
+// markedValues returns what follows marker on each line of summary that starts
+// with it, ignoring bullets, bold and quote prefixes. Lines that merely
+// mention the marker, such as "nothing is blocked: all done", do not count.
+func markedValues(summary, marker string) []string {
+	var values []string
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "*_>- "))
+		if rest, ok := strings.CutPrefix(line, marker); ok {
+			values = append(values, strings.TrimSpace(strings.Trim(rest, "*_ ")))
+		}
+	}
+	return values
+}
+
 // BlockedReason is what the implementer's summary says it is blocked on, or
 // "" when it has no BLOCKED: line.
 func BlockedReason(summary string) string {
-	for _, line := range strings.Split(summary, "\n") {
-		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "*_>- "))
-		if rest, ok := strings.CutPrefix(line, blockedMarker); ok {
-			return strings.TrimSpace(strings.Trim(rest, "*_ "))
-		}
+	if values := markedValues(summary, blockedMarker); len(values) > 0 {
+		return values[0]
 	}
 	return ""
+}
+
+// UnverifiedItems are the things the implementer's summary lists after
+// UNVERIFIED:, in order. Empty items are dropped.
+func UnverifiedItems(summary string) []string {
+	var items []string
+	for _, v := range markedValues(summary, unverifiedMarker) {
+		if v != "" {
+			items = append(items, v)
+		}
+	}
+	return items
 }
 
 // implementerSystemPrompt returns the base system prompt, followed by the

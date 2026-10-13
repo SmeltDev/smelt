@@ -151,10 +151,11 @@ func TestLoopPlansReviewsAndRevisesOnce(t *testing.T) {
 				assert.Assert(t, !contains(prompt, bad), "unexpected %q in:\n%s", bad, prompt)
 			}
 			// The request follows the plan, and what the plan cannot verify is
-			// the seed of the BLOCKED list.
+			// the seed of the UNVERIFIED list.
 			assert.Assert(t, strings.HasSuffix(prompt, "add a flag"), prompt)
 			assert.Assert(t, contains(prompt, "needs Docker on the host"), prompt)
-			assert.Assert(t, contains(prompt, "under a BLOCKED: line"), prompt)
+			assert.Assert(t, contains(prompt, "on its own UNVERIFIED: line"), prompt)
+			assert.Assert(t, !contains(prompt, "BLOCKED:"), prompt)
 
 			// The plan is settled before the implementer is prompted.
 			assert.DeepEqual(t, kinds[:3], []EventKind{EventPlanning, EventPlanReviewed, EventImplementing})

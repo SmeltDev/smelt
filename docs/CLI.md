@@ -405,7 +405,7 @@ smelt
   found wanting the run goes ahead, with the findings in front of the implementer. The approved plan is
   prepended to the implementation prompt and the PR-notes prompt, and is in `factory status --json` as
   `factory.plan`, in the run log and in the run's record. `cannot_verify_here` items seed the implementer's
-  `BLOCKED:` line. `--no-plan` or `factory.plan: false` skips it; `--continue` never plans.
+  `UNVERIFIED:` lines. `--no-plan` or `factory.plan: false` skips it; `--continue` never plans.
   `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
   are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
   side by side. A skipped round still counts towards `--max-attempts`.
@@ -415,6 +415,16 @@ smelt
   extra turn in the same round asking it to run them; a second miss is noted on the round and the real gates
   decide. Tests a gate's output reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail,
   as `skipped_tests` in `factory status --json`, and in the PR notes under "Skipped in the sandbox".
+- **Blocked is not unverified.** `blocked` means part of the request was not done (a credential it needs, a
+  manual step, an open decision): the implementer ends its summary with `BLOCKED: <what and why>`, the run
+  ends `blocked` and is never published. `UNVERIFIED: <what to check and how>` lines mean the work is done
+  and passed the gates and reviews, but something can only be proven outside the sandbox (Docker, real
+  credentials, the keychain, a real network service). They never change the result: a run with all checks
+  passing and only `UNVERIFIED:` lines ends `passed` and is published as usual. The items are in
+  `factory status --json` as `unverified` (omitted when empty, next to `blocked`), listed on the terminal
+  under `Verify outside the sandbox:`, logged as `unverified: ...` in the run log and activity stream, and
+  rendered in the PR body as a `## Verify before merging` checklist. With `--continue`, the list is the
+  latest turn's, not accumulated.
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
   (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)

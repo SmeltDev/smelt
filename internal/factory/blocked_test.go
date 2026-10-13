@@ -15,7 +15,7 @@ import (
 
 func TestImplementerPromptDemandsTheWholeRequest(t *testing.T) {
 	p := implementerSystemPrompt("", nil)
-	for _, want := range []string{"everything the request asks for", "required work", "BLOCKED: <what and why>"} {
+	for _, want := range []string{"everything the request asks for", "required work", "BLOCKED: <what and why>", "UNVERIFIED: <what to check and how>", "is not a block"} {
 		assert.Assert(t, strings.Contains(p, want), "missing %q in %s", want, p)
 	}
 }
@@ -24,6 +24,44 @@ func TestBlockedReason(t *testing.T) {
 	assert.Equal(t, BlockedReason("Did it.\nBLOCKED: needs a token"), "needs a token")
 	assert.Equal(t, BlockedReason("**BLOCKED:** needs a token"), "needs a token")
 	assert.Equal(t, BlockedReason("nothing is blocked: all done"), "")
+}
+
+func TestUnverifiedItems(t *testing.T) {
+	tests := []struct {
+		name, summary string
+		want          []string
+	}{
+		{"none", "Did it.", nil},
+		{"one", "Did it.\nUNVERIFIED: run it on the host", []string{"run it on the host"}},
+		{"several", "UNVERIFIED: a\nmiddle\nUNVERIFIED: b", []string{"a", "b"}},
+		{"formatted", "- UNVERIFIED: a\n**UNVERIFIED:** b\n> UNVERIFIED: c", []string{"a", "b", "c"}},
+		{"bare marker", "UNVERIFIED:\nUNVERIFIED: a", []string{"a"}},
+		{"mention only", "nothing is unverified: all done", nil},
+		{"mixed with blocked", "BLOCKED: needs a token\nUNVERIFIED: a", []string{"a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, UnverifiedItems(tt.summary), tt.want)
+		})
+	}
+	assert.Equal(t, BlockedReason("BLOCKED: needs a token\nUNVERIFIED: a"), "needs a token")
+	assert.Equal(t, BlockedReason("UNVERIFIED: a"), "")
+}
+
+func TestLoopUnverifiedSummary(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{}}}
+	steps.summary = "done\nUNVERIFIED: run it in Docker\nUNVERIFIED: check the keychain"
+	out, err := Loop{Attempts: 5}.Run(context.Background(), steps, "p")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.DeepEqual(t, out.Unverified, []string{"run it in Docker", "check the keychain"})
+
+	steps = &fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{}}}
+	steps.summary = "done\nBLOCKED: needs a credential\nUNVERIFIED: run it in Docker"
+	out, err = Loop{Attempts: 5}.Run(context.Background(), steps, "p")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultBlocked)
+	assert.DeepEqual(t, out.Unverified, []string{"run it in Docker"})
 }
 
 func missingFinding() review.Finding {

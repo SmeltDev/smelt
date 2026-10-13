@@ -64,6 +64,16 @@ func TestNotesRendering(t *testing.T) {
 	assert.Assert(t, !strings.Contains(msg+fb.PRBody("run-1", testOutcome, ""), "second line"))
 }
 
+func TestPRBodyUnverifiedChecklist(t *testing.T) {
+	n := Notes{Title: "Add a flag", What: "- a flag"}
+	withItems := testOutcome
+	withItems.Unverified = []string{"run it in Docker", "check the keychain"}
+	assert.Equal(t, n.PRBody("run-1", withItems, ""),
+		"### What\n- a flag\n\n## Verify before merging\n\n- [ ] run it in Docker\n- [ ] check the keychain\n\n---\nWritten by smelt factory run run-1: passed after 3 round(s).\n")
+	assert.Assert(t, !strings.Contains(n.PRBody("run-1", testOutcome, ""), "Verify before merging"))
+	assert.Assert(t, !strings.Contains(n.CommitMessage("run-1", withItems, ""), "Verify"))
+}
+
 func notesSidecars(run func(script string, env map[string]string) (int, string, error)) (*Sidecars, *string) {
 	var script string
 	entry := &sidecar.PoolEntry{ID: "impl", RepoPath: "/repo"}
