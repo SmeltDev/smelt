@@ -216,6 +216,9 @@ type FactoryRun struct {
 	SkippedTests []string `json:"skipped_tests,omitempty"`
 	// Blocked is what the implementer said it could not do, for ResultBlocked.
 	Blocked string `json:"blocked,omitempty"`
+	// Unverified is what is done but can only be checked outside the sandbox.
+	// It does not change Result.
+	Unverified []string `json:"unverified,omitempty"`
 	// Incomplete are the titles of the last round's findings that say part of
 	// the request is missing.
 	Incomplete []string `json:"incomplete,omitempty"`

@@ -232,3 +232,24 @@ func TestReportOutcomeBlocked(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Assert(t, strings.Contains(ue.msg, "needs a token"), ue.msg)
 }
+
+func TestPrintUnverified(t *testing.T) {
+	var said []string
+	say := func(_ iostream.Level, msg string) { said = append(said, msg) }
+	printUnverified(nil, say)
+	assert.Equal(t, len(said), 0)
+	printUnverified([]string{"run it in Docker"}, say)
+	assert.DeepEqual(t, said, []string{"Verify outside the sandbox:", "  - run it in Docker"})
+}
+
+func TestPublishRunBodyCarriesTheUnverifiedChecklist(t *testing.T) {
+	f, _ := publishProject(t)
+	f.Notes = &smeltd.Notes{Title: "Add a flag", What: "- a flag"}
+	f.Unverified = []string{"run it in Docker", "check the keychain"}
+	host := &fakePRHost{}
+	err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, f, publishFlags{pr: true}, false, host)
+	assert.NilError(t, err)
+	assert.Equal(t, len(host.created), 1)
+	body := host.created[0].Body
+	assert.Assert(t, strings.Contains(body, "## Verify before merging\n\n- [ ] run it in Docker\n- [ ] check the keychain\n"), body)
+}

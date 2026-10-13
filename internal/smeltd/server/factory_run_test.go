@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -453,6 +454,7 @@ func TestFactorySessionRecordsBlockedAndIncompleteWork(t *testing.T) {
 	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		rep, err := run(ctx, opts)
 		rep.Outcome.Blocked = "needs a credential"
+		rep.Outcome.Unverified = []string{"run it in Docker"}
 		rep.Outcome.Checks = []factory.Check{{
 			Name: "adversarial", Kind: factory.KindReview, Status: factory.StatusFailed,
 			Findings: []review.Finding{{File: "a.go", Severity: "medium", Body: "The CLI is missing. Nothing selects a harness."}},
@@ -466,6 +468,7 @@ func TestFactorySessionRecordsBlockedAndIncompleteWork(t *testing.T) {
 
 	assert.Equal(t, detail.Factory.Result, smeltd.ResultBlocked)
 	assert.Equal(t, detail.Factory.Blocked, "needs a credential")
+	assert.DeepEqual(t, detail.Factory.Unverified, []string{"run it in Docker"})
 	assert.DeepEqual(t, detail.Factory.Incomplete, []string{"The CLI is missing"})
 	assert.Equal(t, detail.Stages[0].Note, "the implementer is blocked: needs a credential")
 }
@@ -540,4 +543,13 @@ func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T
 	assert.Assert(t, round.Implement.Nudged)
 	assert.Assert(t, strings.Contains(round.Note, "1 review(s) skipped (gates failed)"), round.Note)
 	assert.Assert(t, strings.Contains(round.Note, "lint"), round.Note)
+}
+
+func TestFactoryRunUnverifiedJSON(t *testing.T) {
+	b, err := json.Marshal(smeltd.FactoryRun{Unverified: []string{"run it in Docker"}})
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"unverified":["run it in Docker"]`), string(b))
+	b, err = json.Marshal(smeltd.FactoryRun{})
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(string(b), "unverified"), string(b))
 }

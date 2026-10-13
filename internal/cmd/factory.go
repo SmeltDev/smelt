@@ -671,7 +671,20 @@ func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOu
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case smeltd.SessionRunning, smeltd.SessionDone:
 	}
-	return reportOutcome(status, f.Result, f.Rounds, f.Blocked)
+	err := reportOutcome(status, f.Result, f.Rounds, f.Blocked)
+	printUnverified(f.Unverified, status)
+	return err
+}
+
+// printUnverified lists what only a check outside the sandbox can prove.
+func printUnverified(items []string, status iostream.StatusFunc) {
+	if len(items) == 0 {
+		return
+	}
+	status(iostream.LevelInfo, "Verify outside the sandbox:")
+	for _, item := range items {
+		status(iostream.LevelInfo, "  - "+item)
+	}
 }
 
 // printFactoryTotals says how long the run took and what the implementer's

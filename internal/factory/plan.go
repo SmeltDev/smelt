@@ -329,7 +329,7 @@ func planPreamble(plan Plan, unresolved []review.Finding) string {
 		for _, c := range plan.CannotVerifyHere {
 			fmt.Fprintf(&b, "- %s\n", c)
 		}
-		b.WriteString("Unless you find a way to verify one, end your summary with it under a " + blockedMarker + " line.\n")
+		b.WriteString("Unless you find a way to verify one, finish the work anyway and end your summary with it on its own " + unverifiedMarker + " line, saying how to check it.\n")
 	}
 	b.WriteString("\n---\n\n")
 	return b.String()

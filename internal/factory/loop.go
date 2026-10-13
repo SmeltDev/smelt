@@ -50,6 +50,9 @@ type Outcome struct {
 	// Blocked is the reason the implementer's last summary gave after
 	// BLOCKED:, or "".
 	Blocked string
+	// Unverified are the things the implementer's last summary listed after
+	// UNVERIFIED:. They never change Result.
+	Unverified []string
 	// Plan is the plan the implementer was sent with, nil when the run did
 	// not plan.
 	Plan *Plan
@@ -182,6 +185,7 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 			}
 			emit(Event{Kind: EventImplemented, Round: round, Turn: turn})
 			out.Blocked = BlockedReason(turn.Summary)
+			out.Unverified = UnverifiedItems(turn.Summary)
 
 			change, err := steps.Collect(ctx)
 			if err != nil {

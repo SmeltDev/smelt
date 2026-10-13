@@ -364,6 +364,11 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		// lines; it belongs to no round.
 		return
 	}
+	if ev.Kind == factory.EventImplemented {
+		for _, item := range factory.UnverifiedItems(ev.Turn.Summary) {
+			r.progress(iostream.LevelInfo, "unverified: "+item)
+		}
+	}
 	ridx := r.round(ev.Round)
 	e := r.entry
 	e.mu.Lock()
@@ -557,6 +562,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
 		f.Blocked = rep.Outcome.Blocked
+		f.Unverified = rep.Outcome.Unverified
 		f.ContinuedFromEmpty = rep.Outcome.FromEmpty
 		f.SkippedTests = rep.Outcome.Skipped()
 		for _, fd := range rep.Outcome.Incomplete() {

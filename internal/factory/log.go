@@ -149,6 +149,9 @@ func (l *runLog) event(e Event) {
 	case EventImplemented:
 		l.line("info", fmt.Sprintf("round %d: implementer finished in %s ($%.2f)", e.Round, e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
 		l.block(fmt.Sprintf("round %d: implementer's summary", e.Round), e.Turn.Summary)
+		for _, item := range UnverifiedItems(e.Turn.Summary) {
+			l.line("info", "unverified: "+item)
+		}
 		if e.Turn.Nudged {
 			l.line("warn", fmt.Sprintf("round %d: the summary claimed passing gates that were not run after the last edit; the implementer was asked to run them", e.Round))
 		}
