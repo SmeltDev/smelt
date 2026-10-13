@@ -11,8 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/smeltd"
 	"github.com/smeltdev/smelt/internal/ui"
 )
@@ -53,7 +55,7 @@ one of them is gone.`,
 }
 
 func newFactoryCleanCmd() *cobra.Command {
-	var yes, force, dryRun bool
+	var yes, force, dryRun, cache bool
 	cmd := &cobra.Command{
 		Use:   "clean [run...]",
 		Short: "Remove factory runs' worktrees, branches and records",
@@ -64,15 +66,28 @@ still running is selected.
 Whether a run's work has landed cannot be told from git, since it is applied as
 new commits, so the runs to remove are listed first and you are asked before
 anything is removed. A run still in progress is never removed. A worktree with
-uncommitted changes is skipped unless --force is given, which discards them.`,
+uncommitted changes is skipped unless --force is given, which discards them.
+
+With --cache nothing about runs is touched. Instead the project's Docker cache
+volumes are removed: the build cache every docker sidecar shares and, for a Go
+project, its module cache. The next run fills them again. Use it when a stale
+cache is suspected, or to free the disk space.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cache {
+				if len(args) > 0 || force {
+					return newUserError("--cache takes no runs and no --force.").
+						withCode("command.invalid_args").withExitCode(ExitBadArgs).withoutDetail()
+				}
+				return runFactoryCleanCache(cmd, cleanFlags{yes: yes, dryRun: dryRun})
+			}
 			return runFactoryClean(cmd, args, cleanFlags{yes: yes, force: force, dryRun: dryRun})
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "remove without asking")
 	cmd.Flags().BoolVar(&force, "force", false, "also remove worktrees with uncommitted changes, discarding them")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "list what would be removed and stop")
+	cmd.Flags().BoolVar(&cache, "cache", false, "remove the project's docker cache volumes instead of runs")
 	return cmd
 }
 
@@ -202,10 +217,15 @@ func indexOfRun(entries []factory.RunEntry, id string) int {
 	return -1
 }
 
-// confirmClean asks before removing, defaulting to no. Without a terminal it
-// cannot ask, which is a mistake to explain rather than a reason to remove.
+// confirmClean asks before removing runs.
 func confirmClean(n int) error {
-	label := fmt.Sprintf("Remove these %d run(s)? Their branches and any work not applied elsewhere will be deleted.", n)
+	return confirmRemoval(fmt.Sprintf("Remove these %d run(s)? Their branches and any work not applied elsewhere will be deleted.", n),
+		"Cannot ask before removing runs without a terminal.")
+}
+
+// confirmRemoval asks label, defaulting to no. Without a terminal it cannot
+// ask, which is a mistake to explain rather than a reason to remove.
+func confirmRemoval(label, noTTY string) error {
 	ok := false
 	err := ui.ErrNoTTY
 	if !nonInteractive() {
@@ -213,7 +233,7 @@ func confirmClean(n int) error {
 	}
 	switch {
 	case errors.Is(err, ui.ErrNoTTY):
-		return newUserError("Cannot ask before removing runs without a terminal.").
+		return newUserError(noTTY).
 			withCode("command.invalid_args").
 			withSuggestion("Pass --yes to remove them, or --dry-run to only list them.").
 			withExitCode(ExitBadArgs).
@@ -221,10 +241,45 @@ func confirmClean(n int) error {
 	case errors.Is(err, ui.ErrCancelled):
 		return newUserError("Nothing was removed.").withoutDetail()
 	case err != nil:
-		return fmt.Errorf("ask to remove the runs: %w", err)
+		return fmt.Errorf("ask to remove: %w", err)
 	case !ok:
 		return newUserError("Nothing was removed.").withoutDetail()
 	}
+	return nil
+}
+
+// runFactoryCleanCache removes the project's cache volumes.
+func runFactoryCleanCache(cmd *cobra.Command, flags cleanFlags) error {
+	ctx := cmd.Context()
+	streams := iostream.FromCmd(cmd)
+	root, err := sessionProjectRoot(ctx)
+	if err != nil {
+		return err
+	}
+	key := config.ProjectHash(root)
+	cache, gomod := docker.CacheVolumeNames(key)
+	streams.Printf("Cache volumes of this project: %s, %s\n", cache, gomod)
+	if flags.dryRun {
+		return nil
+	}
+	if !flags.yes {
+		if err := confirmRemoval("Remove these cache volumes? The next run rebuilds them.", "Cannot ask before removing the cache without a terminal."); err != nil {
+			return err
+		}
+	}
+	provider, err := docker.New()
+	if err != nil {
+		return &userError{msg: "Could not reach Docker.", err: err}
+	}
+	defer func() { _ = provider.Close() }()
+	removed, err := provider.RemoveCacheVolumes(ctx, key)
+	for _, name := range removed {
+		streams.Printf("removed %s\n", name)
+	}
+	if err != nil {
+		return &userError{msg: "Could not remove every cache volume. One in use by a running sidecar has to wait for its run.", err: err}
+	}
+	streams.Printf("Removed %d cache volume(s).\n", len(removed))
 	return nil
 }
 

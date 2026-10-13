@@ -1,7 +1,6 @@
 package factory
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -22,12 +21,13 @@ var subjectPattern = regexp.MustCompile(`(?i)\b(tests?|lint\w*|gates?|checks?|bu
 // gatesHeading starts the section of a summary that reports the gates.
 const gatesHeading = "## Gates"
 
-// gateCommands are the commands the implementer is asked to run itself: the
-// project's validation commands, without smelt's own markers check.
+// gateCommands are the project's gates the implementer is told about: commands
+// with the gate role, without smelt's own markers check. Setup commands such as
+// install are not gates and never count as one.
 func gateCommands(cmds []config.Command) []config.Command {
 	var out []config.Command
 	for _, c := range cmds {
-		if c.Name != MarkersGate.Name {
+		if c.Role == config.RoleGate && c.Name != MarkersGate.Name {
 			out = append(out, c)
 		}
 	}
@@ -82,26 +82,4 @@ func unproven(acts []Activity, gates []config.Command) []string {
 		}
 	}
 	return out
-}
-
-// nudgePrompt asks the implementer to run the gates its summary claimed.
-func nudgePrompt(missing []string) string {
-	return fmt.Sprintf("Your summary says the gates pass but they weren't run after your last edit (not run: %s); "+
-		"run them and report. Paste the last lines of each one's output under a %s heading, "+
-		"and fix whatever fails.", strings.Join(missing, ", "), gatesHeading)
-}
-
-// mergeTurns is the turn that follows first, with what both spent. The later
-// summary stands: it is the implementer's last word on the work.
-func mergeTurns(first, next Turn) Turn {
-	next.Duration += first.Duration
-	next.CostUSD += first.CostUSD
-	next.InputTokens += first.InputTokens
-	next.CachedTokens += first.CachedTokens
-	next.OutputTokens += first.OutputTokens
-	next.Activity = append(first.Activity, next.Activity...)
-	if next.RateLimit == nil {
-		next.RateLimit = first.RateLimit
-	}
-	return next
 }

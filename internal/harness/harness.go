@@ -80,6 +80,12 @@ type ImplementInput struct {
 	// SessionID is the session to continue when Resume is set.
 	SessionID string
 	Resume    bool
+	// LongestGate is the longest timeout among the project's gates, and Timeout
+	// bounds the whole turn. A harness whose CLI limits how long one command
+	// may run uses them to let a full gate finish in a single call; zero means
+	// unknown.
+	LongestGate time.Duration
+	Timeout     time.Duration
 }
 
 // ReviewInput is one review.

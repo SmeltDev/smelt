@@ -216,6 +216,7 @@ smelt
 │   │   --yes                       # Remove without asking
 │   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
 │   │   --dry-run                   # List what would be removed and stop
+│   │   --cache                     # Remove the project's docker cache volumes (smelt-cache-<hash>, smelt-gomod-<hash>) instead of runs
 │   ├── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
 │   │   --unset                     # Remove factory.author, so each person commits as themselves
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
@@ -409,12 +410,37 @@ smelt
   `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
   are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
   side by side. A skipped round still counts towards `--max-attempts`.
-- **The implementer must prove its gates.** Its prompt lists the gate commands and asks for their output under
-  a `## Gates` heading. If the summary claims passing tests, lint or gates but the turn's activity shows a gate
-  (its command, or the `task` target that wraps it) was not run after the last edit, the implementer gets one
-  extra turn in the same round asking it to run them; a second miss is noted on the round and the real gates
-  decide. Tests a gate's output reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail,
-  as `skipped_tests` in `factory status --json`, and in the PR notes under "Skipped in the sandbox".
+- **The implementer runs quick checks; smelt runs the gates.** Its prompt asks it, after its last edit, to
+  build and run the tests of the packages it changed (for Go `go build ./...` and `go test ./<changed
+  packages>/...`) and not to run the full gates itself: smelt runs them right after the turn and sends back any
+  failure, so a round does not pay for them twice. The prompt lists the project's `role: gate` commands under
+  "smelt runs these after your turn". A command may set `quick`, free text shown as that gate's quick check
+  (`"quick": "go test ./<package>/... for each package you changed, without -race"`); smelt never runs it.
+  A gate whose configured `timeout` is 60 seconds or less is quick enough to be run in full after the last
+  edit, and the prompt says so. Long commands run in the foreground: the prompt says not to background them
+  and poll, and for Claude Code the turn sets `BASH_DEFAULT_TIMEOUT_MS` (the longest gate timeout plus 2
+  minutes, at least 10) and `BASH_MAX_TIMEOUT_MS` (the implementer timeout), so one tool call can outlast a
+  full test run. Codex has no equivalent setting (its shell tool takes a timeout per call, set by the model),
+  so it gets the prompt line alone. If the summary claims passing tests, lint or gates but the turn's activity
+  shows no gate (its command, or the `task` target that wraps it) was run after the last edit, that is noted on
+  the round (`unproven_gates`, the log and the status line) and nothing more happens: the round's own gates
+  decide. Only `role: gate` commands count, never `install` or other setup commands. Tests a gate's output
+  reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail, as `skipped_tests` in
+  `factory status --json`, and in the PR notes under "Skipped in the sandbox".
+- **The docker backend keeps a warm cache.** Every sidecar of a project mounts the named volume
+  `smelt-cache-<project hash>` at the image user's `~/.cache` (Go's build cache lives there), and, for a Go
+  project (`environment.stack: go`), `smelt-gomod-<project hash>` at the Go module cache (`GOMODCACHE`, else
+  `GOPATH/pkg/mod`, else `~/go/pkg/mod`). The home directory comes from the image. The volumes outlive
+  containers and runs, so a second run's gates start warm. `factory.cache: false` turns both off;
+  `smelt factory clean --cache` removes them (a volume in use by a running sidecar is kept). The CircleCI
+  backend is unaffected.
+- **Where the time went.** At the end of a run `factory build` prints, the run log records and
+  `factory status --json` carries (as `factory.timing`, in milliseconds, with the `line`) one line:
+  `Time: plan 1m02s · implement 3m40s (commands 1m10s) · gates 0m52s · reviews 0m21s · notes 0m15s · total 6m10s`.
+  `commands` is the implementer's time inside tool calls, taken from the activity stream (the gap between a
+  call and the next activity, so a slight overestimate). Any single tool call over 2 minutes is logged as a
+  warning with its command. `timing.gate_only_rounds`, and `gates_only_failed` on a round, name the rounds that
+  failed on gates alone.
 - **Blocked is not unverified.** `blocked` means part of the request was not done (a credential it needs, a
   manual step, an open decision): the implementer ends its summary with `BLOCKED: <what and why>`, the run
   ends `blocked` and is never published. `UNVERIFIED: <what to check and how>` lines mean the work is done

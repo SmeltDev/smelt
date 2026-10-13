@@ -39,9 +39,11 @@ spec.md ──► implement ──► review ×N + validate ──► feedback �
   0. Once, before round 1: the implementer writes a plan (files, approach, how
      each acceptance item is met, what it can't verify in the sandbox) and the
      requirements review checks it against your request.
-  1. The implementer makes the change, following the plan, and ends its turn
-     with the output of your gates. smelt checks it ran them after its last edit.
-  2. Your validation commands (tests, lint, typecheck…) run first. If one fails,
+  1. The implementer makes the change, following the plan, and checks it with
+     quick builds and tests of the packages it touched (a command's optional
+     `quick` field says how). The gates are smelt's to run, not the agent's.
+  2. Your validation commands (tests, lint, typecheck…) run first, on a warm
+     build cache that persists between runs (`factory.cache`). If one fails,
      the reviews are skipped and the failure goes straight back to the
      implementer. If they pass, the reviewers check the change.
   3. High and medium findings, and failed checks, go back to the implementer.

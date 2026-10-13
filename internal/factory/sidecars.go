@@ -107,6 +107,16 @@ type Sidecars struct {
 	// fingerprint is the implementer's change as last collected, which is
 	// what each round's reviews are of.
 	fingerprint string
+	// gatesTook and reviewsTook are the time Check has spent on validation
+	// commands and on reviews, over all rounds.
+	gatesTook, reviewsTook time.Duration
+}
+
+// CheckTimes are the time Check has spent on validation commands and on
+// reviews so far. Commands and reviews that ran at the same time each count
+// their own time.
+func (s *Sidecars) CheckTimes() (gates, reviews time.Duration) {
+	return s.gatesTook, s.reviewsTook
 }
 
 // Prepare commits the tree the pool synced to every member, the worktree's, as
@@ -139,35 +149,23 @@ func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 	if err != nil {
 		return turn, err
 	}
-	if turn, err = s.prove(ctx, turn); err != nil {
-		return turn, err
-	}
+	turn = s.prove(turn)
 	s.answer(turn.Summary)
 	return turn, nil
 }
 
 // prove checks a summary that claims passing gates against what the turn ran.
-// One that claims them without running them after its last edit is asked once
-// to run them, in a turn that belongs to the same round; a second miss is
-// reported on the turn, and the round's own gates tell the truth.
-func (s *Sidecars) prove(ctx context.Context, turn Turn) (Turn, error) {
-	gates := gateCommands(s.Commands)
-	missing := unproven(turn.Activity, gates)
+// A claim with no gate run after the last edit is noted on the turn and
+// reported, and nothing more: the round's own gates run right after and tell
+// the truth, so asking the implementer to run them again would only add a turn.
+func (s *Sidecars) prove(turn Turn) Turn {
+	missing := unproven(turn.Activity, gateCommands(s.Commands))
 	if len(missing) == 0 || !claimsGatesPass(turn.Summary) {
-		return turn, nil
+		return turn
 	}
-	s.notify(iostream.LevelWarn, "the summary says the gates pass but "+strings.Join(missing, ", ")+" were not run after the last edit; asking the implementer to run them")
-	next, err := s.Implementer.Run(ctx, nudgePrompt(missing))
-	if err != nil {
-		return mergeTurns(turn, next), err
-	}
-	turn = mergeTurns(turn, next)
-	turn.Nudged = true
-	if missing = unproven(turn.Activity, gates); len(missing) > 0 && claimsGatesPass(turn.Summary) {
-		turn.Unproven = missing
-		s.notify(iostream.LevelWarn, "the implementer still claims passing gates it did not run after its last edit: "+strings.Join(missing, ", "))
-	}
-	return turn, nil
+	turn.Unproven = missing
+	s.notify(iostream.LevelWarn, "the summary says the gates pass but "+strings.Join(missing, ", ")+" were not run after the last edit")
+	return turn
 }
 
 // notify reports a notice, if anyone listens.
@@ -214,7 +212,9 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 // so its reviews are reported as skipped rather than spent on code that is
 // about to change.
 func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, error) {
+	start := time.Now()
 	gates := runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+	s.gatesTook += time.Since(start)
 	if gatesFailed(gates) {
 		skipped := make([]Check, len(s.Prompts))
 		for i, p := range s.Prompts {
@@ -222,6 +222,8 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 		}
 		return slices.Concat(skipped, gates), nil
 	}
+	start = time.Now()
+	defer func() { s.reviewsTook += time.Since(start) }()
 	if err := s.prepareReviewers(ctx, round); err != nil {
 		return nil, err
 	}
@@ -245,20 +247,28 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 		reviews    []Check
 		reviewErr  error
 		validation []Check
+		// Each goroutine owns its duration; they are added up after Wait.
+		reviewsTook, gatesTook time.Duration
 	)
 	if len(s.Prompts) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			start := time.Now()
 			reviews, reviewErr = s.runReviews(ctx, round)
+			reviewsTook = time.Since(start)
 		}()
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		start := time.Now()
 		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+		gatesTook = time.Since(start)
 	}()
 	wg.Wait()
+	s.gatesTook += gatesTook
+	s.reviewsTook += reviewsTook
 	if reviewErr != nil {
 		return nil, reviewErr
 	}

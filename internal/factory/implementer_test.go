@@ -14,6 +14,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -241,4 +242,35 @@ func TestLoopFailsWhenCodexCannotStartItsCommandHost(t *testing.T) {
 	assert.ErrorIs(t, err, codex.ErrHostMissing)
 	assert.ErrorContains(t, err, "rebuild it with")
 	assert.Assert(t, out.Result != ResultNoChange)
+}
+
+func TestGatesInstructionsAskForQuickChecks(t *testing.T) {
+	gates := []config.Command{
+		{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 300, Quick: "go test ./<package>/... for each package you changed"},
+		{Name: "lint", Run: "task ci:lint", Role: config.RoleGate, Timeout: 60},
+		{Name: "vet", Run: "go vet ./...", Role: config.RoleGate},
+	}
+	want := "After your last edit, build and run the tests of the packages you changed (for Go: `go build ./...` and `go test ./<changed packages>/...`), and fix what fails. " +
+		"smelt runs the full gates (listed below) right after your turn and sends you any failure, so don't run them yourself unless you need one to find a problem.\n" +
+		"These gates are quick: run them in full after your last edit, and fix what fails: lint.\n" +
+		"smelt runs these after your turn:\n" +
+		"- test: task ci:test (quick check: go test ./<package>/... for each package you changed)\n" +
+		"- lint: task ci:lint\n" +
+		"- vet: go vet ./..."
+	assert.Equal(t, gatesInstructions(gates), want)
+}
+
+func TestGatesInstructionsNameNoQuickGateWithoutATimeout(t *testing.T) {
+	got := gatesInstructions([]config.Command{{Name: "test", Run: "go test ./...", Role: config.RoleGate}})
+	assert.Assert(t, !strings.Contains(got, "are quick"), got)
+}
+
+func TestSystemPromptTellsTheAgentToWaitInTheForeground(t *testing.T) {
+	assert.Assert(t, strings.Contains(implementerSystemPrompt("", nil), "Run long commands in the foreground and wait for them. Don't background a command and poll its output with sleep loops."))
+}
+
+func TestLongestGate(t *testing.T) {
+	assert.Equal(t, longestGate(nil), time.Duration(0))
+	got := longestGate([]config.Command{{Timeout: 30}, {Timeout: 400}, {}})
+	assert.Equal(t, got, 400*time.Second)
 }

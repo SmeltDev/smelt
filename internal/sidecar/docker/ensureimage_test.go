@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 )
@@ -39,6 +40,17 @@ type fakeDocker struct {
 	// byNameMissing makes inspect by name 404 while inspect by ID works.
 	byNameMissing bool
 	created       []string // images ContainerCreate received
+	// imgConfig is the config ImageInspect reports for a present image.
+	imgConfig *dockerspec.DockerOCIImageConfig
+	// hostConfigs are the host configs ContainerCreate received.
+	hostConfigs []*container.HostConfig
+	// execs are the exec requests made, and execCode the exit code they report.
+	execs    []container.ExecOptions
+	execCode int
+	// volumeErrs are the errors VolumeRemove returns by volume name;
+	// removedVolumes the volumes it removed.
+	volumeErrs     map[string]error
+	removedVolumes []string
 }
 
 func newFakeDocker() *fakeDocker {
@@ -66,13 +78,13 @@ func (f *fakeDocker) ImageInspect(_ context.Context, ref string, _ ...client.Ima
 	f.inspects++
 	switch {
 	case f.byNameMissing && strings.HasPrefix(ref, "sha256:") && f.ready():
-		return image.InspectResponse{}, nil
+		return image.InspectResponse{Config: f.imgConfig}, nil
 	case f.byNameMissing:
 		return image.InspectResponse{}, errNoSuchImage
 	case f.inspErr != nil:
 		return image.InspectResponse{}, f.inspErr
 	case f.hasImage && f.ready():
-		return image.InspectResponse{}, nil
+		return image.InspectResponse{Config: f.imgConfig}, nil
 	}
 	return image.InspectResponse{}, errNoSuchImage
 }
@@ -232,8 +244,9 @@ func TestCreateAndSnapshotUseResolvedID(t *testing.T) {
 	assert.DeepEqual(t, f.created, []string{observedID, observedID})
 }
 
-func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 	f.created = append(f.created, cfg.Image)
+	f.hostConfigs = append(f.hostConfigs, host)
 	return container.CreateResponse{ID: "c" + strconv.Itoa(len(f.created))}, nil
 }
 

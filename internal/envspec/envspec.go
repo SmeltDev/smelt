@@ -6,6 +6,9 @@ type Step struct {
 	Command string `json:"command"`
 }
 
+// StackGo is the Stack of a Go project.
+const StackGo = "go"
+
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
 	Stack        string `json:"stack"`
@@ -71,7 +74,7 @@ func (e *Environment) SetupStep(name string) string {
 // cimg images set these via Docker ENV which e2b does not propagate to SSH sessions.
 func (e *Environment) BinaryPaths() string {
 	switch e.Stack {
-	case "go":
+	case StackGo:
 		return "/usr/local/go/bin:/home/circleci/go/bin"
 	case "javascript", "typescript":
 		return "/home/circleci/.yarn/bin"

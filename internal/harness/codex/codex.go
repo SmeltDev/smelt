@@ -67,7 +67,10 @@ func (Harness) Binary() string { return binary }
 // ImplementScript implements harness.Harness. The container is the sandbox, as
 // with claude's --dangerously-skip-permissions. Codex has no system-prompt flag,
 // so the rules go ahead of the prompt, and the git guard stands in for
-// claude's --disallowedTools.
+// claude's --disallowedTools. Unlike Claude Code's BASH_*_TIMEOUT_MS, codex
+// exec has no setting for how long a command may run (its shell tool takes a
+// timeout_ms per call, chosen by the model), so ImplementInput's timeouts are
+// unused and only the system prompt tells the agent to wait in the foreground.
 func (Harness) ImplementScript(in harness.ImplementInput) string {
 	args := []string{binary, "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", in.RepoPath}
 	if in.Model != "" {

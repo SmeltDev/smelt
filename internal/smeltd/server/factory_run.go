@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/all"
@@ -102,7 +103,7 @@ func factoryTarget(root string, cfg *config.ProjectConfig, req smeltd.FactoryReq
 // uses the CircleCI backend it derives from the daemon's client. It is built
 // when the request arrives so a daemon that cannot reach the Docker socket
 // fails the request rather than the background run.
-func factoryBackend(name string, cfg *config.ProjectConfig) (sidecar.Backend, error) {
+func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backend, error) {
 	if name != smeltd.BackendDocker {
 		return nil, nil
 	}
@@ -112,6 +113,10 @@ func factoryBackend(name string, cfg *config.ProjectConfig) (sidecar.Backend, er
 	}
 	if cfg.Factory != nil {
 		b.ManagedDockerfile = cfg.Factory.Dockerfile
+	}
+	if cfg.Factory.CacheEnabled() {
+		b.CacheKey = config.ProjectHash(root)
+		b.GoStack = cfg.Environment != nil && cfg.Environment.Stack == envspec.StackGo
 	}
 	return b, nil
 }
@@ -180,7 +185,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
-	backend, err := factoryBackend(req.Backend, cfg)
+	backend, err := factoryBackend(req.Backend, ps.root, cfg)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}
@@ -390,7 +395,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.RateLimit = ev.Turn.RateLimit
 			r.recordRateLimit(ev.Turn.RateLimit)
 			impl.Summary = ev.Turn.Summary
-			impl.Nudged, impl.Unproven = ev.Turn.Nudged, ev.Turn.Unproven
+			impl.Unproven = ev.Turn.Unproven
 		}
 	case factory.EventCollected:
 		if impl := round.Implement; impl != nil {
@@ -414,6 +419,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			}
 		}
 		now := time.Now()
+		round.GatesOnlyFailed = factory.GatesOnlyFailed(ev.Checks)
 		round.State, round.EndedAt = smeltd.RoundDone, &now
 		round.Note = fmt.Sprintf("%d of %d checks passed", passed, len(ev.Checks))
 		if skipped > 0 {
@@ -559,6 +565,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	f.KeptSidecars = rep.KeptSidecars
 	f.Log = rep.Log
 	if rep.Started {
+		f.Timing = wireTiming(rep.Timing)
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
 		f.Blocked = rep.Outcome.Blocked
@@ -589,6 +596,16 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 			round.Note = "not checked: " + e.loopNote
 			round.Reviews = nil
 		}
+	}
+}
+
+// wireTiming is a run's timing as the status JSON carries it.
+func wireTiming(t factory.Timing) *smeltd.FactoryTiming {
+	return &smeltd.FactoryTiming{
+		Line:   t.Format(),
+		PlanMS: t.Plan.Milliseconds(), ImplementMS: t.Implement.Milliseconds(), CommandsMS: t.Commands.Milliseconds(),
+		GatesMS: t.Gates.Milliseconds(), ReviewsMS: t.Reviews.Milliseconds(), NotesMS: t.Notes.Milliseconds(),
+		TotalMS: t.Total.Milliseconds(), GateOnlyRounds: t.GateOnlyRounds, SlowCalls: t.Warnings(),
 	}
 }
 

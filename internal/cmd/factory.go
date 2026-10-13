@@ -664,6 +664,9 @@ func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOu
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
+	if t := f.Timing; t != nil {
+		status(iostream.LevelInfo, t.Line)
+	}
 	switch detail.State {
 	case smeltd.SessionCancelled:
 		return newUserError("The factory run was cancelled.").withoutDetail()
