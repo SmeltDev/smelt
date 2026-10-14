@@ -62,3 +62,17 @@ func TestRunErrorDeadline(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewScriptStream(t *testing.T) {
+	in := harness.ReviewInput{RepoPath: "/r", Prompt: "look", Schema: `{}`, Tools: []string{"Read"}}
+	plain := Harness{}.ReviewScript(in)
+	assert.Assert(t, strings.Contains(plain, "'json'"), plain)
+	assert.Assert(t, !strings.Contains(plain, "--verbose"), plain)
+
+	in.Stream = true
+	streamed := Harness{}.ReviewScript(in)
+	assert.Assert(t, strings.Contains(streamed, "'stream-json'"), streamed)
+	assert.Assert(t, strings.Contains(streamed, "'--verbose'"), "stream-json needs --verbose: %s", streamed)
+	assert.Assert(t, strings.Contains(streamed, "'--json-schema'"), "the schema still applies: %s", streamed)
+	assert.Assert(t, strings.Contains(streamed, "'--allowedTools' 'Read'"), streamed)
+}

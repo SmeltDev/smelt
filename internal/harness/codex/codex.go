@@ -89,8 +89,9 @@ func (Harness) ImplementScript(in harness.ImplementInput) string {
 
 // ReviewScript implements harness.Harness. Codex takes its schema from a file
 // and writes its answer to one, so the script writes the schema out and prints
-// the answer on stdout at the end. The event stream goes to stderr, which only
-// explains a failure.
+// the answer on stdout at the end. The event stream goes to stderr, which
+// explains a failure and, with ReviewInput.Stream, is what a caller reads for
+// progress (the implement parser reads these events too).
 //
 // The review runs without Codex's sandbox, as the implementer does: on Linux
 // the read-only sandbox needs bubblewrap and user namespaces, which containers

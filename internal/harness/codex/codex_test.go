@@ -307,3 +307,17 @@ func TestRunErrorDeadline(t *testing.T) {
 		})
 	}
 }
+
+// Codex reports its events on stderr whether or not the caller wants them, so
+// Stream changes nothing in the script; the implement parser reads those events.
+func TestReviewScriptStreamNeedsNothingExtra(t *testing.T) {
+	in := harness.ReviewInput{RepoPath: "/r", Prompt: "look", Schema: `{}`}
+	plain := Harness{}.ReviewScript(in)
+	in.Stream = true
+	assert.Equal(t, Harness{}.ReviewScript(in), plain)
+
+	var seen []harness.Activity
+	p := Harness{}.NewImplementParser(func(a harness.Activity) { seen = append(seen, a) })
+	p.Write([]byte(`{"type":"item.completed","item":{"type":"command_execution","command":"git log","exit_code":0}}` + "\n"))
+	assert.DeepEqual(t, seen, []harness.Activity{{Tool: "Bash", Detail: "git log"}})
+}

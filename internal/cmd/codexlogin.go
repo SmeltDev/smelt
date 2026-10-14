@@ -242,10 +242,16 @@ func codexDaemonAuth(host codexauth.Host) (refresh func(context.Context) (harnes
 		return nil, "no Codex credential — factory runs with codex unavailable (run: smelt auth login codex)"
 	}
 	return func(ctx context.Context) (harness.Credential, error) {
-		cred, err := codexauth.ForRun(ctx, host, time.Now())
-		if err != nil {
-			return harness.Credential{}, fmt.Errorf("codex: %s", strings.TrimPrefix(err.Error(), "codex: "))
-		}
-		return cred, nil
+		return codexRunCredential(ctx, host)
 	}, ""
+}
+
+// codexRunCredential is the Codex credential for one run: the stored login,
+// renewed when its access token is about to expire.
+func codexRunCredential(ctx context.Context, host codexauth.Host) (harness.Credential, error) {
+	cred, err := codexauth.ForRun(ctx, host, time.Now())
+	if err != nil {
+		return harness.Credential{}, fmt.Errorf("codex: %s", strings.TrimPrefix(err.Error(), "codex: "))
+	}
+	return cred, nil
 }

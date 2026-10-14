@@ -99,13 +99,21 @@ func bashTimeoutExports(in harness.ImplementInput) string {
 	return fmt.Sprintf("export BASH_DEFAULT_TIMEOUT_MS=%d\nexport BASH_MAX_TIMEOUT_MS=%d\n", def.Milliseconds(), ceiling.Milliseconds())
 }
 
-// ReviewScript implements harness.Harness.
+// ReviewScript implements harness.Harness. With Stream the stdout is claude's
+// stream-json, whose last line is the result a plain run prints alone.
 func (Harness) ReviewScript(in harness.ReviewInput) string {
 	format := "text"
 	if in.Schema != "" {
 		format = "json"
 	}
+	if in.Stream {
+		format = "stream-json"
+	}
 	args := []string{binary, "-p", "--output-format", format, "--allowedTools", strings.Join(in.Tools, ",")}
+	if in.Stream {
+		// stream-json refuses to run without --verbose.
+		args = append(args, "--verbose")
+	}
 	if in.Schema != "" {
 		args = append(args, "--json-schema", in.Schema)
 	}

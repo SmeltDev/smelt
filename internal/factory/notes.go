@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -26,7 +27,7 @@ const (
 )
 
 // notesTools limits the notes writer to reading the change.
-var notesTools = []string{"Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)"}
+var notesTools = slices.Concat(readTools, []string{"Bash(git diff:*)", gitLogTool})
 
 // NotesSchema is the JSON Schema of the notes claude writes. It is passed with
 // --json-schema, so Claude Code validates the answer itself.

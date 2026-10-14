@@ -71,6 +71,33 @@ func harnessReady(name harness.Name) bool {
 	return err == nil
 }
 
+// agentCredential is what an agent on a sidecar authenticates with.
+type agentCredential struct {
+	Credential harness.Credential
+	// BaseURL is where the agent sends requests when not at its default.
+	BaseURL string
+}
+
+// harnessCredential finds the credential name's agent runs with on this
+// machine, for a command that runs the agent itself rather than through the
+// daemon, which resolves the same credentials at its start.
+func harnessCredential(ctx context.Context, name harness.Name, rc config.ResolvedConfig) (agentCredential, error) {
+	if name == harness.Codex {
+		cred, err := codexRunCredential(ctx, codexHost)
+		if err != nil {
+			return agentCredential{}, &userError{
+				msg: "Could not use the Codex login.", suggestion: hintCodexLogin, exitCode: ExitAuthError, err: err,
+			}
+		}
+		return agentCredential{Credential: cred}, nil
+	}
+	cred, _, err := reviewCredential(rc)
+	if err != nil {
+		return agentCredential{}, err
+	}
+	return agentCredential{Credential: cred, BaseURL: rc.AnthropicBaseURL}, nil
+}
+
 // harnessChoice is everything resolveHarness needs.
 type harnessChoice struct {
 	Root string

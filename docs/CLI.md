@@ -890,6 +890,38 @@ end-of-run guards: only `smelt/` branches, never forced, never the default
 branch. A run the daemon no longer knows, after a restart, is reported from its
 record, with `"state":"done"`.
 
+### Writing a project's first review prompts: `factory bootstrap`
+
+`smelt factory bootstrap [--harness claude|codex] [--model M] [--timeout 30m] [--output DIR] [--json]`
+starts one sandbox, has the coding agent read the project there (read-only: `Read`, `Grep`, `Glob`
+and `git log`/`show`/`ls-files` for Claude; Codex is held read-only by the review script's
+working-tree check) and writes 2–4 review prompts. It runs in-process, not on the daemon.
+
+- **Where it writes.** `.smelt/reviews/<name>.md`, or `--output DIR`. It refuses at once, before
+  any sandbox starts, when that directory already has `.md` or `.txt` prompts (suggestion: pass
+  `--output` to write elsewhere and compare), and never overwrites a file: each is created
+  exclusively, so a file that appears meanwhile fails that prompt, not silently.
+- **Backend, image and agent** are resolved as `factory build` resolves them: `factory.backend`
+  (Docker by default; CircleCI only when the project chose it, never because a token is present),
+  the project's image (a missing one gets `factory build`'s error, pointing at `smelt factory image`),
+  and `--harness`, then `factory.harness`. The agent's credential is looked up on this machine, and a
+  stored Codex login is renewed first. The sandbox is its own pool, `factory-bootstrap`, and is
+  always deleted when the command ends.
+- **What the agent is told.** The validation commands from the config (so reviews leave to them what
+  they enforce) and, when `smelt build-prompt` wrote it, `.smelt/context/review-prompt.md` (capped at
+  64 KiB).
+- **While it runs**, each tool call is shown as a status line; its prose is not. Then the summary,
+  the files written, any dropped prompts and the cost when the agent reports it.
+- **The answer is untrusted text that becomes files.** At most 6 prompts are kept; names must be
+  lowercase words joined by hyphens, with no repeats (the first wins); bodies must be non-empty and
+  at most 32 KiB. The rest are dropped and counted. With none left it fails with "the agent gave no
+  usable review prompts".
+- **`--json`** prints `{"dir", "prompts": [{"name", "path"}], "summary", "dropped", "cost_usd",
+  "harness"}` (`cost_usd` is left out when the agent does not report it). Errors are reported as
+  `factory build --json` reports them.
+- `--timeout` bounds the agent's run and defaults to 30 minutes: reading a large repository takes
+  longer than a review.
+
 ### Keeping a run mergeable: `factory update`
 
 Runs started together all branch from the same `main`, so once one PR merges the others
