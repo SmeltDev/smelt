@@ -22,6 +22,9 @@ allow_files=(
 	'^acceptance/coexist_test\.go$'
 	'^internal/keyring/keyring_test\.go$'
 	'^internal/factory/publish_test\.go$'
+	# these name the upstream project and its repository
+	'^UPSTREAM\.md$'
+	'^scripts/upstream-check\.sh$'
 	# this script, which has to spell the patterns
 	'^scripts/check-names\.sh$'
 )

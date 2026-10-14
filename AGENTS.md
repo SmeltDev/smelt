@@ -14,7 +14,8 @@ It also provides `build-prompt`, a secondary tool that mines PR review comments 
 task build              # Build binary → dist/smelt
 task test               # Run all tests
 task acceptance-test    # Run acceptance tests
-task lint               # Run linters, shellcheck on install.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
+task upstream:check    # List upstream (the fork's origin) commits since the one recorded in UPSTREAM.md
+task lint               # Run linters, shellcheck on install.sh and scripts/upstream-check.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
 task fmt                # Format code
 ```
 
@@ -36,6 +37,7 @@ Read these when working in the relevant area:
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, data flow, environment variables
 - **[docs/CLI.md](docs/CLI.md)** — complete command tree, flag conventions, behavior decisions
 - **[install.sh](install.sh)** — the curl installer; `internal/installscript` tests it end to end, `internal/upgrade` shares its archive naming and checksums
+- **[UPSTREAM.md](UPSTREAM.md)** — how far we've reviewed the upstream fork source, and the decision log
 - **[docs/HOOKS.md](docs/HOOKS.md)** — pre-commit hooks: runs fmt, lint, test before commits via `.claude/settings.json`
 
 ## Key Architectural Constraints

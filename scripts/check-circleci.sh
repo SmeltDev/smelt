@@ -51,6 +51,9 @@ allow=(
 	# license attribution
 	'^LICENSE$'
 	'^packaging/deb/copyright$'
+	# these name the upstream project and its repository
+	'^UPSTREAM\.md$'
+	'^scripts/upstream-check\.sh$'
 	# this script and the lint config that names the allowed importers
 	'^scripts/check-circleci\.sh$'
 	'^\.golangci\.yml$'
