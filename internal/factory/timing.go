@@ -19,10 +19,10 @@ type ToolCall struct {
 }
 
 // toolCalls works out how long each tool call of a turn took from when its
-// activity arrived. The agent reports a call when it starts it and its next
-// activity only after the result is in, so the gap is the call plus the
-// agent's own turnaround, which makes this a slight overestimate. seen[i] is
-// when acts[i] arrived; end is when the turn ended.
+// activity arrived. The parser reports a call when the agent issues it, so it
+// ran until the next activity arrived, or until end for the last one. The gap
+// includes the agent's own turnaround, which makes this a slight
+// overestimate. seen[i] is when acts[i] arrived; end is when the turn ended.
 func toolCalls(acts []Activity, seen []time.Time, end time.Time) []ToolCall {
 	var calls []ToolCall
 	for i, a := range acts {

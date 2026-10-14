@@ -10,12 +10,13 @@ import (
 
 func TestToolCallsTimeEachCallUntilTheNextActivity(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	acts := []Activity{{Tool: "Edit", Detail: "a.go"}, {Tool: "", Detail: "thinking"}, {Tool: "Bash", Detail: "task ci:test"}}
-	seen := []time.Time{t0, t0.Add(10 * time.Second), t0.Add(15 * time.Second)}
-	got := toolCalls(acts, seen, t0.Add(4*time.Minute))
+	acts := []Activity{{Tool: "Edit", Detail: "a.go"}, {Tool: "", Detail: "thinking"}, {Tool: "Bash", Detail: "task ci:test"}, {Tool: "Read", Detail: "b.go"}}
+	seen := []time.Time{t0, t0.Add(10 * time.Second), t0.Add(15 * time.Second), t0.Add(2*time.Minute + 26*time.Second)}
+	got := toolCalls(acts, seen, t0.Add(2*time.Minute+30*time.Second))
 	assert.DeepEqual(t, got, []ToolCall{
 		{Tool: "Edit", Detail: "a.go", Took: 10 * time.Second},
-		{Tool: "Bash", Detail: "task ci:test", Took: 3*time.Minute + 45*time.Second},
+		{Tool: "Bash", Detail: "task ci:test", Took: 2*time.Minute + 11*time.Second},
+		{Tool: "Read", Detail: "b.go", Took: 4 * time.Second},
 	})
 }
 

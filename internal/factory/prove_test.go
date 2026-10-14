@@ -15,8 +15,8 @@ import (
 )
 
 var testGates = []config.Command{
-	{Name: "lint", Run: "golangci-lint run", Role: config.RoleGate},
-	{Name: "test", Run: "go test ./...", Role: config.RoleGate},
+	{Name: "lint", Run: "golangci-lint run", Role: config.RoleGate, Timeout: 30},
+	{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 30},
 }
 
 func TestUnprovenGates(t *testing.T) {
@@ -39,6 +39,29 @@ func TestUnprovenGates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.DeepEqual(t, unproven(tt.acts, testGates), tt.want)
+		})
+	}
+}
+
+func TestUnprovenConsidersOnlyFastGatesAndQuickChecks(t *testing.T) {
+	edit := Activity{Tool: "Edit", Detail: "main.go"}
+	slow := config.Command{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 600}
+	quick := config.Command{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 600, Quick: "go test ./pkg/..."}
+	tests := []struct {
+		name string
+		gate config.Command
+		acts []Activity
+		want []string
+	}{
+		{"a slow gate without a quick check is not flagged", slow, []Activity{edit, {Tool: "Bash", Detail: "go test ./..."}}, nil},
+		{"a quick check not run is flagged", quick, []Activity{edit, {Tool: "Bash", Detail: "go build ./..."}}, []string{"test"}},
+		{"a command containing the quick text proves it", quick, []Activity{edit, {Tool: "Bash", Detail: "go test ./pkg/... -count=1"}}, nil},
+		{"the full gate proves it too", quick, []Activity{edit, {Tool: "Bash", Detail: "task ci:test"}}, nil},
+		{"the quick text before the edit proves nothing", quick, []Activity{{Tool: "Bash", Detail: "go test ./pkg/..."}, edit}, []string{"test"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, unproven(tt.acts, []config.Command{tt.gate}), tt.want)
 		})
 	}
 }

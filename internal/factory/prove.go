@@ -59,8 +59,21 @@ func ranGate(command string, gate config.Command) bool {
 	return target.MatchString(command)
 }
 
+// ranGateOrQuick reports whether a shell command ran gate in full, or ran the
+// quick check the project configured for it: a command containing the quick
+// text is proof.
+func ranGateOrQuick(command string, gate config.Command) bool {
+	if q := strings.TrimSpace(gate.Quick); q != "" && strings.Contains(command, q) {
+		return true
+	}
+	return ranGate(command, gate)
+}
+
 // unproven names the gates that did not run after the last edit in a turn's
 // activity. A gate run before an edit proves nothing about the edited code.
+// Only gates the implementer was asked to check count: the fast ones, which it
+// runs in full, and those with a configured quick check. A slow gate without
+// one is left to smelt's own run, so not having run it is no omission.
 func unproven(acts []Activity, gates []config.Command) []string {
 	last := -1
 	for i, a := range acts {
@@ -70,9 +83,12 @@ func unproven(acts []Activity, gates []config.Command) []string {
 	}
 	var out []string
 	for _, g := range gates {
+		if !g.IsFastGate() && strings.TrimSpace(g.Quick) == "" {
+			continue
+		}
 		ran := false
 		for _, a := range acts[last+1:] {
-			if a.Tool == "Bash" && ranGate(a.Detail, g) {
+			if a.Tool == "Bash" && ranGateOrQuick(a.Detail, g) {
 				ran = true
 				break
 			}
