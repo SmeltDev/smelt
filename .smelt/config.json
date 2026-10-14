@@ -15,7 +15,8 @@
       "name": "lint",
       "run": "task ci:lint",
       "role": "gate",
-      "timeout": 60
+      "timeout": 180,
+      "quick": "task lint, in full (about 10 s when warm); it covers golangci-lint, the name guards and pylint"
     },
     {
       "name": "format",
