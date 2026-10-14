@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
-	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/all"
@@ -19,7 +18,6 @@ import (
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
-	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
@@ -107,18 +105,7 @@ func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backe
 	if name != smeltd.BackendDocker {
 		return nil, nil
 	}
-	b, err := docker.New()
-	if err != nil {
-		return nil, fmt.Errorf("docker backend unavailable: %w", err)
-	}
-	if cfg.Factory != nil {
-		b.ManagedDockerfile = cfg.Factory.Dockerfile
-	}
-	if cfg.Factory.CacheEnabled() {
-		b.CacheKey = config.ProjectHash(root)
-		b.GoStack = cfg.Environment != nil && cfg.Environment.Stack == envspec.StackGo
-	}
-	return b, nil
+	return factory.DockerBackend(root, cfg)
 }
 
 // startFactory validates a request, records a factory session and starts it in

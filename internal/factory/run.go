@@ -141,9 +141,9 @@ func (o *RunOptions) backend() sidecar.Backend {
 	return sidecar.NewCircleCIBackend(o.Client, o.OrgID)
 }
 
-// prepareBackend lets a backend that needs it check its host once, before the
+// PrepareBackend lets a backend that needs it check its host once, before the
 // pool creates any sidecar.
-func prepareBackend(ctx context.Context, backend sidecar.Backend, image string, status iostream.StatusFunc) error {
+func PrepareBackend(ctx context.Context, backend sidecar.Backend, image string, status iostream.StatusFunc) error {
 	p, ok := backend.(sidecar.Preparer)
 	if !ok {
 		return nil
@@ -154,7 +154,7 @@ func prepareBackend(ctx context.Context, backend sidecar.Backend, image string, 
 // createPool readies the backend, then creates the run's sidecars from the
 // worktree.
 func createPool(ctx context.Context, opts RunOptions, backend sidecar.Backend, runID string, wt Worktree, status iostream.StatusFunc) (*sidecar.Pool, error) {
-	if err := prepareBackend(ctx, backend, opts.Image, status); err != nil {
+	if err := PrepareBackend(ctx, backend, opts.Image, status); err != nil {
 		return nil, err
 	}
 	return sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{

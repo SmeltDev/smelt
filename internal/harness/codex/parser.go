@@ -96,7 +96,7 @@ func (p *parser) item(e event) {
 		}
 		p.activity(harness.Activity{Tool: "Edit", Detail: strings.Join(paths, ", ")})
 	case "reasoning":
-		p.activity(harness.Activity{Tool: "Reasoning", Detail: strings.TrimSpace(e.Item.Text)})
+		p.activity(harness.Activity{Tool: harness.ReasoningTool, Detail: strings.TrimSpace(e.Item.Text)})
 	}
 }
 

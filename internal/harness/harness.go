@@ -108,6 +108,11 @@ type ReviewInput struct {
 	// Tools limits what a reviewer may use. Claude only: Codex reviews are held
 	// to read-only by checking the working tree afterwards.
 	Tools []string
+	// Stream asks the script to also report what the agent does as it runs,
+	// in the format NewImplementParser reads, so a caller can show progress.
+	// Claude then prints its stream there on stdout, and Codex prints its
+	// events on stderr, as it always does.
+	Stream bool
 }
 
 // ReviewPayload is the structured answer of a review before it is checked.
@@ -123,6 +128,10 @@ type Activity struct {
 	// Detail is the tool's target (a file, a command) or the text.
 	Detail string
 }
+
+// ReasoningTool is the Tool of an Activity that is a harness's own reasoning
+// rather than a tool call.
+const ReasoningTool = "Reasoning"
 
 // Turn is what one implementer turn reports, whichever harness ran it.
 type Turn struct {

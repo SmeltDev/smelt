@@ -33,7 +33,7 @@ func newFactoryCmd() *cobra.Command {
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd(),
-		newFactoryStatusCmd(), newFactoryStopCmd(), newFactoryPublishCmd(), newFactoryUpdateCmd())
+		newFactoryStatusCmd(), newFactoryStopCmd(), newFactoryPublishCmd(), newFactoryUpdateCmd(), newFactoryBootstrapCmd())
 	return cmd
 }
 
@@ -482,7 +482,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	case errors.Is(err, factory.ErrNothingToCheck):
 		return nil, nil, &userError{
 			msg:        "Nothing to check the implementer's work with.",
-			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'smelt init'.", review.DefaultDir),
+			suggestion: fmt.Sprintf("Run 'smelt factory bootstrap' to write review prompts to %s, or add validation commands with 'smelt init'.", review.DefaultDir),
 			hideDetail: true,
 			blocked:    true,
 		}

@@ -23,8 +23,13 @@ const (
 	planFile = "plan"
 )
 
+// readTools let a read-only agent read the repository, and gitLogTool its history.
+var readTools = []string{"Read", "Grep", "Glob"}
+
+const gitLogTool = "Bash(git log:*)"
+
 // planTools limits the plan writer to reading the repository.
-var planTools = []string{"Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)"}
+var planTools = slices.Concat(readTools, []string{gitLogTool, "Bash(git diff:*)"})
 
 // PlanSchema is the JSON Schema of the plan the implementer writes before it
 // writes code. It is passed with --json-schema (--output-schema for Codex), so
@@ -231,10 +236,11 @@ func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if h.Name() != harness.Claude {
-		return parsePlanMessage(out)
+	p, err := parseAnswer[Plan](h, out, "plan")
+	if err != nil {
+		return Plan{}, err
 	}
-	return ParsePlan(out)
+	return validPlan(p)
 }
 
 // ReviewPlan runs the plan reviews once, each on a reviewer sidecar. A review
@@ -264,25 +270,6 @@ func (s *Sidecars) ReviewPlan(ctx context.Context, request string, plan Plan) ([
 	return out, nil
 }
 
-// parsePlanMessage reads the plan out of an agent's last message, which the
-// schema made the plan object itself.
-func parsePlanMessage(msg string) (Plan, error) {
-	var p Plan
-	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &p); err != nil {
-		return Plan{}, fmt.Errorf("read the plan: %w", err)
-	}
-	return validPlan(p)
-}
-
-// ParsePlan reads the plan out of claude's JSON result.
-func ParsePlan(output string) (Plan, error) {
-	p, err := parseStructured[Plan](output, "plan")
-	if err != nil {
-		return Plan{}, err
-	}
-	return validPlan(p)
-}
-
 // validPlan checks that a plan says what it will do.
 func validPlan(p Plan) (Plan, error) {
 	p.Summary = strings.TrimSpace(p.Summary)
@@ -290,6 +277,40 @@ func validPlan(p Plan) (Plan, error) {
 		return Plan{}, errors.New("the plan has no summary")
 	}
 	return p, nil
+}
+
+// parseMessage reads the schema-checked object that is an agent's last message
+// whole, as Codex prints it; what names it in errors.
+func parseMessage[T any](msg, what string) (T, error) {
+	var v T
+	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &v); err != nil {
+		return v, fmt.Errorf("read the %s: %w", what, err)
+	}
+	return v, nil
+}
+
+// parseAnswer reads the schema-checked object out of the stdout of a review
+// script, whichever harness ran it.
+func parseAnswer[T any](h harness.Harness, out, what string) (T, error) {
+	if h.Name() != harness.Claude {
+		return parseMessage[T](out, what)
+	}
+	return parseStructured[T](resultLine(out), what)
+}
+
+// resultLine is the line of claude's output that is its result: the whole
+// output for --output-format json, the last "result" event for stream-json.
+func resultLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var e struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &e) == nil && e.Type == "result" {
+			return lines[i]
+		}
+	}
+	return output
 }
 
 // structuredResult is claude's JSON result for a run with --json-schema.

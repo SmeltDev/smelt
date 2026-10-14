@@ -571,6 +571,22 @@ $ smelt factory build --plan spec.md
   the layer cache). Use `smelt init --skip-image-build` to write the file without building.
 - **Own image?** Set `factory.image` (or pass `--image`) and smelt uses it as is and never builds it.
 
+### Write the first review prompts
+
+A new project has no review prompts in `.smelt/reviews/`, so a run is checked by its validation
+commands alone. Have an agent draft a first set from your repository:
+
+```
+$ smelt init
+$ smelt factory image          # once, so the sandbox exists
+$ smelt factory bootstrap      # reads the repo read-only, writes .smelt/reviews/*.md
+```
+
+Each tool call is shown as the agent reads. Then **edit the prompts**: they are a draft from your
+docs, configuration and history. `smelt factory bootstrap` refuses when `.smelt/reviews` already has
+prompts; `--output /tmp/compare` writes elsewhere so you can compare. If you ran `smelt build-prompt`,
+its team standards are taken into account. `--harness claude|codex` picks the agent.
+
 ### Choose the coding agent
 
 Factory runs can use Claude Code or OpenAI Codex. `smelt init` asks which and saves it as

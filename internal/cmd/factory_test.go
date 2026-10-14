@@ -253,3 +253,12 @@ func TestPrintFactoryLeftoversPointsOnlyAtAKeptWorktree(t *testing.T) {
 	// removed; pointing at it would send the reader to a path that is gone.
 	assert.Check(t, cmp.Len(collect(&smeltd.FactoryRun{Worktree: "/wt/run-1", WorktreeRemoved: true}), 0))
 }
+
+func TestFactoryChecksNothingToCheckPointsAtBootstrap(t *testing.T) {
+	root := t.TempDir()
+	_, _, err := factoryChecks(root, "", &config.ProjectConfig{}, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "%v", err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt factory bootstrap"), ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt init"), ue.Suggestion())
+}
