@@ -633,6 +633,25 @@ func (p *Pool) WaitSynced(ctx context.Context) error {
 	return p.syncErr
 }
 
+// Synced reports, without blocking, whether clone creation and background sync
+// have finished, so WaitSynced would return at once.
+func (p *Pool) Synced() bool {
+	p.mu.Lock()
+	chans := []chan struct{}{p.createDone, p.syncDone}
+	p.mu.Unlock()
+	for _, done := range chans {
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // waitForBackground waits for clone creation and background sync to finish.
 // It reports false if ctx ended first.
 func (p *Pool) waitForBackground(ctx context.Context) bool {

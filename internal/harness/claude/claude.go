@@ -172,7 +172,7 @@ func (Harness) Prepare(harness.Credential) (string, map[string]string) { return 
 func (Harness) RunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		return fmt.Errorf("timed out after %s", timeout)
+		return harness.TimeoutError(timeout, ctx.Err())
 	case execErr != nil:
 		return fmt.Errorf("exec: %w", execErr)
 	case code == harness.MissingExitCode:

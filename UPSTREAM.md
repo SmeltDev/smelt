@@ -22,8 +22,8 @@ Newest first, one row per upstream commit reviewed. Decisions: `taken`,
 | 364f24c | 2026-10-13 | Lock file maintenance (`harness/uv.lock`) | skipped | lock-file churn only; renovate refreshes ours |
 | ec0fc4b | 2026-10-13 | golang.org/x/crypto 0.57.0 → 0.58.0 | taken | this ticket |
 | 1957045 | 2026-10-10 | `factory bootstrap`: write a project's first review prompts (#709) | ticket | `upstream-3-factory-bootstrap`; rebuilt on our harness and Docker backend |
-| 0a407f8 | 2026-10-10 | Move the Claude Code helpers into `internal/claudecode` (#706) | skipped, one fix ported | `internal/harness` already does this for Claude and Codex; its "timed out after 0s" fix is in `upstream-2-first-ready-sidecar` |
-| 3a1ce38 | 2026-10-10 | Start the factory implementer on the first ready sidecar (#715) | ticket | `upstream-2-first-ready-sidecar` |
+| 0a407f8 | 2026-10-10 | Move the Claude Code helpers into `internal/claudecode` (#706) | ported | `internal/harness` already does the move for Claude and Codex; its "timed out after 0s" fix is `harness.TimeoutError` (PR number to add) |
+| 3a1ce38 | 2026-10-10 | Start the factory implementer on the first ready sidecar (#715) | ported | `upstream-2-first-ready-sidecar` (PR number to add) |
 
 ## Next sync
 

@@ -170,6 +170,17 @@ func createPool(ctx context.Context, opts RunOptions, backend sidecar.Backend, r
 	}, status)
 }
 
+// reviewersOf is how the steps get the pool's other members once they are
+// needed. IDs lists only the members that exist, so it is read after the wait.
+func reviewersOf(pool *sidecar.Pool, impl *sidecar.PoolEntry) func(context.Context) ([]*sidecar.PoolEntry, error) {
+	return func(ctx context.Context) ([]*sidecar.PoolEntry, error) {
+		if err := pool.WaitSynced(ctx); err != nil {
+			return nil, err
+		}
+		return Members(impl, pool.IDs()), nil
+	}
+}
+
 // ReviewerCount is how many reviewer sidecars a run with prompts needs when
 // asked for requested: one per prompt unless fewer are asked for, and none
 // without prompts.
@@ -282,9 +293,8 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		return rep, fmt.Errorf("create the run's sidecars: %w", err)
 	}
 	defer func() { rep.KeptSidecars = closePool(ctx, pool, opts.KeepSidecars, status) }()
-	if err := pool.WaitSynced(ctx); err != nil {
-		return rep, fmt.Errorf("get the run's sidecars ready: %w", err)
-	}
+	// A new pool has synced the worktree to its first member by now, so the work
+	// can be laid back and the implementer can start without the other members.
 	if showingBaseline {
 		showingBaseline = false
 		if err := wt.restoreWork(ctx); err != nil {
@@ -298,6 +308,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		return rep, fmt.Errorf("check out the implementer's sidecar: %w", err)
 	}
 
+	if !pool.Synced() {
+		status(iostream.LevelInfo, "implementer started (reviewers still starting)")
+	}
+
 	exec := opts.Exec
 	if exec == nil {
 		exec = review.ClientExec
@@ -309,12 +323,12 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
 			OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
 		},
-		Acquire:   pool.Acquire,
-		Release:   pool.Release,
-		Reviewers: Members(impl, pool.IDs()),
-		Relay:     NewRelay(backend, wt.Path, status),
-		Request:   request,
-		Prompts:   opts.Prompts,
+		Acquire:       pool.Acquire,
+		Release:       pool.Release,
+		WaitReviewers: reviewersOf(pool, impl),
+		Relay:         NewRelay(backend, wt.Path, status),
+		Request:       request,
+		Prompts:       opts.Prompts,
 		Review: review.Options{
 			Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
 			StructuredFindings: true,

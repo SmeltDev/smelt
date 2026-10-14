@@ -342,6 +342,31 @@ func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
 	pool.Release(second)
 }
 
+func TestPoolSyncedReportsBackgroundCompletion(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked}
+	t.Cleanup(func() {
+		select {
+		case <-blocked:
+		default:
+			close(blocked)
+		}
+	})
+
+	pool, err := assembleTestPool(context.Background(), t, NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	assert.Assert(t, !pool.Synced())
+
+	close(blocked)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assert.NilError(t, pool.WaitSynced(ctx))
+	assert.Assert(t, pool.Synced())
+}
+
 func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)

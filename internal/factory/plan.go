@@ -244,6 +244,9 @@ func (s *Sidecars) ReviewPlan(ctx context.Context, request string, plan Plan) ([
 	if len(prompts) == 0 {
 		return nil, nil
 	}
+	if err := s.prepareReviewers(ctx); err != nil {
+		return nil, err
+	}
 	// Progress is left out: it is recorded against a round, and none has begun.
 	opts := s.Review
 	opts.ProgressFn = nil

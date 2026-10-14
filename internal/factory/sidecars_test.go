@@ -345,7 +345,7 @@ func TestInstallDependenciesRunsOnEverySidecar(t *testing.T) {
 			mu.Unlock()
 		},
 	}
-	assert.NilError(t, s.installDependencies(context.Background()))
+	assert.NilError(t, s.installDependencies(context.Background(), append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...)))
 	assert.Equal(t, len(ran), 2)
 	assert.Assert(t, strings.Contains(ran["r1"], "pnpm install --offline"), ran["r1"])
 	assert.Equal(t, len(lines), 2)
@@ -353,7 +353,7 @@ func TestInstallDependenciesRunsOnEverySidecar(t *testing.T) {
 	// Nothing to install is not an error and runs nothing.
 	s.Install = ""
 	ran = map[string]string{}
-	assert.NilError(t, s.installDependencies(context.Background()))
+	assert.NilError(t, s.installDependencies(context.Background(), append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...)))
 	assert.Equal(t, len(ran), 0)
 }
 
@@ -371,7 +371,7 @@ func TestInstallDependenciesReportsAFailingSidecar(t *testing.T) {
 		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl"}},
 		Reviewers:   []*sidecar.PoolEntry{{ID: "r1"}},
 	}
-	err := s.installDependencies(context.Background())
+	err := s.installDependencies(context.Background(), append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...))
 	assert.ErrorContains(t, err, "r1")
 	assert.ErrorContains(t, err, "ERR_PNPM_NO_OFFLINE_TARBALL")
 }
@@ -390,7 +390,7 @@ func TestInstallDependenciesTimesOut(t *testing.T) {
 		InstallTimeout: 50 * time.Millisecond,
 		Implementer:    &Implementer{Entry: &sidecar.PoolEntry{ID: "impl"}},
 	}
-	err := s.installDependencies(context.Background())
+	err := s.installDependencies(context.Background(), append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...))
 	assert.ErrorContains(t, err, "timed out after 50ms")
 	assert.ErrorContains(t, err, "resolving...")
 }

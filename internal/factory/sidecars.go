@@ -69,7 +69,10 @@ type Sidecars struct {
 	Acquire   func(context.Context) (*sidecar.PoolEntry, error)
 	Release   func(*sidecar.PoolEntry)
 	Reviewers []*sidecar.PoolEntry
-	Relay     *Relay
+	// WaitReviewers, when set, supplies Reviewers the first time a plan review
+	// or check needs them, so the implementer can start before they are ready.
+	WaitReviewers func(context.Context) ([]*sidecar.PoolEntry, error)
+	Relay         *Relay
 	// Request is the original change the implementer was asked to make. It is
 	// included in every review, including rounds where the implementer is sent
 	// only feedback from the preceding checks.
@@ -102,6 +105,10 @@ type Sidecars struct {
 	OnReviewerTree func(ReviewerTree)
 
 	ws workspace
+	// reviewersReady is set once the reviewers have their dependencies, harness
+	// setup and baseline. Loop.run calls Plan, ReviewPlan and Check one after
+	// the other, so it needs no lock.
+	reviewersReady bool
 	// history is what each review found in earlier rounds, by prompt name.
 	history map[string][]priorRound
 	// fingerprint is the implementer's change as last collected, which is
@@ -119,19 +126,56 @@ func (s *Sidecars) CheckTimes() (gates, reviews time.Duration) {
 	return s.gatesTook, s.reviewsTook
 }
 
-// Prepare commits the tree the pool synced to every member, the worktree's, as
-// the baseline the implementer's work is measured against. Reviewers get one
-// too: they are sent the implementer's files but never its .git, so `git diff
-// HEAD` on a reviewer needs a commit of the same tree to diff against.
+// Prepare sets up the implementer: dependencies, the agent's own setup, and
+// the tree the pool synced to its member, the worktree's, committed as the
+// baseline its work is measured against. Without WaitReviewers the fixed
+// Reviewers are set up too.
 func (s *Sidecars) Prepare(ctx context.Context) error {
-	if err := s.installDependencies(ctx); err != nil {
+	if err := s.installDependencies(ctx, []*sidecar.PoolEntry{s.Implementer.Entry}); err != nil {
 		return err
 	}
-	if err := s.prepareHarness(ctx); err != nil {
+	if err := s.prepareHarness(ctx, s.Implementer.Entry); err != nil {
 		return err
 	}
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
 	if err := s.ws.commitBaseline(ctx); err != nil {
+		return err
+	}
+	if s.WaitReviewers != nil {
+		return nil
+	}
+	return s.prepareReviewers(ctx)
+}
+
+// prepareReviewers makes the reviewers ready, once per run: it waits for them
+// if WaitReviewers is set, then installs dependencies, runs the agent's setup
+// and commits a baseline on each. Reviewers are sent the implementer's files
+// but never its .git, so `git diff HEAD` on one needs a commit of the same
+// tree to diff against. A failed attempt leaves them unready, so a retry waits
+// again.
+func (s *Sidecars) prepareReviewers(ctx context.Context) error {
+	if s.reviewersReady {
+		return nil
+	}
+	if s.WaitReviewers != nil {
+		members, err := s.WaitReviewers(ctx)
+		if err != nil {
+			return fmt.Errorf("get the reviewer sidecars ready: %w", err)
+		}
+		s.Reviewers = members
+	}
+	if err := s.setUpReviewers(ctx); err != nil {
+		return fmt.Errorf("set up the reviewers' workspaces: %w", err)
+	}
+	s.reviewersReady = true
+	return nil
+}
+
+func (s *Sidecars) setUpReviewers(ctx context.Context) error {
+	if err := s.installDependencies(ctx, s.Reviewers); err != nil {
+		return err
+	}
+	if err := s.onReviewers(func(e *sidecar.PoolEntry) error { return s.prepareHarness(ctx, e) }); err != nil {
 		return err
 	}
 	return s.onReviewers(func(e *sidecar.PoolEntry) error {
@@ -224,7 +268,10 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 	}
 	start = time.Now()
 	defer func() { s.reviewsTook += time.Since(start) }()
-	if err := s.prepareReviewers(ctx, round); err != nil {
+	if err := s.prepareReviewers(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.relayToReviewers(ctx, round); err != nil {
 		return nil, err
 	}
 	reviews, err := s.runReviews(ctx, round)
@@ -238,7 +285,10 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 // implementer at the same time.
 func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error) {
 	if len(s.Prompts) > 0 {
-		if err := s.prepareReviewers(ctx, round); err != nil {
+		if err := s.prepareReviewers(ctx); err != nil {
+			return nil, err
+		}
+		if err := s.relayToReviewers(ctx, round); err != nil {
 			return nil, err
 		}
 	}
@@ -275,9 +325,9 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 	return slices.Concat(reviews, validation), nil
 }
 
-// prepareReviewers relays the implementer's tree, as pulled into the
+// relayToReviewers relays the implementer's tree, as pulled into the
 // worktree, to the reviewers.
-func (s *Sidecars) prepareReviewers(ctx context.Context, round int) error {
+func (s *Sidecars) relayToReviewers(ctx context.Context, round int) error {
 	// A review that timed out stops being streamed but keeps running on
 	// its sidecar, and would read the tree as it is replaced. Best-effort:
 	// a sidecar that cannot be reached fails the push that follows anyway.
@@ -423,13 +473,12 @@ func scopePrompts(request string, prompts []review.Prompt, history map[string][]
 	return out
 }
 
-// installDependencies runs Install in every sidecar's workspace at once. What
+// installDependencies runs Install in each entry's workspace at once. What
 // it creates is gitignored, so later syncs leave it alone.
-func (s *Sidecars) installDependencies(ctx context.Context) error {
+func (s *Sidecars) installDependencies(ctx context.Context, entries []*sidecar.PoolEntry) error {
 	if s.Install == "" {
 		return nil
 	}
-	entries := append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...)
 	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
 	for i, e := range entries {
@@ -478,22 +527,16 @@ func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
 	return nil
 }
 
-// prepareHarness runs the agent's own setup once on every sidecar, after the
+// prepareHarness runs the agent's own setup once on a sidecar, after the
 // dependencies are installed. Its secrets are in the setup's environment only,
 // so later turns never get them.
-func (s *Sidecars) prepareHarness(ctx context.Context) error {
+func (s *Sidecars) prepareHarness(ctx context.Context, e *sidecar.PoolEntry) error {
 	script, env := s.Implementer.agent().Prepare(s.Implementer.Credential)
 	if script == "" {
 		return nil
 	}
-	prepare := func(e *sidecar.PoolEntry) error {
-		if _, err := review.RunScriptEnv(ctx, s.Exec, e, script, env, 64<<10); err != nil {
-			return fmt.Errorf("%s: set up %s: %w", e.ID, s.Implementer.agent().Name(), err)
-		}
-		return nil
+	if _, err := review.RunScriptEnv(ctx, s.Exec, e, script, env, 64<<10); err != nil {
+		return fmt.Errorf("%s: set up %s: %w", e.ID, s.Implementer.agent().Name(), err)
 	}
-	if err := prepare(s.Implementer.Entry); err != nil {
-		return err
-	}
-	return s.onReviewers(prepare)
+	return nil
 }
