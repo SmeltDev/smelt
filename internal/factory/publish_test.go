@@ -162,3 +162,24 @@ func TestCreateWorktreeRecordsBranches(t *testing.T) {
 	assert.Equal(t, wt.BaseBranch, gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD"))
 	assert.Assert(t, strings.HasPrefix(wt.Branch, "smelt/"), wt.Branch)
 }
+
+func TestCheckGHRepo(t *testing.T) {
+	tests := []struct {
+		name, gh, origin, wantErr string
+	}{
+		{name: "same", gh: "acme/app", origin: "git@github.com:acme/app.git"},
+		{name: "case differs", gh: "Acme/App", origin: "https://github.com/acme/app"},
+		{name: "different repo", gh: "other/tool", origin: "https://github.com/acme/app.git", wantErr: "gh is set to other/tool; run `gh repo set-default acme/app`"},
+		{name: "origin not GitHub", gh: "other/tool", origin: "/tmp/local/repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkGHRepo(tt.gh, tt.origin)
+			if tt.wantErr == "" {
+				assert.NilError(t, err)
+				return
+			}
+			assert.Error(t, err, tt.wantErr)
+		})
+	}
+}

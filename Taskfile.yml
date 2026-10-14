@@ -124,14 +124,19 @@ tasks:
       - go mod download -x
 
   lint:shell:
-    desc: Run shellcheck on install.sh (skipped with a notice when shellcheck is not installed)
+    desc: Run shellcheck on install.sh and scripts/upstream-check.sh (skipped with a notice when shellcheck is not installed)
     cmds:
       - |
         if command -v shellcheck >/dev/null 2>&1; then
-          shellcheck install.sh
+          shellcheck install.sh scripts/upstream-check.sh
         else
-          echo "shellcheck not installed; skipping install.sh lint" >&2
+          echo "shellcheck not installed; skipping shell lint" >&2
         fi
+
+  upstream:check:
+    desc: List upstream commits since the one recorded in UPSTREAM.md
+    cmds:
+      - scripts/upstream-check.sh {{.CLI_ARGS}}
 
   check:circleci:
     desc: Fail on references to CircleCI-owned repositories, packages and endpoints outside the CircleCI backend

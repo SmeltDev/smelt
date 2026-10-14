@@ -213,6 +213,9 @@ func (h GHHost) Existing(ctx context.Context, head string) (*PR, error) {
 
 // Create implements PRHost.
 func (h GHHost) Create(ctx context.Context, pr PRCreate) (string, error) {
+	if err := h.checkRepo(ctx); err != nil {
+		return "", err
+	}
 	args := []string{"pr", "create", "--base", pr.Base, "--head", pr.Head, "--title", pr.Title, "--body", pr.Body}
 	if pr.Draft {
 		args = append(args, "--draft")
@@ -226,6 +229,41 @@ func (h GHHost) Create(ctx context.Context, pr PRCreate) (string, error) {
 		return "", errors.New("gh pr create printed no URL")
 	}
 	return lines[len(lines)-1], nil
+}
+
+// checkRepo fails when gh would act on a different repository than origin,
+// which happens when a remote named upstream outranks origin. A lookup that
+// fails is not a mismatch: gh pr create then reports its own error.
+func (h GHHost) checkRepo(ctx context.Context) error {
+	out, err := h.run(ctx, "repo", "view", "--json", "nameWithOwner")
+	if err != nil {
+		return nil
+	}
+	var view struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	}
+	if json.Unmarshal(out, &view) != nil {
+		return nil
+	}
+	url, err := gitremote.URL(ctx, h.Dir, DefaultRemote)
+	if err != nil {
+		return nil
+	}
+	return checkGHRepo(view.NameWithOwner, url)
+}
+
+// checkGHRepo compares the repository gh chose with the one origin's URL names.
+// An origin that is not a GitHub URL is not checked.
+func checkGHRepo(ghRepo, originURL string) error {
+	org, repo, err := gitremote.ParseRemoteURL(originURL)
+	if err != nil {
+		return nil
+	}
+	ours := org + "/" + repo
+	if strings.EqualFold(ghRepo, ours) {
+		return nil
+	}
+	return fmt.Errorf("gh is set to %s; run `gh repo set-default %s`", ghRepo, ours)
 }
 
 // Publication is a run's branch being published from its worktree.
