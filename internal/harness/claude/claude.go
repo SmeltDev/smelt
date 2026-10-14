@@ -67,7 +67,36 @@ func (Harness) ImplementScript(in harness.ImplementInput) string {
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
-	return "export IS_SANDBOX=1\n" + Script(in.RepoPath, in.Prompt, args)
+	return "export IS_SANDBOX=1\n" + bashTimeoutExports(in) + Script(in.RepoPath, in.Prompt, args)
+}
+
+// Claude Code's Bash tool gives up on a command after two minutes unless told
+// otherwise, which makes an agent background a long test run and poll it.
+const (
+	bashTimeoutSlack = 2 * time.Minute
+	bashTimeoutFloor = 10 * time.Minute
+)
+
+// BashTimeouts are the values of BASH_DEFAULT_TIMEOUT_MS and
+// BASH_MAX_TIMEOUT_MS for a turn: a command may by default run as long as the
+// longest gate plus slack (at least ten minutes), and no longer than the turn
+// itself. Both are zero when the turn's timeout is unknown.
+func BashTimeouts(longestGate, turn time.Duration) (def, ceiling time.Duration) {
+	if turn <= 0 {
+		return 0, 0
+	}
+	def = min(max(longestGate+bashTimeoutSlack, bashTimeoutFloor), turn)
+	return def, turn
+}
+
+// bashTimeoutExports is the script lines that set Claude Code's Bash timeouts
+// for the turn, or "" when they are not known.
+func bashTimeoutExports(in harness.ImplementInput) string {
+	def, ceiling := BashTimeouts(in.LongestGate, in.Timeout)
+	if ceiling == 0 {
+		return ""
+	}
+	return fmt.Sprintf("export BASH_DEFAULT_TIMEOUT_MS=%d\nexport BASH_MAX_TIMEOUT_MS=%d\n", def.Milliseconds(), ceiling.Milliseconds())
 }
 
 // ReviewScript implements harness.Harness.

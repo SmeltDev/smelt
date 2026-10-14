@@ -110,6 +110,21 @@ type Command struct {
 	Remote       bool   `json:"remote,omitempty"`
 	Local        bool   `json:"local,omitempty"`
 	SidecarImage string `json:"sidecarImage,omitempty"`
+	// Quick is free text telling a factory implementer how to check its work
+	// cheaply before smelt runs this command in full, such as the tests of the
+	// packages it changed. It is guidance, never run by smelt.
+	Quick string `json:"quick,omitempty"`
+}
+
+// FastGateSeconds is the configured timeout, in seconds, up to which a gate is
+// cheap enough for the implementer to run in full after its last edit.
+const FastGateSeconds = 60
+
+// IsFastGate reports whether the command is a gate that configures a timeout of
+// FastGateSeconds or less. A gate with no timeout runs with the default, which
+// says nothing about how fast it is, so it does not qualify.
+func (c Command) IsFastGate() bool {
+	return c.Role == RoleGate && c.Timeout > 0 && c.Timeout <= FastGateSeconds
 }
 
 // EffectiveTimeout is the timeout, in seconds, the command runs with: its own,
@@ -202,6 +217,15 @@ type FactoryConfig struct {
 	// GatesFirst runs the validation commands before the reviews and skips
 	// the reviews of a round whose gates failed. Unset means true.
 	GatesFirst *bool `json:"gatesFirst,omitempty"`
+	// Cache keeps the docker backend's build and module caches in volumes that
+	// outlive sidecars. Unset means true.
+	Cache *bool `json:"cache,omitempty"`
+}
+
+// CacheEnabled reports whether docker sidecars share per-project cache volumes;
+// the default is yes.
+func (f *FactoryConfig) CacheEnabled() bool {
+	return f == nil || f.Cache == nil || *f.Cache
 }
 
 // PlanEnabled reports whether runs plan before implementing; the default is yes.

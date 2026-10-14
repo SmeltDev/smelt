@@ -152,11 +152,8 @@ func (l *runLog) event(e Event) {
 		for _, item := range UnverifiedItems(e.Turn.Summary) {
 			l.line("info", "unverified: "+item)
 		}
-		if e.Turn.Nudged {
-			l.line("warn", fmt.Sprintf("round %d: the summary claimed passing gates that were not run after the last edit; the implementer was asked to run them", e.Round))
-		}
 		if len(e.Turn.Unproven) > 0 {
-			l.line("warn", fmt.Sprintf("round %d: the summary still claims gates that were not run after the last edit: %s", e.Round, strings.Join(e.Turn.Unproven, ", ")))
+			l.line("warn", fmt.Sprintf("round %d: the summary claims gates that were not run after the last edit: %s", e.Round, strings.Join(e.Turn.Unproven, ", ")))
 		}
 	case EventCollected:
 		if e.Change.Empty() {
@@ -265,6 +262,10 @@ func (l *runLog) close(rep Report, err error) {
 		return
 	}
 	if rep.Started {
+		l.line("end", rep.Timing.Format())
+		if len(rep.Timing.GateOnlyRounds) > 0 {
+			l.line("end", fmt.Sprintf("rounds that failed on gates alone: %v", rep.Timing.GateOnlyRounds))
+		}
 		l.line("end", fmt.Sprintf("result %s after %d round(s), committed %t to %s", rep.Outcome.Result, rep.Outcome.Rounds, rep.Committed, rep.Worktree.Branch))
 	}
 	if err != nil {

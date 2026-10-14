@@ -31,6 +31,7 @@ Implement everything the request asks for in this run, including every phase, te
 A review finding that says part of the request is missing or incomplete is required work, not a matter of scope.
 Use BLOCKED only for work you could not do (a credential the request needs, a manual step, a decision the request leaves open): finish everything else, then end your summary with a line "BLOCKED: <what and why>".
 Not being able to run or observe something in this sandbox (Docker, real credentials, the host's keychain, a real network service) is not a block: finish the work, test it with fakes, and list what still needs a real check on its own "UNVERIFIED: <what to check and how>" line.
+Run long commands in the foreground and wait for them. Don't background a command and poll its output with sleep loops.
 When you finish, reply with a short summary of what you changed.`
 
 // blockedMarker starts the line an implementer ends its summary with when
@@ -89,16 +90,47 @@ func implementerSystemPrompt(instructions string, gates []config.Command) string
 	return prompt + "\n\nRun-specific instructions:\n" + strings.TrimSpace(instructions)
 }
 
-// gatesInstructions tells the implementer to prove its work with the project's
-// gates. smelt checks the claim against what the implementer ran.
+// gatesInstructions asks the implementer for quick checks only: smelt runs the
+// full gates after its turn and sends back any failure, so running them in the
+// turn too would make every round pay for them twice. A gate that is fast
+// anyway is the exception, since a failure found in the turn costs no round.
 func gatesInstructions(gates []config.Command) string {
 	var b strings.Builder
-	b.WriteString("Before you finish, run the project's gates yourself, after your last edit, and paste the last lines of each one's output under a " + gatesHeading + " heading in your summary. ")
-	b.WriteString("Do not say a gate passes unless you ran it after your last edit; smelt checks. Fix what fails and run them again. The gates:\n")
+	b.WriteString("After your last edit, build and run the tests of the packages you changed (for Go: `go build ./...` and `go test ./<changed packages>/...`), and fix what fails. ")
+	b.WriteString("smelt runs the full gates (listed below) right after your turn and sends you any failure, so don't run them yourself unless you need one to find a problem.\n")
+	if fast := fastGateNames(gates); len(fast) > 0 {
+		fmt.Fprintf(&b, "These gates are quick: run them in full after your last edit, and fix what fails: %s.\n", strings.Join(fast, ", "))
+	}
+	b.WriteString("smelt runs these after your turn:\n")
 	for _, g := range gates {
-		fmt.Fprintf(&b, "- %s: %s\n", g.Name, g.Run)
+		fmt.Fprintf(&b, "- %s: %s", g.Name, g.Run)
+		if g.Quick != "" {
+			fmt.Fprintf(&b, " (quick check: %s)", g.Quick)
+		}
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// fastGateNames are the names of the gates cheap enough to run in full.
+func fastGateNames(gates []config.Command) []string {
+	var out []string
+	for _, g := range gates {
+		if g.IsFastGate() {
+			out = append(out, g.Name)
+		}
+	}
+	return out
+}
+
+// longestGate is the longest timeout among gates, which bounds how long one
+// command of the implementer's may need to finish.
+func longestGate(gates []config.Command) time.Duration {
+	var longest time.Duration
+	for _, g := range gates {
+		longest = max(longest, time.Duration(g.EffectiveTimeout())*time.Second)
+	}
+	return longest
 }
 
 // Activity is one thing the implementer did, for display.
@@ -120,11 +152,10 @@ type Turn struct {
 	RateLimit *harness.RateLimit
 	// Activity is what the implementer did in the turn, in order.
 	Activity []Activity
-	// Nudged reports that the summary claimed passing gates that were not run
-	// after the last edit, and the implementer was asked to run them.
-	Nudged bool
-	// Unproven are the gates the summary still claims to pass although they
-	// were not run after the last edit, after the nudge.
+	// Calls are the tool calls of the turn with how long each took.
+	Calls []ToolCall
+	// Unproven are the gates the summary claims to pass although none of them
+	// was run after the last edit. The round's own gates tell the truth.
 	Unproven []string
 }
 
@@ -173,8 +204,9 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	h := im.agent()
 	start := time.Now()
 	var acts []Activity
+	var seen []time.Time
 	parser := h.NewImplementParser(func(a Activity) {
-		acts = append(acts, a)
+		acts, seen = append(acts, a), append(seen, time.Now())
 		if im.OnActivity != nil {
 			im.OnActivity(a)
 		}
@@ -183,6 +215,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	script := h.ImplementScript(harness.ImplementInput{
 		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Gates),
 		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
+		LongestGate: longestGate(im.Gates), Timeout: timeout,
 	})
 	code, err := im.Exec(ctx, im.Entry, script, h.Env(im.Credential, im.BaseURL), func(stream string, data []byte) {
 		if stream == iostream.StreamStderr {
@@ -206,7 +239,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 		Summary: out.Turn.Summary, Duration: time.Since(start), CostUSD: out.Turn.CostUSD,
 		Harness: h.Name(), Model: im.Model, InputTokens: out.Turn.InputTokens,
 		CachedTokens: out.Turn.CachedTokens, OutputTokens: out.Turn.OutputTokens, RateLimit: out.Turn.RateLimit,
-		Activity: acts,
+		Activity: acts, Calls: toolCalls(acts, seen, time.Now()),
 	}
 
 	// A failure the parser classified ends the run however the CLI exited: an

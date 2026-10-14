@@ -128,6 +128,8 @@ type Report struct {
 	KeptSidecars []string
 	// Log is the path of the run's log, if it kept one.
 	Log string
+	// Timing is where the run's time went, once the implementer started.
+	Timing Timing
 }
 
 // backend is the backend that drives the run's pool and relay: the caller's
@@ -187,7 +189,8 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
-	rep.RunID = time.Now().UTC().Format("20060102-150405")
+	runStart := time.Now()
+	rep.RunID = runStart.UTC().Format("20060102-150405")
 	cont := opts.Continue
 	request := opts.Prompt
 	if cont != nil {
@@ -334,7 +337,8 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
-	loop := Loop{Attempts: opts.Attempts, OnEvent: keepSummary(&lastSummary, opts.OnEvent)}
+	tm := timer{now: time.Now}
+	loop := Loop{Attempts: opts.Attempts, OnEvent: keepSummary(&lastSummary, chain(tm.event, opts.OnEvent))}
 	if status != nil {
 		next := loop.OnEvent
 		loop.OnEvent = func(e Event) {
@@ -357,8 +361,20 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	keepRecord(dataDir, rec, status)
 	rep.Started = true
 	rep.Outcome, err = loop.Run(ctx, steps, opts.Prompt)
+	rep.Timing = tm.timing
 	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block}, status)
+	settleTiming(&rep.Timing, steps, runStart, status)
 	return rep, err
+}
+
+// settleTiming adds what the loop's events do not report to t: the time of the
+// gates and the reviews, and the run's total. It warns of the slow calls.
+func settleTiming(t *Timing, steps *Sidecars, runStart time.Time, status iostream.StatusFunc) {
+	t.Gates, t.Reviews = steps.CheckTimes()
+	t.Total = time.Since(runStart)
+	for _, w := range t.Warnings() {
+		status(iostream.LevelWarn, w)
+	}
 }
 
 // noPriorWork is what is shown and logged when a continued run finds its branch
@@ -398,7 +414,9 @@ func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report,
 	}
 	rep.Stat, rep.StatErr = workStat(ctx, wt)
 	if rep.Stat != "" {
+		start := time.Now()
 		rep.Notes = describeWork(ctx, steps, wt, *rep, in, status)
+		rep.Timing.Notes = time.Since(start)
 	}
 }
 

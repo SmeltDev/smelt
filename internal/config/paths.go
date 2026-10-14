@@ -134,6 +134,13 @@ func ProjectDataDir(projectRoot string) (string, error) {
 	return newDir, nil
 }
 
+// ProjectHash is a short, stable name for a project: the first 12 hex digits of
+// the hash its data directory is named by. It names things Docker keeps for the
+// project, where the full hash would make the names unwieldy.
+func ProjectHash(projectRoot string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(CanonicalProjectRoot(projectRoot))))[:12]
+}
+
 func configHome() (string, error) {
 	if v := os.Getenv(EnvXDGConfigHome); v != "" {
 		return v, nil

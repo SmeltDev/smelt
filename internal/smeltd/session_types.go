@@ -100,11 +100,27 @@ type RoundImplement struct {
 	// Stat summarizes the work so far against the run's baseline.
 	Stat  string `json:"stat,omitempty"`
 	Error string `json:"error,omitempty"`
-	// Nudged reports that the summary claimed passing gates that were not run
-	// after the last edit, so the implementer was asked to run them. Unproven
-	// are the gates it still claimed without running.
-	Nudged   bool     `json:"nudged,omitempty"`
+	// Unproven are the gates the summary claimed to pass without running them
+	// after its last edit. They are only noted; the round's own gates decide.
 	Unproven []string `json:"unproven_gates,omitempty"`
+}
+
+// FactoryTiming is where a factory run's time went, in milliseconds, with the
+// one-line account the CLI prints.
+type FactoryTiming struct {
+	Line        string `json:"line"`
+	PlanMS      int64  `json:"plan_ms"`
+	ImplementMS int64  `json:"implement_ms"`
+	// CommandsMS is the part of ImplementMS spent inside tool calls.
+	CommandsMS int64 `json:"commands_ms"`
+	GatesMS    int64 `json:"gates_ms"`
+	ReviewsMS  int64 `json:"reviews_ms"`
+	NotesMS    int64 `json:"notes_ms"`
+	TotalMS    int64 `json:"total_ms"`
+	// GateOnlyRounds are the rounds that failed on gates alone.
+	GateOnlyRounds []int `json:"gate_only_rounds,omitempty"`
+	// SlowCalls are warnings for implementer tool calls over two minutes.
+	SlowCalls []string `json:"slow_calls,omitempty"`
 }
 
 // Feed is the latest lines of a stream that can run long, such as a run's
@@ -212,6 +228,8 @@ type FactoryRun struct {
 	// Plan is the plan the implementer was sent with, absent when the run did
 	// not plan.
 	Plan *Plan `json:"plan,omitempty"`
+	// Timing is where the run's time went, once the implementer has started.
+	Timing *FactoryTiming `json:"timing,omitempty"`
 	// SkippedTests are the tests the last round's validation skipped.
 	SkippedTests []string `json:"skipped_tests,omitempty"`
 	// Blocked is what the implementer said it could not do, for ResultBlocked.
@@ -364,9 +382,12 @@ type Round struct {
 	Implement *RoundImplement `json:"implement,omitempty"`
 	Checks    []RoundCheck    `json:"checks,omitempty"`
 	// Note says why the round ended the way it did, such as why the loop stopped.
-	Note      string     `json:"note,omitempty"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	Note string `json:"note,omitempty"`
+	// GatesOnlyFailed is set when the round failed on validation commands and
+	// on no review.
+	GatesOnlyFailed bool       `json:"gates_only_failed,omitempty"`
+	StartedAt       time.Time  `json:"started_at"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
 }
 
 // Session is the record of one factory run. It holds state only; text is in

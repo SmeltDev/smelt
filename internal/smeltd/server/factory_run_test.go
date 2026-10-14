@@ -16,10 +16,12 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
@@ -112,6 +114,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		Prompt: "add a --verbose flag", Harness: "claude", Attempts: DefaultAttempts, RunID: "run-1",
 		Worktree: "/data/factory/run-1", Branch: "smelt/run-1", Baseline: "base", Head: "head",
 		BaseBranch: "feature", DefaultBranch: "main",
+		Timing: &smeltd.FactoryTiming{Line: factory.Timing{}.Format()},
 		Result: "passed", Rounds: 1, Committed: true,
 		Progress: smeltd.Feed{Lines: []smeltd.FeedLine{{Level: smeltd.FeedStep, Text: "Preparing an implementer sidecar and 2 reviewer sidecar(s)..."}}, Total: 1},
 	})
@@ -517,7 +520,7 @@ func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T
 	rec.event(factory.Event{Kind: factory.EventPlanning})
 	rec.event(factory.Event{Kind: factory.EventPlanReviewed, Plan: &plan})
 	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 1})
-	rec.event(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "x", Nudged: true, Unproven: []string{"lint"}}})
+	rec.event(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "x", Unproven: []string{"lint"}}})
 	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{
 		{Name: "requirements", Kind: factory.KindReview, Status: factory.StatusSkipped, Reason: "gates failed"},
 		{Name: "test", Kind: factory.KindValidate, Status: factory.StatusFailed, Skipped: []string{"TestDocker"}},
@@ -540,7 +543,8 @@ func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T
 	round := snap.Rounds[0]
 	assert.Equal(t, round.Reviews[0].State, smeltd.PromptSkipped)
 	assert.Equal(t, round.Reviews[0].Status, smeltd.CheckSkipped)
-	assert.Assert(t, round.Implement.Nudged)
+	assert.DeepEqual(t, round.Implement.Unproven, []string{"lint"})
+	assert.Assert(t, round.GatesOnlyFailed)
 	assert.Assert(t, strings.Contains(round.Note, "1 review(s) skipped (gates failed)"), round.Note)
 	assert.Assert(t, strings.Contains(round.Note, "lint"), round.Note)
 }
@@ -552,4 +556,31 @@ func TestFactoryRunUnverifiedJSON(t *testing.T) {
 	b, err = json.Marshal(smeltd.FactoryRun{})
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(b), "unverified"), string(b))
+}
+
+func TestFactoryBackendCacheKey(t *testing.T) {
+	off := false
+	tests := []struct {
+		name      string
+		cfg       *config.ProjectConfig
+		wantKey   bool
+		wantGoMod bool
+	}{
+		{"default", &config.ProjectConfig{}, true, false},
+		{"go project", &config.ProjectConfig{Environment: &envspec.Environment{Stack: envspec.StackGo}}, true, true},
+		{"cache off", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &off}, Environment: &envspec.Environment{Stack: envspec.StackGo}}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			b, err := factoryBackend(smeltd.BackendDocker, root, tt.cfg)
+			assert.NilError(t, err)
+			p := b.(*docker.Provider)
+			assert.Equal(t, p.CacheKey != "", tt.wantKey)
+			if tt.wantKey {
+				assert.Equal(t, p.CacheKey, config.ProjectHash(root))
+			}
+			assert.Equal(t, p.GoStack, tt.wantGoMod)
+		})
+	}
 }

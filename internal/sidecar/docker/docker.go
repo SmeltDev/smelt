@@ -61,6 +61,13 @@ type Provider struct {
 	// ManagedDockerfile is the project's factory.dockerfile, empty when the
 	// project has none. It only changes the hint for a missing local image.
 	ManagedDockerfile string
+	// CacheKey, when set, mounts the project's cache volumes in every member:
+	// Docker volumes named for the key that outlive containers and runs, so a
+	// sidecar starts with the build cache earlier ones filled. It is a short
+	// hash of the project (config.ProjectHash). Empty mounts none.
+	CacheKey string
+	// GoStack also mounts the Go module cache, for a Go project.
+	GoStack bool
 
 	// now and sleep are test seams for the readiness wait; nil means real time.
 	now   func() time.Time
@@ -201,13 +208,15 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		return sidecar.Instance{}, err
 	}
 
+	caches := b.cacheLayout(ctx, containerImage)
 	created, err := b.cli.ContainerCreate(ctx, &container.Config{
 		Image:      containerImage,
 		Cmd:        []string{"sleep", "infinity"},
 		WorkingDir: repoPath,
 		Labels:     map[string]string{label: "1", labelName: name},
 	}, &container.HostConfig{
-		Binds: []string{hostDir + ":" + repoPath},
+		Binds:  []string{hostDir + ":" + repoPath},
+		Mounts: b.cacheMounts(caches),
 	}, nil, nil, containerName)
 	if err != nil {
 		_ = os.RemoveAll(hostDir)
@@ -217,6 +226,11 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, fmt.Errorf("docker: start container: %w", err)
+	}
+	if err := b.ownCaches(ctx, created.ID, caches); err != nil {
+		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
+		_ = os.RemoveAll(hostDir)
+		return sidecar.Instance{}, err
 	}
 
 	b.remember(created.ID, member{hostDir: hostDir, image: containerImage})
@@ -309,7 +323,13 @@ func (b *Provider) Pull(ctx context.Context, id, repoPath, localDir string, stat
 // stderr to onOutput, returning the command's exit code. onSubmitted, when
 // non-nil, receives the Docker exec ID between creation and streaming.
 func (b *Provider) Exec(ctx context.Context, id, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
+	return b.execAs(ctx, id, "", script, env, onOutput, onSubmitted)
+}
+
+// execAs is Exec as user, or as the image's own user when user is empty.
+func (b *Provider) execAs(ctx context.Context, id, user, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
 	created, err := b.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		User:         user,
 		Cmd:          []string{"sh", "-c", script},
 		Env:          envSlice(env),
 		AttachStdout: true,

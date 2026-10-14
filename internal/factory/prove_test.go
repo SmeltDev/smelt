@@ -14,7 +14,10 @@ import (
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
-var testGates = []config.Command{{Name: "lint", Run: "golangci-lint run"}, {Name: "test", Run: "go test ./..."}}
+var testGates = []config.Command{
+	{Name: "lint", Run: "golangci-lint run", Role: config.RoleGate, Timeout: 30},
+	{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 30},
+}
 
 func TestUnprovenGates(t *testing.T) {
 	edit := Activity{Tool: "Edit", Detail: "main.go"}
@@ -40,6 +43,29 @@ func TestUnprovenGates(t *testing.T) {
 	}
 }
 
+func TestUnprovenConsidersOnlyFastGatesAndQuickChecks(t *testing.T) {
+	edit := Activity{Tool: "Edit", Detail: "main.go"}
+	slow := config.Command{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 600}
+	quick := config.Command{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 600, Quick: "go test ./pkg/..."}
+	tests := []struct {
+		name string
+		gate config.Command
+		acts []Activity
+		want []string
+	}{
+		{"a slow gate without a quick check is not flagged", slow, []Activity{edit, {Tool: "Bash", Detail: "go test ./..."}}, nil},
+		{"a quick check not run is flagged", quick, []Activity{edit, {Tool: "Bash", Detail: "go build ./..."}}, []string{"test"}},
+		{"a command containing the quick text proves it", quick, []Activity{edit, {Tool: "Bash", Detail: "go test ./pkg/... -count=1"}}, nil},
+		{"the full gate proves it too", quick, []Activity{edit, {Tool: "Bash", Detail: "task ci:test"}}, nil},
+		{"the quick text before the edit proves nothing", quick, []Activity{{Tool: "Bash", Detail: "go test ./pkg/..."}, edit}, []string{"test"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, unproven(tt.acts, []config.Command{tt.gate}), tt.want)
+		})
+	}
+}
+
 func TestClaimsGatesPass(t *testing.T) {
 	for summary, want := range map[string]bool{
 		"All tests pass.":                           true,
@@ -54,17 +80,19 @@ func TestClaimsGatesPass(t *testing.T) {
 	}
 }
 
-func TestGateCommandsLeavesOutTheMarkersCheck(t *testing.T) {
-	got := gateCommands(append(append([]config.Command{}, testGates...), MarkersGate))
+func TestGateCommandsAreOnlyTheGates(t *testing.T) {
+	install := config.Command{Name: config.CmdInstall, Run: "task mod-download"}
+	format := config.Command{Name: "format", Run: "task fmt", Role: config.RoleAutofix}
+	got := gateCommands(append(append([]config.Command{install, format}, testGates...), MarkersGate))
 	assert.DeepEqual(t, got, testGates)
 }
 
 func TestSystemPromptListsTheGates(t *testing.T) {
 	p := implementerSystemPrompt("be brief", testGates)
-	for _, want := range []string{"## Gates heading", "- lint: golangci-lint run", "- test: go test ./...", "Run-specific instructions:\nbe brief"} {
+	for _, want := range []string{"smelt runs these after your turn", "- lint: golangci-lint run", "- test: go test ./...", "Run-specific instructions:\nbe brief"} {
 		assert.Assert(t, contains(p, want), "missing %q in:\n%s", want, p)
 	}
-	assert.Assert(t, !contains(implementerSystemPrompt("", nil), "Gates"))
+	assert.Assert(t, !contains(implementerSystemPrompt("", nil), "smelt runs"))
 }
 
 // claudeTurn is the stream of one claude turn that used tools in order, each
@@ -103,52 +131,46 @@ func scriptedImplementer(t *testing.T, turns ...string) (*Sidecars, *[]string, *
 	}, &prompts, &notices
 }
 
-func TestImplementNudgesAClaimWithoutARun(t *testing.T) {
+func TestImplementNotesAClaimWithoutARunAndAsksForNothing(t *testing.T) {
 	s, prompts, notices := scriptedImplementer(t,
 		claudeTurn("Done. All tests pass.", "Edit:main.go"),
-		claudeTurn("Ran them.\n\n## Gates\nok", "Bash:task lint", "Bash:task test"))
+		claudeTurn("never asked"))
 	turn, err := s.Implement(context.Background(), "do it")
 	assert.NilError(t, err)
 
-	assert.Equal(t, len(*prompts), 2, "exactly one nudge")
-	assert.Assert(t, contains((*prompts)[1], "weren't run after your last edit"), (*prompts)[1])
-	assert.Assert(t, contains((*prompts)[1], "lint, test"), (*prompts)[1])
-	assert.Assert(t, turn.Nudged)
-	assert.Equal(t, len(turn.Unproven), 0)
-	assert.Assert(t, contains(turn.Summary, "Ran them."))
-	assert.Equal(t, turn.CostUSD, 1.0, "both turns are paid for")
+	assert.Equal(t, len(*prompts), 1, "no extra implementer turn")
+	assert.DeepEqual(t, turn.Unproven, []string{"lint", "test"})
+	assert.Equal(t, turn.CostUSD, 0.5)
 	assert.Equal(t, len(*notices), 1)
+	assert.Assert(t, contains((*notices)[0], "were not run after the last edit"), (*notices)[0])
 }
 
-func TestImplementDoesNotNudgeWhenTheGatesRan(t *testing.T) {
+func TestImplementDoesNotNoteWhenTheGatesRan(t *testing.T) {
 	s, prompts, notices := scriptedImplementer(t,
 		claudeTurn("Done. All tests pass.", "Edit:main.go", "Bash:task test", "Bash:golangci-lint run ./..."))
 	turn, err := s.Implement(context.Background(), "do it")
 	assert.NilError(t, err)
 	assert.Equal(t, len(*prompts), 1)
-	assert.Assert(t, !turn.Nudged)
+	assert.Equal(t, len(turn.Unproven), 0)
 	assert.Equal(t, len(*notices), 0)
 }
 
-func TestImplementDoesNotNudgeWithoutAClaim(t *testing.T) {
-	s, prompts, _ := scriptedImplementer(t, claudeTurn("Added the flag. I did not run anything.", "Edit:main.go"))
-	_, err := s.Implement(context.Background(), "do it")
-	assert.NilError(t, err)
-	assert.Equal(t, len(*prompts), 1)
-}
-
-func TestImplementReportsASecondMissAndMovesOn(t *testing.T) {
-	s, prompts, notices := scriptedImplementer(t,
-		claudeTurn("All tests pass.", "Edit:main.go"),
-		claudeTurn("Really, the tests pass.", "Bash:task lint"),
-		claudeTurn("never asked"))
+func TestImplementDoesNotNoteWithoutAClaim(t *testing.T) {
+	s, prompts, notices := scriptedImplementer(t, claudeTurn("Added the flag. I did not run anything.", "Edit:main.go"))
 	turn, err := s.Implement(context.Background(), "do it")
 	assert.NilError(t, err)
-	assert.Equal(t, len(*prompts), 2, "a second miss is not nudged again")
-	assert.Assert(t, turn.Nudged)
-	assert.DeepEqual(t, turn.Unproven, []string{"test"})
-	assert.Equal(t, len(*notices), 2)
-	assert.Assert(t, contains((*notices)[1], "still claims"), (*notices)[1])
+	assert.Equal(t, len(*prompts), 1)
+	assert.Equal(t, len(turn.Unproven), 0)
+	assert.Equal(t, len(*notices), 0)
+}
+
+func TestImplementNeverCountsInstallAsAGate(t *testing.T) {
+	s, _, notices := scriptedImplementer(t, claudeTurn("All tests pass.", "Edit:main.go", "Bash:task test", "Bash:task lint"))
+	s.Commands = append([]config.Command{{Name: config.CmdInstall, Run: "task mod-download"}}, s.Commands...)
+	turn, err := s.Implement(context.Background(), "do it")
+	assert.NilError(t, err)
+	assert.Equal(t, len(turn.Unproven), 0)
+	assert.Equal(t, len(*notices), 0)
 }
 
 func TestImplementWithoutGatesIsNotChecked(t *testing.T) {
