@@ -289,3 +289,21 @@ func TestRunError(t *testing.T) {
 	assert.ErrorIs(t, h.RunError(ctx, time.Minute, 1, nil, "", "401 Unauthorized"), ErrCredentialRejected)
 	assert.ErrorContains(t, h.RunError(ctx, time.Minute, 2, nil, "", "boom"), "codex exited 2: boom")
 }
+
+func TestRunErrorDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    string
+	}{
+		{"with a run timeout", 30 * time.Second, "timed out after 30s"},
+		{"without one", 0, "timed out: context deadline exceeded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Error(t, Harness{}.RunError(ctx, tt.timeout, -1, nil, "", ""), tt.want)
+		})
+	}
+}

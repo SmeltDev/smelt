@@ -33,6 +33,16 @@ const (
 // CLI also exits with when something it shelled out to is missing.
 const MissingExitCode = 97
 
+// TimeoutError is the error for a run whose context deadline passed. A caller
+// that relies on its own deadline passes no timeout, which must not read as
+// "timed out after 0s".
+func TimeoutError(timeout time.Duration, ctxErr error) error {
+	if timeout > 0 {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	return fmt.Errorf("timed out: %w", ctxErr)
+}
+
 // Credential is what a harness authenticates with. EnvVar is the variable the
 // CLI reads it from, so only one kind is ever sent and a stale one cannot
 // shadow another.
