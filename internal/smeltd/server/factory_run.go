@@ -139,6 +139,9 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if req.From != "" && req.Continue != "" {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "from cannot be combined with continue: a continued run keeps its base")
 	}
+	if err := checkIntegrateRequest(req); err != nil {
+		return smeltd.Session{}, err
+	}
 	ps := d.lookupProject(req.ProjectRoot)
 	if ps == nil {
 		ps = d.adoptProject(req.ProjectRoot)
@@ -158,6 +161,13 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		}
 		cont = &factory.Continuation{From: from, Guidance: prompt}
 		record = &smeltd.FactoryRun{Prompt: from.Prompt, Guidance: prompt, ContinuesRunID: from.RunID}
+	}
+	integrate, err := integrateOf(req, ps.root)
+	if err != nil {
+		return smeltd.Session{}, err
+	}
+	if integrate != nil {
+		record.Mode, record.Against = factory.ModeIntegrate, integrate.Against
 	}
 	cfg, err := loadProjectConfig(ps.root)
 	if err != nil {
@@ -185,13 +195,10 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	}
 	// The daemon's working directory is not the caller's, so a relative path
 	// would put the log somewhere the caller did not mean.
-	if req.Log != "" && req.Log != factory.LogDefault && !filepath.IsAbs(req.Log) {
-		return smeltd.Session{}, apiErr(http.StatusBadRequest, "log must be an absolute path, got %q", req.Log)
+	if err := checkFactoryLog(req.Log); err != nil {
+		return smeltd.Session{}, err
 	}
-	attempts := req.Attempts
-	if attempts <= 0 {
-		attempts = DefaultAttempts
-	}
+	attempts := factoryAttempts(req)
 	record.Attempts = attempts
 	model := req.Model
 	if model == "" {
@@ -214,6 +221,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Prompt:                  prompt,
 		Continue:                cont,
 		From:                    req.From,
+		Integrate:               integrate,
 		Attempts:                attempts,
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
@@ -248,7 +256,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	defer close(entry.done)
 	defer entry.cancel()
 
-	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, rounds: map[int]int{}, harness: opts.Harness.Name()}
+	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, rounds: map[int]int{}, harness: opts.Harness.Name(), integrate: opts.Integrate != nil}
 	root := opts.Root
 	opts.Status = func(level iostream.Level, msg string) {
 		log.Printf("smeltd: factory (%s): %s", root, msg)
@@ -275,6 +283,64 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	rep, err := run(ctx, opts)
 	rec.finish(rep, err)
 	d.settleSession(entry, err)
+}
+
+// checkIntegrateRequest refuses an integrate request that cannot run, and
+// --against without --integrate, which would be silently ignored.
+func checkIntegrateRequest(req smeltd.FactoryRequest) error {
+	switch {
+	case !req.Integrate && req.Against != "":
+		return apiErr(http.StatusBadRequest, "against needs integrate")
+	case !req.Integrate:
+		return nil
+	case req.Continue != "":
+		return apiErr(http.StatusBadRequest, "integrate cannot be combined with continue: it checks a branch against a spec")
+	case req.From == "":
+		return apiErr(http.StatusBadRequest, "integrate needs from: the branch to check")
+	}
+	return nil
+}
+
+// checkFactoryLog refuses a relative log path.
+func checkFactoryLog(log string) error {
+	if log != "" && log != factory.LogDefault && !filepath.IsAbs(log) {
+		return apiErr(http.StatusBadRequest, "log must be an absolute path, got %q", log)
+	}
+	return nil
+}
+
+// integrateOf is the integrate options of a request, nil for any other run.
+// Against defaults to the project's default branch.
+func integrateOf(req smeltd.FactoryRequest, root string) (*factory.IntegrateOptions, error) {
+	if !req.Integrate {
+		return nil, nil
+	}
+	against, err := factory.ResolveAgainst(root, req.Against)
+	if err != nil {
+		return nil, apiErr(http.StatusBadRequest, "%v", err)
+	}
+	return &factory.IntegrateOptions{Against: against}, nil
+}
+
+// factoryAttempts is the rounds a request checks. An integrate run's are
+// fixed whatever it says: the broad check, one fix turn and one re-check.
+func factoryAttempts(req smeltd.FactoryRequest) int {
+	switch {
+	case req.Integrate:
+		return factory.IntegrateAttempts
+	case req.Attempts <= 0:
+		return DefaultAttempts
+	}
+	return req.Attempts
+}
+
+// integrateRoundKind is what round n of an integrate run is: the broad check,
+// then, after the one fix turn, the focused re-check.
+func integrateRoundKind(n int) smeltd.RoundKind {
+	if n == 1 {
+		return smeltd.RoundBroad
+	}
+	return smeltd.RoundRecheck
 }
 
 // factoryResultNote says how a factory loop ended, for its stage.
@@ -309,6 +375,9 @@ type factoryRecorder struct {
 
 	// harness is the agent the run uses.
 	harness harness.Name
+	// integrate is set for an integrate run, whose rounds are broad, then a
+	// fix and a re-check.
+	integrate bool
 }
 
 func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
@@ -343,6 +412,9 @@ func (r *factoryRecorder) round(n int) int {
 	ridx := r.entry.beginRound(r.prompts)
 	r.rounds[n] = ridx
 	r.entry.mu.Lock()
+	if r.integrate {
+		r.entry.s.Rounds[ridx].Kind = integrateRoundKind(n)
+	}
 	r.cur = ridx
 	r.entry.mu.Unlock()
 	return ridx
@@ -378,7 +450,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		// Recorded above.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
-		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning}
+		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning, Fix: r.integrate}
 	case factory.EventImplemented:
 		if impl := round.Implement; impl != nil {
 			impl.State = smeltd.ImplementApplied

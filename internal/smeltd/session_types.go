@@ -83,9 +83,11 @@ const (
 
 // RoundImplement is a factory round's implementer turn.
 type RoundImplement struct {
-	State      ImplementState `json:"state"`
-	DurationMS int64          `json:"duration_ms,omitempty"`
-	CostUSD    float64        `json:"cost_usd,omitempty"`
+	State ImplementState `json:"state"`
+	// Fix is set for the one fix turn of an integrate run.
+	Fix        bool    `json:"fix,omitempty"`
+	DurationMS int64   `json:"duration_ms,omitempty"`
+	CostUSD    float64 `json:"cost_usd,omitempty"`
 	// Harness and Model are the agent that ran the turn.
 	Harness string `json:"harness,omitempty"`
 	Model   string `json:"model,omitempty"`
@@ -194,6 +196,11 @@ type FactoryRun struct {
 	// Guidance is what the user added to it, if anything.
 	Prompt   string `json:"prompt"`
 	Guidance string `json:"guidance,omitempty"`
+	// Mode is "integrate" for a run that checks a finished branch against the
+	// spec in Prompt, and Against what the branch is compared with; both are
+	// absent otherwise.
+	Mode    string `json:"mode,omitempty"`
+	Against string `json:"against,omitempty"`
 	// ContinuesRunID is the run whose work this one picked up, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// ContinuedFromEmpty is set when the run found no work on the branch it
@@ -372,10 +379,25 @@ const (
 	PromptSkipped PromptRunState = "skipped"
 )
 
+// RoundKind says what a round of an integrate run was.
+type RoundKind string
+
+// Round kinds. The implementer turn that starts a recheck round is the fix.
+const (
+	// RoundBroad is the first round: every review judges the whole spec.
+	RoundBroad RoundKind = "broad"
+	// RoundRecheck follows the fix: only reviews that found something look
+	// again, at those findings.
+	RoundRecheck RoundKind = "recheck"
+)
+
 // Round is one pass of implementing the work and checking it.
 type Round struct {
-	Number  int            `json:"number"`
-	State   RoundState     `json:"state"`
+	Number int        `json:"number"`
+	State  RoundState `json:"state"`
+	// Kind is "broad" or "recheck" for a round of an integrate run, "" for any
+	// other.
+	Kind    RoundKind      `json:"kind,omitempty"`
 	Reviews []ReviewPrompt `json:"reviews"`
 	// Findings counts every finding the round's reviews reported; Worth counts
 	// the ones worth changing (severity high or medium).
@@ -497,6 +519,13 @@ type FactoryRequest struct {
 	// project's files, whose uncommitted changes are then left out. It cannot
 	// be combined with Continue.
 	From string `json:"from,omitempty"`
+	// Integrate checks the work already on From against Prompt, the spec for
+	// all of it, and fixes only what fails. It needs From and a Prompt, and
+	// cannot be combined with Continue. Attempts is ignored.
+	Integrate bool `json:"integrate,omitempty"`
+	// Against is what an integrate run compares From with; empty means the
+	// project's default branch.
+	Against string `json:"against,omitempty"`
 	// ReviewsDir is a directory of review prompts relative to the project
 	// root; empty means .smelt/reviews, which may be missing when validation
 	// commands are enough.

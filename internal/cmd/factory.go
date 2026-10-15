@@ -40,8 +40,8 @@ func newFactoryCmd() *cobra.Command {
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, noPlan, jsonOut, logOn, verbose, detach bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from string
+	var keepSidecars, noValidate, noPlan, jsonOut, logOn, verbose, detach, integrate bool
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -98,6 +98,20 @@ implementer is sent what failed, in a round that counts toward
 --max-attempts. --plan works like a prompt argument here. Without a prompt in a terminal, it asks for one first, and
 Enter skips it.
 
+--integrate (with --from) checks a branch whose work is already done against
+the spec in the prompt, usually --plan epics/x.md, and fixes only what fails.
+The change under review is everything the branch added since its merge base
+with --against (default: the default branch). There is no plan and no
+implementer turn at first: the validation commands run together with every
+review, each given the whole spec and asked whether the combined change meets
+all of it and the parts fit. If all pass, the run passes. If not, the
+implementer gets one fix turn with all the findings, and then the commands and
+only the reviews that had high or medium findings run again, to check those
+findings and nothing broader. Whatever still fails ends the run as exhausted.
+--max-attempts is ignored: the attempts are fixed. The PR (--pr) goes into
+--against's branch unless --base says otherwise. --integrate cannot be combined
+with --continue.
+
 With --log, the run keeps a plain-text log in
 ~/.smelt/factory/run-<start time>.log, with its full context whatever the
 display leaves out: every prompt the implementer is sent and what it did and
@@ -152,7 +166,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 					return err
 				}
 			}
-			if err := checkBuildFlags(cmd, buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub, from: from, continueRun: continueRun}); err != nil {
+			checks := buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub, from: from, continueRun: continueRun, integrate: integrate, against: against}
+			if err := checkBuildFlags(cmd, checks); err != nil {
 				return err
 			}
 			if err := requireLocalDaemon(); err != nil {
@@ -180,7 +195,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
-			if err := preflightBuild(ctx, root, reviewsDir, from, cfg, noValidate); err != nil {
+			if err := preflightBuild(ctx, root, reviewsDir, checks, cfg, noValidate); err != nil {
 				return err
 			}
 			agent, err := resolveHarness(ctx, streams, harnessChoice{
@@ -219,6 +234,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				Prompt:                  prompt,
 				Continue:                continueRun,
 				From:                    from,
+				Integrate:               integrate,
+				Against:                 against,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
 				NoPlan:                  noPlan,
@@ -260,6 +277,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation (default: factory.maxAttempts from config, else 3)")
 	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
 	cmd.Flags().StringVar(&from, "from", "", "start from this branch or commit (e.g. epic/x, origin/epic/x, a SHA) instead of your files; your uncommitted changes are left out and your checkout is not touched")
+	cmd.Flags().BoolVar(&integrate, "integrate", false, "check the finished work on --from against the whole spec in the prompt and fix only what fails: one broad review, one fix turn, one focused re-check")
+	cmd.Flags().StringVar(&against, "against", "", "with --integrate, the ref the branch is compared with (default: the default branch)")
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
@@ -300,6 +319,9 @@ type buildChecks struct {
 	from     string
 	// continueRun is --continue, which keeps its run's base.
 	continueRun string
+	// integrate is --integrate, and against --against.
+	integrate bool
+	against   string
 }
 
 // checkBuildFlags refuses flag values that cannot work, before anything starts.
@@ -310,6 +332,9 @@ func checkBuildFlags(cmd *cobra.Command, c buildChecks) error {
 			withSuggestion("Write --log-file FILE, or --log to log to ~/.smelt/factory.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
+	}
+	if err := checkIntegrateFlags(c); err != nil {
+		return err
 	}
 	if c.from != "" && c.continueRun != "" {
 		return newUserError("--from cannot be combined with --continue.").
@@ -326,6 +351,57 @@ func checkBuildFlags(cmd *cobra.Command, c buildChecks) error {
 			withCode("command.invalid_args").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
+	}
+	if c.integrate && cmd.Flags().Changed("max-attempts") {
+		iostream.FromCmd(cmd).ErrPrintf("Note: --max-attempts is ignored with --integrate: the broad check, one fix turn and one re-check are fixed.\n")
+	}
+	return nil
+}
+
+// checkIntegrateFlags refuses --integrate without a branch to check or with a
+// run to continue, and --against without --integrate.
+func checkIntegrateFlags(c buildChecks) error {
+	switch {
+	case c.integrate && c.continueRun != "":
+		return newUserError("--integrate cannot be combined with --continue.").
+			withCode("command.invalid_flags").
+			withSuggestion("An integrate run checks a finished branch against a spec. Drop --continue, or continue the run without --integrate.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case c.integrate && c.from == "":
+		return newUserError("--integrate needs --from.").
+			withCode("command.invalid_flags").
+			withSuggestion("Name the branch to check: smelt factory build --from epic/x --integrate --plan spec.md.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case !c.integrate && c.against != "":
+		return newUserError("--against needs --integrate.").
+			withCode("command.invalid_flags").
+			withSuggestion("Add --integrate, or drop --against.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return nil
+}
+
+// checkIntegrate resolves --against and the merge base as the run will, so a
+// branch that cannot be integrated is explained before anything starts.
+func checkIntegrate(ctx context.Context, root, from, against string) error {
+	against, err := factory.ResolveAgainst(root, against)
+	if err != nil {
+		return newUserError(err.Error()).
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	if _, err := factory.ResolveIntegrate(ctx, root, from, against); err != nil {
+		if errors.Is(err, factory.ErrUnknownRef) || errors.Is(err, factory.ErrNothingToIntegrate) {
+			return newUserError(err.Error()).
+				withCode("command.invalid_args").
+				withExitCode(ExitBadArgs).
+				withoutDetail()
+		}
+		return err
 	}
 	return nil
 }
@@ -815,11 +891,18 @@ func checkFromRef(ctx context.Context, root, from string) error {
 	return nil
 }
 
-// preflightBuild loads the checks and resolves --from, as the daemon will, so a
-// mistake in either is explained before anything starts.
-func preflightBuild(ctx context.Context, root, reviewsDir, from string, cfg *config.ProjectConfig, noValidate bool) error {
+// preflightBuild loads the checks and resolves --from, and for --integrate
+// --against and the merge base, as the daemon will, so a mistake in any is
+// explained before anything starts.
+func preflightBuild(ctx context.Context, root, reviewsDir string, c buildChecks, cfg *config.ProjectConfig, noValidate bool) error {
 	if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
 		return err
 	}
-	return checkFromRef(ctx, root, from)
+	if err := checkFromRef(ctx, root, c.from); err != nil {
+		return err
+	}
+	if !c.integrate {
+		return nil
+	}
+	return checkIntegrate(ctx, root, c.from, c.against)
 }

@@ -71,6 +71,10 @@ type NotesInput struct {
 	Plan *Plan
 	// Summary is the implementer's last turn summary.
 	Summary string
+	// Integrate is set for a branch of finished tickets checked against the
+	// spec that Request holds. Its tip commit is the epic's own, so the notes
+	// are kept in the record and the PR and never rewrite it.
+	Integrate bool
 	// Log, when set, receives the prompt and the response.
 	Log func(heading, body string)
 }
@@ -125,6 +129,9 @@ func notesPrompt(in NotesInput) string {
 	b.WriteString("- In how, name the key files or packages.\n")
 	b.WriteString("- Bullets, not paragraphs. Say nothing about the review process.\n")
 	b.WriteString("- title is one imperative line of at most 72 characters.\n\n")
+	if in.Integrate {
+		b.WriteString("This branch combines several finished tickets, and the request below is the spec for all of them: describe the combined change.\n\n")
+	}
 	b.WriteString("The request:\n\n")
 	b.WriteString(strings.TrimSpace(in.Request))
 	fmt.Fprintf(&b, "\n\nThe run ended: %s", orDefault(string(in.Outcome.Result), "unknown"))

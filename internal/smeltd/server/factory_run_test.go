@@ -604,3 +604,86 @@ func TestFactoryRecorderStartedRecordsFrom(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"from":{"ref":"epic/x","commit":"abc123"}`), string(b))
 }
+
+func TestStartFactoryRefusesABadIntegrateRequest(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+	base := smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "spec"}
+	for name, tc := range map[string]struct {
+		mod func(*smeltd.FactoryRequest)
+		msg string
+	}{
+		"no from":           {func(r *smeltd.FactoryRequest) { r.Integrate = true }, "integrate needs from"},
+		"with continue":     {func(r *smeltd.FactoryRequest) { r.Integrate, r.From, r.Continue = true, "epic/x", "run-0" }, "from cannot be combined with continue"},
+		"continue, no from": {func(r *smeltd.FactoryRequest) { r.Integrate, r.Continue = true, "run-0" }, "integrate cannot be combined with continue"},
+		"no prompt":         {func(r *smeltd.FactoryRequest) { r.Integrate, r.From, r.Prompt = true, "epic/x", " " }, "prompt required"},
+		"against alone":     {func(r *smeltd.FactoryRequest) { r.Against = "main" }, "against needs integrate"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := base
+			tc.mod(&req)
+			_, err := d.startFactory(req)
+			var ae *apiError
+			assert.Assert(t, errors.As(err, &ae), "got %v", err)
+			assert.Equal(t, ae.status, http.StatusBadRequest)
+			assert.ErrorContains(t, ae, tc.msg)
+		})
+	}
+}
+
+// An integrate run's attempts are fixed whatever the request says, and its
+// status says which round was broad and which the re-check after the fix.
+func TestFactorySessionRecordsAnIntegrateRun(t *testing.T) {
+	var got factory.RunOptions
+	d, root := newFactoryDaemon(t, func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		wt := factory.Worktree{Path: "/data/factory/run-1", Branch: "smelt/run-1", Baseline: "base", Head: "tip", BaseBranch: "main", DefaultBranch: "main"}
+		opts.OnStart("run-1", wt)
+		bug := review.Finding{File: "a.go", Line: 3, Severity: "high", Body: "names differ"}
+		failed := []factory.Check{{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusFailed, Findings: []review.Finding{bug}}}
+		passed := []factory.Check{{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusPassed}}
+		opts.OnEvent(factory.Event{Kind: factory.EventCollected, Round: 1, Change: factory.Change{Stat: "3 files changed", Fingerprint: "f"}})
+		opts.OnEvent(factory.Event{Kind: factory.EventChecking, Round: 1})
+		opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: failed})
+		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 2, Prompt: "fix"})
+		opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 2, Turn: factory.Turn{Summary: "renamed"}})
+		opts.OnEvent(factory.Event{Kind: factory.EventCollected, Round: 2, Change: factory.Change{Stat: "4 files changed", Fingerprint: "g"}})
+		opts.OnEvent(factory.Event{Kind: factory.EventChecking, Round: 2})
+		opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 2, Checks: passed})
+		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: true,
+			Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 2, Checks: passed}}, nil
+	})
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{
+		Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "the spec",
+		From: "epic/memory", Integrate: true, Against: "main", Attempts: 7,
+	})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+
+	assert.Assert(t, got.Integrate != nil)
+	assert.Equal(t, got.Integrate.Against, "main")
+	assert.Equal(t, got.From, "epic/memory")
+	assert.Equal(t, got.Attempts, factory.IntegrateAttempts)
+	assert.Equal(t, detail.Factory.Mode, "integrate")
+	assert.Equal(t, detail.Factory.Against, "main")
+	assert.Equal(t, detail.Factory.Attempts, factory.IntegrateAttempts)
+	assert.Equal(t, len(detail.Rounds), 2)
+	assert.Equal(t, detail.Rounds[0].Kind, smeltd.RoundBroad)
+	assert.Assert(t, detail.Rounds[0].Implement == nil, "the broad round has no implementer turn")
+	assert.Equal(t, detail.Rounds[1].Kind, smeltd.RoundRecheck)
+	assert.Assert(t, detail.Rounds[1].Implement != nil && detail.Rounds[1].Implement.Fix, "the re-check follows the fix turn")
+
+	b, err := json.Marshal(detail.Factory)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"mode":"integrate"`) && strings.Contains(string(b), `"against":"main"`), string(b))
+}
+
+func TestFactorySessionThatIsNotIntegrateHasNoModeOrRoundKinds(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, detail.Factory.Mode, "")
+	assert.Equal(t, detail.Rounds[0].Kind, smeltd.RoundKind(""))
+	assert.Assert(t, !detail.Rounds[0].Implement.Fix)
+}
