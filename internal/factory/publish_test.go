@@ -79,6 +79,9 @@ func TestChooseBase(t *testing.T) {
 	assert.Equal(t, ChooseBase("", "", "main"), "main")
 	assert.Equal(t, ChooseBase("", "smelt/a/run-0", "main"), "main")
 	assert.Equal(t, ChooseBase("release", "feature", "main"), "release")
+	// A run started with --from records the branch it named.
+	assert.Equal(t, ChooseBase("", "epic/x", "main"), "epic/x")
+	assert.Equal(t, ChooseBase("", branchOf("origin/epic/x"), "main"), "epic/x")
 }
 
 type fakeHost struct {

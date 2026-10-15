@@ -217,10 +217,14 @@ type FactoryRun struct {
 	Branch   string `json:"branch,omitempty"`
 	Baseline string `json:"baseline,omitempty"`
 	Head     string `json:"head,omitempty"`
-	// BaseBranch is the branch the user was on when the run started, and
-	// DefaultBranch the repository's default; either may be "".
+	// BaseBranch is the branch the user was on when the run started, or the
+	// one --from named, and DefaultBranch the repository's default; either
+	// may be "".
 	BaseBranch    string `json:"base_branch,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// From is the ref the run was started from with --from, absent when it
+	// started from the user's files.
+	From *FromRef `json:"from,omitempty"`
 	// Result is why the loop stopped, one of the Result values, once it has,
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
@@ -473,6 +477,12 @@ const (
 	BackendDocker   = config.BackendDocker
 )
 
+// FromRef is the ref a run was started from and the commit it resolved to.
+type FromRef struct {
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+}
+
 // FactoryRequest starts a factory session.
 type FactoryRequest struct {
 	// ProjectRoot is a project the daemon tracks. Required.
@@ -483,6 +493,10 @@ type FactoryRequest struct {
 	// Continue is the ID of an earlier run to pick up the work of, or empty to
 	// start from the project's files.
 	Continue string `json:"continue,omitempty"`
+	// From is a branch or commit to start the run from instead of the
+	// project's files, whose uncommitted changes are then left out. It cannot
+	// be combined with Continue.
+	From string `json:"from,omitempty"`
 	// ReviewsDir is a directory of review prompts relative to the project
 	// root; empty means .smelt/reviews, which may be missing when validation
 	// commands are enough.

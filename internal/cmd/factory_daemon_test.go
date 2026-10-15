@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -494,4 +495,45 @@ func TestFactoryBuildTakesDefaultsFromTheProjectConfigAndPlan(t *testing.T) {
 			assert.Equal(t, got.Log != "", tc.wantLog)
 		})
 	}
+}
+
+func TestFactoryFromCannotBeCombinedWithContinue(t *testing.T) {
+	project := factoryProject(t)
+	writeFactoryRecord(t, project, "run-0")
+
+	_, _, err := runFactoryBuildCmd(t, "--from", "epic/x", "--continue", "run-0")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "--from cannot be combined with --continue.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+func TestFactoryFromRefusesAnUnknownRef(t *testing.T) {
+	factoryProject(t)
+
+	_, _, err := runFactoryBuildCmd(t, "--from", "nope/never", "add a flag")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "no branch or commit nope/never")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+func TestFactoryFromReachesTheRun(t *testing.T) {
+	project := factoryProject(t)
+	git := func(args ...string) {
+		assert.NilError(t, exec.Command("git", append([]string{"-C", project}, args...)...).Run())
+	}
+	git("branch", "epic/x")
+	cfg := fakeFactoryConfig(t, factory.ResultPassed)
+	got := make(chan factory.RunOptions, 1)
+	run := cfg.RunFactory
+	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got <- opts
+		return run(ctx, opts)
+	}
+	startSessionDaemon(t, cfg)
+
+	_, stderr, err := runFactoryBuildCmd(t, "--from", "epic/x", "--json", "add a flag")
+	assert.NilError(t, err, stderr)
+	assert.Equal(t, (<-got).From, "epic/x")
 }
