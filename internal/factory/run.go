@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
@@ -33,8 +35,13 @@ type RunOptions struct {
 	// own from Continue, and ignores this.
 	Prompt string
 	// Continue, when set, picks up the work of an earlier run instead of
-	// starting from the developer's files.
+	// starting from the developer's files. It keeps that run's base, so it
+	// cannot be combined with From.
 	Continue *Continuation
+	// From, when set, starts the run from this branch or commit instead of
+	// the developer's files; see ResolveFrom. Their uncommitted changes are
+	// not part of the run.
+	From string
 	// Attempts is the most rounds to check. A continued run that checks the
 	// work first counts that round as one of them.
 	Attempts int
@@ -203,6 +210,9 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	runStart := time.Now()
 	rep.RunID = runStart.UTC().Format("20060102-150405")
 	cont := opts.Continue
+	if cont != nil && opts.From != "" {
+		return rep, errors.New("a continued run keeps its base, so it cannot start from another ref")
+	}
 	request := opts.Prompt
 	if cont != nil {
 		opts.Prompt, request = cont.prompt(), cont.request()
@@ -229,21 +239,9 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		return rep, fmt.Errorf("find smelt's data directory for the project: %w", err)
 	}
 	author := ResolveAuthor(ctx, opts.Root, opts.Author).CommitAuthor
-	var wt Worktree
-	if cont == nil {
-		wt, err = CreateWorktree(ctx, WorktreeOptions{
-			Root: opts.Root, Path: filepath.Join(dataDir, "factory", rep.RunID),
-			RunID: rep.RunID, Prompt: opts.Prompt, Author: author,
-		})
-		if err != nil {
-			return rep, fmt.Errorf("create the run's worktree: %w", err)
-		}
-	} else {
-		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
-		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID, author)
-		if err != nil {
-			return rep, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
-		}
+	wt, err := startWorktree(ctx, opts, rep.RunID, dataDir, author)
+	if err != nil {
+		return rep, err
 	}
 	rep.Worktree = wt
 	if opts.OnStart != nil {
@@ -601,4 +599,45 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// announceFrom tells the developer what a run started with --from ignores: a
+// failed fetch, and uncommitted changes in their checkout. It says nothing for
+// a run that started from the checkout.
+func announceFrom(ctx context.Context, root string, wt Worktree, status iostream.StatusFunc) {
+	if wt.From == nil {
+		return
+	}
+	if wt.FromWarning != "" {
+		status(iostream.LevelWarn, wt.FromWarning)
+	}
+	// --no-optional-locks keeps the check from refreshing the index.
+	out, err := (gitexec.Runner{Dir: root}).Output(ctx, "--no-optional-locks", "status", "--porcelain")
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return
+	}
+	status(iostream.LevelInfo, fmt.Sprintf("Starting from %s (%s); your uncommitted changes are not part of this run.",
+		wt.From.Ref, wt.From.Commit[:min(len(wt.From.Commit), 7)]))
+}
+
+// startWorktree is the run's worktree: new, or the continued run's reopened.
+func startWorktree(ctx context.Context, opts RunOptions, runID, dataDir string, author config.CommitAuthor) (Worktree, error) {
+	cont := opts.Continue
+	if cont != nil {
+		opts.Status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
+		wt, err := openWorktree(ctx, opts.Root, cont.From, runID, author)
+		if err != nil {
+			return Worktree{}, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
+		}
+		return wt, nil
+	}
+	wt, err := CreateWorktree(ctx, WorktreeOptions{
+		Root: opts.Root, Path: filepath.Join(dataDir, "factory", runID),
+		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From,
+	})
+	if err != nil {
+		return Worktree{}, fmt.Errorf("create the run's worktree: %w", err)
+	}
+	announceFrom(ctx, opts.Root, wt, opts.Status)
+	return wt, nil
 }

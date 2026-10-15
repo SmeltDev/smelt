@@ -622,3 +622,15 @@ Optionally, if you generated review context
 ## Command reference
 
 See [docs/CLI.md](CLI.md) for the full command and flag reference.
+
+### Base a run on another branch
+
+To build on an epic branch while your checkout stays on whatever you are doing:
+
+```bash
+smelt factory build --from epic/memory --plan ticket.md --pr
+```
+
+The run starts from the tip of `epic/memory` (fetched from `origin` if needed), your
+uncommitted changes are left out, and the PR targets `epic/memory`. Your checkout is
+never switched or stashed.

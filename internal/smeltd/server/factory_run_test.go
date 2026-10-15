@@ -311,6 +311,10 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 		"escaping dir":    {smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest, "inside the project"},
 		"missing dir":     {smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "nope"}, http.StatusBadRequest, "nope"},
 		"relative log":    {smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest, "absolute path"},
+		"from with continue": {
+			smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", From: "epic/x", Continue: "run-0"},
+			http.StatusBadRequest, "from cannot be combined with continue",
+		},
 		"reviews alone": {
 			smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: ".smelt/reviews", NoValidate: true},
 			0, "",
@@ -583,4 +587,20 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 			assert.Equal(t, p.GoStack, tt.wantGoMod)
 		})
 	}
+}
+
+// A run started with --from reports the ref and commit in its status.
+func TestFactoryRecorderStartedRecordsFrom(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.Equal(t, busy, "")
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	rec.started("run-1", factory.Worktree{Branch: "smelt/x/run-1", BaseBranch: "epic/x", From: &factory.FromRef{Ref: "epic/x", Commit: "abc123"}})
+
+	f := entry.snapshot().Factory
+	assert.Equal(t, f.BaseBranch, "epic/x")
+	b, err := json.Marshal(f)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"from":{"ref":"epic/x","commit":"abc123"}`), string(b))
 }

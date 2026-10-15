@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ func newFactoryCmd() *cobra.Command {
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, noPlan, jsonOut, logOn, verbose, detach bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag string
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -78,6 +79,14 @@ that was detached), or, if the branch already has a PR, to push to update it.
 --pr-title, --pr-body and --draft shape the PR. A PR is opened with the GitHub
 CLI (gh); without it the branch is pushed and a compare URL is printed. Only
 smelt/* branches are ever pushed, and never forced.
+
+--from REF starts the run from a branch or commit (such as epic/x, origin/epic/x
+or a SHA) instead of your files, and your checkout is not touched. A branch
+that is only on origin is fetched first, and a fetch that fails uses what is
+local. Your uncommitted changes are not part of such a run, and it says so. The
+run's branch is still smelt/<description>/<run id>, and publishing opens its PR
+into the branch --from named. --from is per run (not a config key) and cannot be
+combined with --continue.
 
 --continue RUN picks up the work a finished run left on its branch, such as
 one whose checks still failed when its attempts ran out. RUN is the run's ID
@@ -143,7 +152,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 					return err
 				}
 			}
-			if err := checkBuildFlags(cmd, buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub}); err != nil {
+			if err := checkBuildFlags(cmd, buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub, from: from, continueRun: continueRun}); err != nil {
 				return err
 			}
 			if err := requireLocalDaemon(); err != nil {
@@ -171,7 +180,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
-			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
+			if err := preflightBuild(ctx, root, reviewsDir, from, cfg, noValidate); err != nil {
 				return err
 			}
 			agent, err := resolveHarness(ctx, streams, harnessChoice{
@@ -209,6 +218,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				ProjectRoot:             root,
 				Prompt:                  prompt,
 				Continue:                continueRun,
+				From:                    from,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
 				NoPlan:                  noPlan,
@@ -249,6 +259,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 
 	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation (default: factory.maxAttempts from config, else 3)")
 	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
+	cmd.Flags().StringVar(&from, "from", "", "start from this branch or commit (e.g. epic/x, origin/epic/x, a SHA) instead of your files; your uncommitted changes are left out and your checkout is not touched")
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
@@ -286,6 +297,9 @@ type buildChecks struct {
 	attempts int
 	detach   bool
 	pub      publishFlags
+	from     string
+	// continueRun is --continue, which keeps its run's base.
+	continueRun string
 }
 
 // checkBuildFlags refuses flag values that cannot work, before anything starts.
@@ -294,6 +308,13 @@ func checkBuildFlags(cmd *cobra.Command, c buildChecks) error {
 		return newUserError("--log-file needs a file.").
 			withCode("command.invalid_flags").
 			withSuggestion("Write --log-file FILE, or --log to log to ~/.smelt/factory.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	if c.from != "" && c.continueRun != "" {
+		return newUserError("--from cannot be combined with --continue.").
+			withCode("command.invalid_flags").
+			withSuggestion("A continued run keeps the base of the run it continues. Drop --from, or start a new run with it.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
@@ -772,4 +793,33 @@ func oneLineSummary(s string) string {
 		return s[:157] + "..."
 	}
 	return s
+}
+
+// checkFromRef explains a --from that names no branch or commit before the
+// daemon starts, and does nothing without --from. A fetch that fails is not an
+// error here: the run reports it.
+func checkFromRef(ctx context.Context, root, from string) error {
+	if from == "" {
+		return nil
+	}
+	if _, err := factory.ResolveFrom(ctx, root, from); err != nil {
+		if errors.Is(err, factory.ErrUnknownRef) {
+			return newUserError(fmt.Sprintf("no branch or commit %s", from)).
+				withCode("command.invalid_args").
+				withSuggestion("Pass a branch, origin/<branch> or a commit, as --from epic/x.").
+				withExitCode(ExitBadArgs).
+				withoutDetail()
+		}
+		return err
+	}
+	return nil
+}
+
+// preflightBuild loads the checks and resolves --from, as the daemon will, so a
+// mistake in either is explained before anything starts.
+func preflightBuild(ctx context.Context, root, reviewsDir, from string, cfg *config.ProjectConfig, noValidate bool) error {
+	if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
+		return err
+	}
+	return checkFromRef(ctx, root, from)
 }

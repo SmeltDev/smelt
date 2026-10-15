@@ -173,6 +173,7 @@ smelt
 │       --plan <file>               # Read the prompt from a file (usually a markdown spec)
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
+│       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │       --reviews <dir>             # Directory of review prompts (default: .smelt/reviews)
@@ -605,6 +606,20 @@ smelt
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
+- **`factory build --from <ref>` bases a run on a branch or commit, not on the checkout.**
+  The ref (`epic/x`, `origin/epic/x`, a SHA) is resolved with
+  `git rev-parse --verify <ref>^{commit}`. A branch is first fetched from `origin`
+  (`git fetch origin <branch>`; a failed fetch is a warning and uses what is local),
+  and `origin`'s copy is used when the local branch is behind it; a diverged local
+  branch wins. A ref that is neither a branch nor a commit fails with
+  `no branch or commit <ref>`. No working-tree snapshot is taken: the baseline is the
+  resolved commit, uncommitted changes in the checkout are left out (the run says so
+  once when there are any), and the checkout is never touched. The run branch is still
+  `smelt/<description>/<run id>`. `Worktree.BaseBranch` becomes the branch `--from`
+  named (without `origin/`; empty for a commit), so `factory publish --pr` targets it
+  by default, and the status JSON gains `from: {ref, commit}`. It is per run, not a
+  config key, and `--from` with `--continue` is a user error (a continued run keeps its
+  base). It works with both backends.
 - **`factory build --continue` picks up a finished run's work.** A run whose checks
   still fail when it ends (exhausted or stuck) prints
   `smelt factory build --continue <run id>`. The continued run reopens the earlier

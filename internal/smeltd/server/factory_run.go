@@ -136,6 +136,9 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if prompt == "" && req.Continue == "" {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "prompt required")
 	}
+	if req.From != "" && req.Continue != "" {
+		return smeltd.Session{}, apiErr(http.StatusBadRequest, "from cannot be combined with continue: a continued run keeps its base")
+	}
 	ps := d.lookupProject(req.ProjectRoot)
 	if ps == nil {
 		ps = d.adoptProject(req.ProjectRoot)
@@ -210,6 +213,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Root:                    ps.root,
 		Prompt:                  prompt,
 		Continue:                cont,
+		From:                    req.From,
 		Attempts:                attempts,
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
@@ -314,6 +318,9 @@ func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
 	f := e.s.Factory
 	f.RunID, f.Worktree, f.Branch, f.Baseline, f.Head = runID, wt.Path, wt.Branch, wt.Baseline, wt.Head
 	f.BaseBranch, f.DefaultBranch = wt.BaseBranch, wt.DefaultBranch
+	if wt.From != nil {
+		f.From = &smeltd.FromRef{Ref: wt.From.Ref, Commit: wt.From.Commit}
+	}
 	// The work is on the run's branch, not the one checked out.
 	e.s.Branch = wt.Branch
 }

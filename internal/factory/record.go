@@ -32,6 +32,8 @@ type Record struct {
 	// later; see Worktree. Records from before they were kept lack them.
 	BaseBranch    string `json:"base_branch,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// From is the ref the run was started from with --from, nil otherwise.
+	From *FromRef `json:"from,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// ContinuedFromEmpty is set when the run continued a branch with no work
@@ -60,7 +62,7 @@ func newRecord(runID, prompt string, wt Worktree) Record {
 	return Record{
 		RunID: runID, Prompt: prompt,
 		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch,
+		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, From: wt.From,
 	}
 }
 

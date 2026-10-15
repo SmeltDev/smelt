@@ -321,6 +321,10 @@ func publishableRun(rec factory.Record) (*smeltd.FactoryRun, error) {
 		Baseline: rec.Baseline, Head: rec.Head, BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch,
 		Result: string(rec.Result), Rounds: rec.Rounds, Committed: true,
 	}
+	if rec.From != nil {
+		from := smeltd.FromRef(*rec.From)
+		f.From = &from
+	}
 	if rec.Notes != nil {
 		n := smeltd.Notes(*rec.Notes)
 		f.Notes = &n

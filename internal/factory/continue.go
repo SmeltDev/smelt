@@ -88,7 +88,7 @@ func openWorktree(ctx context.Context, root string, rec Record, runID string, au
 		return Worktree{}, fmt.Errorf("the branch %s no longer starts from the run's baseline %s", rec.Branch, shortSHA(rec.Baseline))
 	}
 	wt := Worktree{Path: rec.Worktree, Branch: rec.Branch, Baseline: rec.Baseline, Head: rec.Head,
-		BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch, Author: author}
+		BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch, From: rec.From, Author: author}
 	if _, err := os.Stat(wt.Path); errors.Is(err, os.ErrNotExist) {
 		// git still lists a worktree whose directory was deleted, and refuses
 		// to check its branch out again until it forgets it.

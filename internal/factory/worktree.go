@@ -30,11 +30,16 @@ type Worktree struct {
 	// Head is the developer's HEAD when the run started. It differs from
 	// Baseline when their uncommitted work was committed as the baseline.
 	Head string
-	// BaseBranch is the branch the developer was on when the run started, ""
-	// for a detached HEAD. DefaultBranch is the repository's default branch,
+	// BaseBranch is the branch the developer was on when the run started, or
+	// the one --from named; "" for a detached HEAD or a commit. DefaultBranch is the repository's default branch,
 	// "" when none is recorded. Publishing reads both to pick the PR's base.
 	BaseBranch    string
 	DefaultBranch string
+	// From is the ref the run was started from with --from, nil when it started
+	// from the developer's files. FromWarning is a problem resolving it that
+	// did not stop the run, such as a failed fetch.
+	From        *FromRef
+	FromWarning string
 	// Author is who the branch's commits are attributed to; an incomplete one
 	// means smelt.
 	Author config.CommitAuthor
@@ -50,15 +55,60 @@ type WorktreeOptions struct {
 	Prompt string
 	// Author is who the branch's commits are attributed to; see ResolveAuthor.
 	Author config.CommitAuthor
+	// From, when set, is a branch or commit to start from instead of the
+	// developer's files; see ResolveFrom.
+	From string
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
-// on a branch named smelt/<prompt slug>/<runID>. It starts from the
-// developer's files as they are now: uncommitted work, untracked files included,
-// is committed on the branch first, so it is the baseline and not part of the
-// change under review.
+// on a branch named smelt/<prompt slug>/<runID>. By default it starts from the
+// developer's files as they are now: uncommitted work, untracked files
+// included, is committed on the branch first, so it is the baseline and not
+// part of the change under review. With From set it starts from that commit
+// and takes no snapshot.
 func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
-	root, runID := o.Root, o.RunID
+	var w Worktree
+	var err error
+	if o.From != "" {
+		w, err = o.startFromRef(ctx)
+	} else {
+		w, err = o.startFromCheckout(ctx)
+	}
+	if err != nil {
+		return Worktree{}, err
+	}
+	// A repository may record no default branch.
+	w.DefaultBranch, _ = gitutil.DefaultBranchIn(o.Root)
+	// The guard runs before the worktree exists, so no implementer turn can
+	// ever happen on a branch that must not be published.
+	if err := CheckHeadBranch(w.Branch, w.DefaultBranch); err != nil {
+		return Worktree{}, err
+	}
+	git := gitexec.Runner{Dir: o.Root}
+	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, o.Path, w.Baseline); err != nil {
+		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return w, nil
+}
+
+// startFromRef is the worktree that starts at the commit From names, with no
+// snapshot of the checkout.
+func (o WorktreeOptions) startFromRef(ctx context.Context) (Worktree, error) {
+	res, err := ResolveFrom(ctx, o.Root, o.From)
+	if err != nil {
+		return Worktree{}, err
+	}
+	return Worktree{
+		Path: o.Path, Branch: branchName(o.Prompt, o.RunID), Baseline: res.Commit, Head: res.Commit,
+		BaseBranch: res.Branch, From: &FromRef{Ref: o.From, Commit: res.Commit}, FromWarning: res.Warning,
+		Author: o.Author,
+	}, nil
+}
+
+// startFromCheckout is the worktree that starts at the developer's HEAD, with
+// their uncommitted work committed on top of it.
+func (o WorktreeOptions) startFromCheckout(ctx context.Context) (Worktree, error) {
+	root := o.Root
 	git := gitexec.Runner{Dir: root}
 	headOut, err := git.Output(ctx, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
@@ -77,26 +127,16 @@ func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
 	start := head
 	if tree != strings.TrimSpace(string(headTree)) {
 		out, err := (gitexec.Runner{Dir: root, Env: commitEnv(o.Author)}).Output(ctx, "commit-tree", tree, "-p", head,
-			"-m", "smelt factory baseline: uncommitted changes when run "+runID+" started")
+			"-m", "smelt factory baseline: uncommitted changes when run "+o.RunID+" started")
 		if err != nil {
 			return Worktree{}, fmt.Errorf("commit your uncommitted changes as the baseline: %w", err)
 		}
 		start = strings.TrimSpace(string(out))
 	}
 
-	w := Worktree{Path: o.Path, Branch: branchName(o.Prompt, runID), Baseline: start, Head: head, Author: o.Author}
-	// Both are routine to be missing: a detached HEAD has no branch, and a
-	// repository may record no default.
+	w := Worktree{Path: o.Path, Branch: branchName(o.Prompt, o.RunID), Baseline: start, Head: head, Author: o.Author}
+	// A detached HEAD has no branch, which is routine.
 	w.BaseBranch, _ = gitutil.CurrentBranchInCtx(ctx, root)
-	w.DefaultBranch, _ = gitutil.DefaultBranchIn(root)
-	// The guard runs before the worktree exists, so no implementer turn can
-	// ever happen on a branch that must not be published.
-	if err := CheckHeadBranch(w.Branch, w.DefaultBranch); err != nil {
-		return Worktree{}, err
-	}
-	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, o.Path, start); err != nil {
-		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
-	}
 	return w, nil
 }
 
@@ -129,7 +169,7 @@ func branchSlug(prompt string) string {
 
 // Remove deletes the worktree and its branch, for a run that ended before the
 // implementer did anything. Nothing is lost: the baseline is the developer's
-// own files, still in their checkout.
+// own files, still in their checkout, or the commit --from named.
 func (w Worktree) Remove(ctx context.Context, root string) error {
 	git := gitexec.Runner{Dir: root}
 	if out, err := git.CombinedOutput(ctx, "worktree", "remove", "--force", w.Path); err != nil {
