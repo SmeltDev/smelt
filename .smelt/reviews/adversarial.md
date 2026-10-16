@@ -67,6 +67,30 @@ Report only the confirmed problems.
 High and medium findings are sent back to be fixed, so reserve them for
 problems that are worth another round of work.
 
+## Patterns
+
+Patterns do not lower the bar: a finding still needs a concrete failure scenario to survive Pass 3.
+
+### `excluded-case-handling`
+Code that handles inputs the request rules out, adding branches and tests nobody asked for.
+- Is: the request says "the repository always has an `origin` remote", and the change adds a fallback that searches for other remotes.
+- Isn't: validating an input at a trust boundary, such as flags or files the user supplies, even if the request does not mention it.
+- Usual severity: medium when the extra path changes behaviour; otherwise low.
+
+### `unrequested-feature`
+A flag, config key, command or behaviour the request did not ask for.
+- Is: a request to retry a failed upload, and the change also adds a `--retry-delay` flag and a `retryDelay` config key.
+- Isn't: a small internal helper or constant the requested behaviour needs.
+- Usual severity: medium when it adds user-visible surface; otherwise low.
+
+### `stub-remnant`
+A placeholder standing in for behaviour the request asks for.
+- Is: `func (r *Relay) Push(ctx context.Context) error { return nil } // TODO` where the request needs a push, or a function that returns a canned value.
+- Isn't: a `// TODO(#123)` pointing at a linked issue for work the request explicitly defers.
+- Usual severity: high when the stub is on a path the request needs.
+
+Name the pattern in brackets at the start of the finding when one applies.
+
 ## Rules
 
 - Review only the change. Do not report problems in code it did not touch,

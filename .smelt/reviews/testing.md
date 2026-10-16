@@ -33,6 +33,36 @@ exercising the code); otherwise it is low.
 - Tests must run cleanly with `-race`
 - Acceptance tests run the compiled binary, not internal functions
 
+## Patterns
+
+Patterns do not lower the bar: the severity rules above still apply. A pattern is medium only when you can name the mutation that every test would still pass.
+
+### `fake-only-test`
+A test that checks a fake it built itself, so it passes whatever the production code does.
+- Is: a test that stubs the runner to return "ok" and asserts the result is "ok".
+- Isn't: a fake HTTP server or real `git init` in `t.TempDir()` driving the real code, with assertions on its behaviour.
+- Usual severity: medium if it is the only test of requested behaviour and a named mutation survives; otherwise low.
+
+### `silent-skip`
+A test that can skip without CI showing why, so a missing prerequisite looks like a pass.
+- Is: `if _, err := exec.LookPath("docker"); err != nil { t.Skip() }` with no reason, on the only test of the requested behaviour.
+- Isn't: `t.Skip("ANTHROPIC_API_KEY not set")`, where the reason is stated and the factory's skipped-test report (`internal/factory/skips.go`) surfaces it.
+- Usual severity: medium when the skipped test is the only cover for requested behaviour; otherwise low.
+
+### `assertion-free-test`
+A test that runs the code but never checks a result.
+- Is: `func TestRun(t *testing.T) { _, _ = Run(ctx, opts) }`.
+- Isn't: a test that relies on `t.Fatal` inside a helper, or on a race detector run, for something that is its stated purpose.
+- Usual severity: high if it is the only test of requested behaviour; otherwise medium (it passes without exercising the code).
+
+### `real-timeout-in-test`
+A test that waits on a production timeout instead of injecting a short one.
+- Is: a test of the failure path of the Docker readiness wait that sits through its three-minute deadline.
+- Isn't: a short `context.WithTimeout` used as a safety net around a test that normally finishes at once.
+- Usual severity: medium (slow and flaky tests make the suite unreliable); low if the wait is under a second.
+
+Name the pattern in brackets at the start of the finding when one applies.
+
 ## Important
 
 - Report all the medium and high gaps you find in one pass; do not hold related gaps back for a later round.
