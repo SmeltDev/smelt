@@ -40,6 +40,7 @@ smelt/
     │   ├── codex/             # Codex harness: exec scripts, git guard and review read-only check, JSONL parser (`ErrHostMissing` when the command host is missing)
     │   └── status/            # `harness status`: installed, login, usage windows, last rate-limit signal
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
+    ├── quality/               # Code quality metrics over Go source: complexity, erosion, clones; Compare; readers for a tree or a revision
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -640,6 +641,32 @@ GET  /validate/collect?root=<path>                 → {tasks}
   objects it writes are unreferenced, so git's `gc` may collect a baseline;
   `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
   reads larger and so errs towards blocking.
+
+## Quality Check (`internal/quality/`, `internal/factory/quality.go`)
+
+`internal/quality` is pure over parsed files: `Measure(files, cfg)` gives a `Report` (per-function
+complexity and body lines, erosion, over-threshold count, clone blocks), `ChangedFunctions` is the one
+definition of "changed" (new, or a different normalized body, keyed by file, receiver and name), and
+`Compare(before, after, changed, cfg)` turns two reports into findings. `source.go` is the only I/O: it
+reads the working tree (`git ls-files -co --exclude-standard`) or a revision (`git archive`).
+
+Factory runs add a built-in `quality` check (`KindQuality`) after the gates of every round, in
+`Sidecars.checkGatesFirst` and `checkTogether`. It runs on the host against the run's worktree, so it
+works on every backend. The baseline (`Worktree.Baseline`) is measured once per run and cached; the
+worktree is measured each round. Medium findings fail the check and flow through `Feedback` to the
+implementer; a measurement failure is `StatusErrored`, which is not fed back. The summary rides on the
+`Check`, and reaches the run log, `Notes.Quality` (PR body and commit message), the round's checks and
+the status JSON:
+
+```json
+"quality": {"line": "erosion 27.3% → 27.1% · …", "erosion_before": 27.3, "erosion_after": 27.1,
+            "over_threshold_before": 14, "over_threshold_after": 14,
+            "clone_lines_before": 120, "clone_lines_after": 120,
+            "worst": [{"func": "T.run", "file": "a.go", "cc": 22, "lines": 80}]}
+```
+
+`factory.quality.enabled: false` omits the check and the `quality` object. `smelt quality` is a thin
+wrapper over `quality.Assess`.
 
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 

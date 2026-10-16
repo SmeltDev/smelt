@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -65,6 +66,17 @@ type Outcome struct {
 // work is missing.
 func (o Outcome) Incomplete() []review.Finding {
 	return MissingWork(o.Checks)
+}
+
+// Quality is the last round's quality measurement, nil when the run did not
+// measure quality or the measurement failed.
+func (o Outcome) Quality() *quality.Summary {
+	for _, c := range o.Checks {
+		if c.Kind == KindQuality && c.Quality != nil {
+			return c.Quality
+		}
+	}
+	return nil
 }
 
 // EventKind identifies a step of the loop for display.

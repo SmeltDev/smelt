@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/smeltdev/smelt/internal/quality"
 )
 
 // fakeSteps scripts a loop: each Implement call takes the next change, each
@@ -236,4 +238,21 @@ func TestLoopCheckFirstThenNoChangeIsStuck(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, out.Result, ResultStuck)
 	assert.Equal(t, out.Rounds, 1)
+}
+
+func TestLoopSendsAQualityFindingBackAndPassesTheNextRound(t *testing.T) {
+	busy := FromQuality(quality.Summary{Measured: true, Findings: []quality.Finding{{
+		Severity: quality.SeverityMedium, File: "a.go", Line: 12, Func: "busy",
+		Message: "busy has cyclomatic complexity 16 (is new; limit 15): split it: a handler per case, or extract the decision into a pure function",
+	}}}, 0, nil)
+	clean := FromQuality(quality.Summary{Measured: true, ErosionBefore: 10, ErosionAfter: 10}, 0, nil)
+	steps := &fakeSteps{changes: []Change{change(1), change(2)}, checks: [][]Check{{pass, busy}, {pass, clean}}}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "add a function")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, out.Rounds, 2)
+	assert.Assert(t, strings.Contains(steps.prompts[1], "a.go:12"), steps.prompts[1])
+	assert.Assert(t, strings.Contains(steps.prompts[1], "complexity 16"), steps.prompts[1])
+	assert.Assert(t, strings.Contains(steps.prompts[1], "split it"), steps.prompts[1])
+	assert.Assert(t, out.Quality() != nil && out.Quality().ErosionAfter == 10, "the outcome carries the passing round's summary")
 }

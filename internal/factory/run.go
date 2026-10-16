@@ -13,6 +13,7 @@ import (
 	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -60,6 +61,10 @@ type RunOptions struct {
 	// wrong, then one fix turn and a focused re-check. It needs From, and
 	// cannot be combined with Continue.
 	Integrate *IntegrateOptions
+
+	// Quality, when set, adds the built-in quality check to every round, with
+	// these limits. Nil turns it off.
+	Quality *quality.Config
 
 	// Author is the configured author of the branch's commits (factory.author);
 	// when it is empty, ResolveAuthor falls back to the developer's identity.
@@ -343,6 +348,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Commands:   opts.Commands,
 		GatesFirst: opts.GatesFirst,
 		Integrate:  integ != nil,
+		Quality:    opts.qualityCheck(wt, status),
 		Status:     status,
 		OnCheck:    opts.OnCheck,
 		Install:    opts.Install,
@@ -443,6 +449,9 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	status(iostream.LevelStep, "writing PR notes…")
 	notes, err := steps.WriteNotes(ctx, in)
 	notes.Skipped = rep.Outcome.Skipped()
+	if q := rep.Outcome.Quality(); q != nil {
+		notes.Quality = q.Line()
+	}
 	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("PR notes were not generated: %v", err))
 	} else {
@@ -562,6 +571,16 @@ func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostre
 	ids := pool.IDs()
 	status(iostream.LevelInfo, "kept sidecars: "+strings.Join(ids, " "))
 	return ids
+}
+
+// qualityCheck is the run's quality check on the worktree, nil when the run
+// does not measure quality.
+func (o *RunOptions) qualityCheck(wt Worktree, status iostream.StatusFunc) *Quality {
+	if o.Quality == nil {
+		return nil
+	}
+	return &Quality{Config: *o.Quality, Dir: wt.Path, Baseline: wt.Baseline,
+		Warn: func(msg string) { status(iostream.LevelWarn, msg) }}
 }
 
 // harnessName is the agent the run uses, Claude Code when none is set.

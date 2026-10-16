@@ -56,6 +56,9 @@ type Notes struct {
 	// are set from the checks, not written by the model, so a green test gate
 	// cannot hide them.
 	Skipped []string `json:"skipped,omitempty"`
+	// Quality is the run's quality line, before → after. Like Skipped it is set
+	// from the checks, not written by the model.
+	Quality string `json:"quality,omitempty"`
 }
 
 // NotesInput is what the notes writer is told about a run.
@@ -244,6 +247,9 @@ func (n Notes) sections(label func(string) string) string {
 	}
 	if len(n.Skipped) > 0 {
 		parts = append(parts, "Skipped in the sandbox: "+strings.Join(n.Skipped, ", "))
+	}
+	if n.Quality != "" {
+		parts = append(parts, "Quality: "+n.Quality)
 	}
 	return strings.Join(parts, "\n\n")
 }

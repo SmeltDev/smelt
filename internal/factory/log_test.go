@@ -12,6 +12,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -234,4 +235,20 @@ func TestLogStartRecordsSetupWarnings(t *testing.T) {
 	lg, path = newTestLog(t, false)
 	lg.start("run-1", RunOptions{Attempts: 1}, "request")
 	assert.Assert(t, !strings.Contains(readLog(t, path), "warn"))
+}
+
+func TestLogRecordsTheQualityLineAndFindings(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	sum := quality.Summary{Measured: true, Limit: 15, ErosionBefore: 27.3, ErosionAfter: 27.1, OverThresholdBefore: 14, OverThresholdAfter: 14,
+		CloneLinesBefore: 120, CloneLinesAfter: 120,
+		Findings: []quality.Finding{{Severity: quality.SeverityMedium, File: "a.go", Line: 3, Message: "f has complexity 16"}}}
+	lg.check(FromQuality(sum, 0, nil))
+	lg.check(FromQuality(quality.Summary{}, 0, errors.New("git failed")))
+	lg.close(Report{}, nil)
+
+	got := readLog(t, path)
+	assert.Assert(t, strings.Contains(got, "quality: erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 120"), got)
+	assert.Assert(t, strings.Contains(got, "quality [medium] a.go:3 f has complexity 16 (fails the check)"), got)
+	assert.Assert(t, strings.Contains(got, "quality could not be measured: git failed"), got)
+	assert.Assert(t, !strings.Contains(got, "validate quality"), got)
 }

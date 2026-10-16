@@ -359,3 +359,32 @@ func TestInstallCommand(t *testing.T) {
 
 	assert.Equal(t, (&ProjectConfig{}).InstallCommand(), "")
 }
+
+func TestFactoryQualityConfig(t *testing.T) {
+	off := false
+	var unset *FactoryConfig
+	assert.Assert(t, unset.QualityEnabled())
+	assert.Assert(t, (&FactoryConfig{}).QualityEnabled())
+	assert.Assert(t, (&FactoryConfig{Quality: &QualityConfig{MaxFunctionComplexity: 9}}).QualityEnabled())
+	assert.Assert(t, !(&FactoryConfig{Quality: &QualityConfig{Enabled: &off}}).QualityEnabled())
+
+	dir := t.TempDir()
+	raw := `{"factory":{"quality":{"enabled":true,"maxFunctionComplexity":12,"maxErosionRise":0.5,"minCloneLines":20}}}`
+	writeProjectConfig(t, dir, raw)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	on := true
+	assert.DeepEqual(t, *cfg.Factory.Quality, QualityConfig{Enabled: &on, MaxFunctionComplexity: 12, MaxErosionRise: 0.5, MinCloneLines: 20})
+}
+
+func TestFactoryQualityConfigRejectsNegativeLimits(t *testing.T) {
+	for name, q := range map[string]QualityConfig{
+		"maxFunctionComplexity": {MaxFunctionComplexity: -1},
+		"maxErosionRise":        {MaxErosionRise: -0.5},
+		"minCloneLines":         {MinCloneLines: -3},
+	} {
+		err := (&ProjectConfig{Factory: &FactoryConfig{Quality: &q}}).Validate()
+		assert.ErrorContains(t, err, "factory.quality."+name)
+	}
+	assert.NilError(t, (&ProjectConfig{Factory: &FactoryConfig{Quality: &QualityConfig{}}}).Validate())
+}

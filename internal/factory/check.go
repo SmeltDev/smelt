@@ -6,16 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
-// Kind is what produced a check: a review prompt or a validation command.
+// Kind is what produced a check: a review prompt, a validation command or the
+// quality measurement.
 type Kind string
 
 // Check kinds.
 const (
 	KindReview   Kind = "review"
 	KindValidate Kind = "validate"
+	KindQuality  Kind = "quality"
 )
 
 // Status is how a check came out.
@@ -66,6 +69,9 @@ type Check struct {
 	// its output, kept for display and the run's log.
 	ExitCode int
 	Output   string
+	// Quality is the measurement of a quality check that ran, whether or not
+	// it found anything to fix.
+	Quality *quality.Summary
 }
 
 // outputTail bounds how much of a failed command's output is fed back. The end
@@ -93,6 +99,36 @@ func FromReview(r review.Result) Check {
 	if b.Len() == 0 {
 		c.Status = StatusPassed
 		return c
+	}
+	c.Status, c.Feedback = StatusFailed, strings.TrimRight(b.String(), "\n")
+	return c
+}
+
+// QualityCheckName is the name of the built-in quality check.
+const QualityCheckName = "quality"
+
+// FromQuality converts a quality measurement into a check. It fails only on
+// medium findings, the ones worth sending back; lower ones stay in the
+// summary for display. A measurement that could not be made (err) errored.
+func FromQuality(sum quality.Summary, d time.Duration, err error) Check {
+	c := Check{Name: QualityCheckName, Kind: KindQuality, Duration: d}
+	if err != nil {
+		c.Status, c.Error = StatusErrored, err.Error()
+		return c
+	}
+	c.Quality = &sum
+	failing := sum.Failing()
+	if len(failing) == 0 {
+		c.Status = StatusPassed
+		return c
+	}
+	var b strings.Builder
+	for _, f := range failing {
+		if loc := f.Location(); loc != "" {
+			fmt.Fprintf(&b, "- %s: %s\n", loc, f.Message)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", f.Message)
+		}
 	}
 	c.Status, c.Feedback = StatusFailed, strings.TrimRight(b.String(), "\n")
 	return c

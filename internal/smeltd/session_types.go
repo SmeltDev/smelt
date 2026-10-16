@@ -188,6 +188,32 @@ type RoundCheck struct {
 	Output string `json:"output,omitempty"`
 	// Skipped are the tests the command's output reports as skipped.
 	Skipped []string `json:"skipped,omitempty"`
+	// Summary is the quality check's before → after line.
+	Summary string `json:"summary,omitempty"`
+}
+
+// FactoryQuality is a factory run's quality measurement, before and after its
+// change. Erosion is a percentage; the over-threshold counts are of functions
+// above the configured complexity limit.
+type FactoryQuality struct {
+	// Line is the same account as one line of text.
+	Line                string  `json:"line,omitempty"`
+	ErosionBefore       float64 `json:"erosion_before"`
+	ErosionAfter        float64 `json:"erosion_after"`
+	OverThresholdBefore int     `json:"over_threshold_before"`
+	OverThresholdAfter  int     `json:"over_threshold_after"`
+	CloneLinesBefore    int     `json:"clone_lines_before"`
+	CloneLinesAfter     int     `json:"clone_lines_after"`
+	// Worst are the most complex functions after the change.
+	Worst []QualityFunction `json:"worst,omitempty"`
+}
+
+// QualityFunction is one function of a FactoryQuality.
+type QualityFunction struct {
+	Func  string `json:"func"`
+	File  string `json:"file"`
+	CC    int    `json:"cc"`
+	Lines int    `json:"lines"`
 }
 
 // FactoryRun is what a factory session works on and where its work is.
@@ -241,6 +267,9 @@ type FactoryRun struct {
 	Plan *Plan `json:"plan,omitempty"`
 	// Timing is where the run's time went, once the implementer has started.
 	Timing *FactoryTiming `json:"timing,omitempty"`
+	// Quality is the last round's quality measurement; absent when the run does
+	// not measure quality.
+	Quality *FactoryQuality `json:"quality,omitempty"`
 	// SkippedTests are the tests the last round's validation skipped.
 	SkippedTests []string `json:"skipped_tests,omitempty"`
 	// Blocked is what the implementer said it could not do, for ResultBlocked.
@@ -285,6 +314,8 @@ type Notes struct {
 	Fallback string `json:"fallback,omitempty"`
 	// Skipped are the tests the sandbox skipped in the run's last round.
 	Skipped []string `json:"skipped,omitempty"`
+	// Quality is the run's quality line, before → after.
+	Quality string `json:"quality,omitempty"`
 }
 
 // Plan mirrors factory.Plan: what the implementer said it would do before it

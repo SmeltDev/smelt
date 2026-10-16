@@ -587,6 +587,21 @@ docs, configuration and history. `smelt factory bootstrap` refuses when `.smelt/
 prompts; `--output /tmp/compare` writes elsewhere so you can compare. If you ran `smelt build-prompt`,
 its team standards are taken into account. `--harness claude|codex` picks the agent.
 
+### Quality of every run
+
+Next to the validation commands, each round runs a built-in `quality` check on your machine (no
+sandbox needed): erosion, the functions over the complexity limit and duplicated code, before and
+after the run's change (Go only; other projects show `not measured`). It is reported with the
+checks, in the run log, in the status JSON and in the PR notes. A new or changed function above the
+limit, or erosion up by more than the allowed rise, is sent back to the implementer; duplicates are
+reported but never fail the check. Tune or disable it in `.smelt/config.json`:
+
+```json
+{ "factory": { "quality": { "enabled": true, "maxFunctionComplexity": 15, "maxErosionRise": 1.0, "minCloneLines": 15 } } }
+```
+
+`smelt quality [--json] [--base <rev>]` runs the same measurement on the working tree.
+
 ### Choose the coding agent
 
 Factory runs can use Claude Code or OpenAI Codex. `smelt init` asks which and saves it as

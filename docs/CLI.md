@@ -74,6 +74,11 @@ smelt
 │   ├── install                     # Install all skills
 │   └── list                        # List skills and install status
 │
+├── quality                         # Measure erosion, complex functions and duplicated code (Go)
+│   --base <rev>                    # Also compare with this revision; exit non-zero on medium findings
+│   --json                          # Print the measurement as JSON
+│   --project <dir>                 # Override project directory
+│
 ├── mutate [path]                   # Find test coverage gaps via mutation testing
 │   --parallel <n>                  # Sidecar pool capacity (0: enumerate only)
 │   --max <n>                       # Limit the number of mutations (0: no limit)
@@ -883,6 +888,31 @@ smelt
   release's GitHub page, so the reason to upgrade is one click away. The `watch`
   footer keeps its one-line form: it has no room for a URL.
 
+## Quality (`smelt quality`)
+
+`smelt quality` runs the measurement every factory run makes, on the working
+tree, with the limits from `factory.quality` (see below). It needs no daemon,
+sandbox or credentials.
+
+- Go only. Tests (`_test.go`), `testdata/`, `vendor/` and generated files are
+  left out. A project without Go prints `not measured`.
+- Per function: cyclomatic complexity as `gocyclo` counts it (function literals
+  count toward the function that holds them) and body lines (the line of the
+  body's `{` to the line of its `}`).
+- **Erosion** is the share, in percent, of Σ(complexity × √body lines) held by
+  functions with complexity above 10.
+- **Functions over N** counts functions above `maxFunctionComplexity`.
+- **Clone lines** are the lines of copies of blocks of at least `minCloneLines`
+  statements, with identifiers and literals ignored, counted once per extra copy.
+- `--base <rev>` also measures that revision and lists what a run would send
+  back: a new or changed function over the complexity limit that is new or grew
+  (medium), erosion up by more than `maxErosionRise` points (medium), and
+  copied blocks the change adds (low). With `--base`, any medium finding makes
+  the command exit non-zero, for CI. Without it the exit code is 0.
+- `--json` prints `measured`, `erosion`, `limit`, `over_threshold`,
+  `clone_lines`, `worst` (`func`, `file`, `cc`, `lines`) and, with `--base`,
+  `base` and `findings`.
+
 ## Config keys
 
 | Key | Scope | Description |
@@ -890,6 +920,7 @@ smelt
 | `harness.claude.usage_probe` | user config (`~/.config/smelt/config.json`) | Whether `harness status` may call Claude's usage endpoint (`true`/`false`, default: `true`) |
 | `factory.harness` | `.smelt/config.json` | The coding agent runs use: `claude` or `codex` |
 | `factory.models.<harness>` | `.smelt/config.json` | The model that agent uses when `--model` is not given |
+| `factory.quality` | `.smelt/config.json` | The quality check of factory runs and `smelt quality`: `{"enabled": true, "maxFunctionComplexity": 15, "maxErosionRise": 1.0, "minCloneLines": 15}`; `enabled: false` turns the check off |
 | `model` | user config (`~/.config/smelt/config.json`) | Claude model override |
 | `telemetry` | user config (`~/.config/smelt/config.json`) | Usage telemetry preference (`true`/`false`, default: `true`); only matters to a build that has a telemetry write key, which default builds do not |
 | `notifications` | user config (`~/.config/smelt/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
