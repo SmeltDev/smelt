@@ -10,8 +10,8 @@
 #
 # For each fixture project it writes <name>.version.txt, <name>.csv (lizard
 # --csv) and <name>.dup.txt (lizard -Eduplicate), the same three runs the
-# adapter's script makes. The "go" fixture is a copy of internal/quality's own
-# sources, refreshed on every run.
+# adapter's script makes. The "go" fixture is a copy of a few of internal/quality's
+# own sources, refreshed on every run.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,7 +34,7 @@ fi
 
 rm -rf "${fixtures:?}/go"
 mkdir -p "$fixtures/go"
-(cd "$root" && git ls-files -z -co --exclude-standard 'internal/quality/*.go' | tr '\0' '\n' | grep -v /testdata/ | tr '\n' '\0' | xargs -0 -I{} cp --parents {} "$fixtures/go/")
+(cd "$root" && for f in assess clones compare exclude hash metrics source; do cp --parents "internal/quality/$f.go" "$fixtures/go/"; done)
 
 for dir in "$fixtures"/*/; do
 	name=$(basename "$dir")

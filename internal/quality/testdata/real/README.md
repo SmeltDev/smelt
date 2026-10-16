@@ -9,7 +9,9 @@ sources or what the adapter relies on.
 
 - `python` and `typescript` are small projects with one complex function, a
   copied block, a test file and a generated file.
-- `go` is a snapshot of `internal/quality`'s own sources, taken by the script.
+- `go` is a snapshot of seven of `internal/quality`'s own sources, taken by the
+  script. The committed `go.csv` and `go.dup.txt` are the original capture with
+  the lines for the dropped files removed; the next run rewrites them in full.
 
 These were captured with lizard 1.24.1 (the version the kit pins).
 
