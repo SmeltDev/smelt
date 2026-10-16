@@ -333,10 +333,25 @@ is committed and shared with your team:
 | `maxAttempts` | Default number of rounds (built-in: 3) |
 | `plan` | `true` (the default) has the implementer write a plan, reviewed before it implements; `false` skips it, like `--no-plan` |
 | `gatesFirst` | `true` (the default) runs the validation commands before the reviews and skips the reviews of a round whose commands failed; `false` runs them side by side |
+| `quality` | The built-in quality check: `{"enabled": true, "maxFunctionComplexity": 15, "maxErosionRise": 1.0, "minCloneLines": 15}`. Every round measures erosion, complex functions and duplicated code (Go) before and after the change; `enabled: false` turns it off. |
 | `log` | Keep a run log by default |
 | `author` | `"Name <email>"` for factory commits. Leave it unset so everyone commits as their own git identity. |
 
 A flag always beats the config, and the config beats the built-in default.
+
+### Quality of every run
+
+After the validation commands, every round measures the change's code quality on your machine,
+deterministically and in about a second, and shows it next to the checks, in the run log, in
+`smelt factory status --json` (`quality`) and in the PR notes:
+
+```
+✓ quality  erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 120
+```
+
+A new or changed function over the complexity limit, or erosion up by more than `maxErosionRise`
+points, goes back to the implementer like a review finding. `smelt quality [--base <rev>]` runs the
+same measurement by hand or in CI. Projects without Go show `not measured`.
 
 **Credentials:**
 - **Claude:** in the OS keychain, set by `smelt init` or `smelt refresh`.

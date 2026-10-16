@@ -1,0 +1,21 @@
+{
+  "measured": true,
+  "erosion": 97.71536701077915,
+  "limit": 10,
+  "over_threshold": 1,
+  "clone_lines": 0,
+  "worst": [
+    {
+      "func": "Classify",
+      "file": "shape.go",
+      "cc": 14,
+      "lines": 28
+    },
+    {
+      "func": "Add",
+      "file": "shape.go",
+      "cc": 1,
+      "lines": 3
+    }
+  ]
+}

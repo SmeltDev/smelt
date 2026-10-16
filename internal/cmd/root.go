@@ -106,6 +106,7 @@ Configuration:
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newMutateCmd())
+	rootCmd.AddCommand(newQualityCmd())
 	rootCmd.AddCommand(newReviewCmd())
 	rootCmd.AddCommand(newFactoryCmd())
 	rootCmd.AddCommand(newHarnessCmd())

@@ -10,6 +10,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -223,6 +224,10 @@ func (l *runLog) review(round int, c Check) {
 // check records a validation command as it finishes, with its output when it
 // failed, and with verbose when it passed too.
 func (l *runLog) check(c Check) {
+	if c.Kind == KindQuality {
+		l.quality(c)
+		return
+	}
 	head := fmt.Sprintf("validate %s on %s %s in %s", c.Name, c.SidecarID, c.Status, c.Duration.Round(time.Second))
 	switch c.Status {
 	case StatusErrored:
@@ -239,6 +244,23 @@ func (l *runLog) check(c Check) {
 	}
 	if len(c.Skipped) > 0 {
 		l.line("warn", fmt.Sprintf("%s skipped %d test(s): %s", c.Name, len(c.Skipped), strings.Join(c.Skipped, ", ")))
+	}
+}
+
+// quality records the quality check: the before → after line, then each
+// finding, marked when it is sent to the implementer.
+func (l *runLog) quality(c Check) {
+	if c.Status == StatusErrored {
+		l.line("warn", "quality could not be measured: "+c.Error)
+		return
+	}
+	l.line(statusLevel(c.Status), "quality: "+c.Quality.Line())
+	for _, f := range c.Quality.Findings {
+		sent := ""
+		if f.Severity == quality.SeverityMedium {
+			sent = " (fails the check)"
+		}
+		l.line("info", fmt.Sprintf("  quality [%s] %s %s%s", f.Severity, f.Location(), f.Message, sent))
 	}
 }
 

@@ -220,6 +220,53 @@ type FactoryConfig struct {
 	// Cache keeps the docker backend's build and module caches in volumes that
 	// outlive sidecars. Unset means true.
 	Cache *bool `json:"cache,omitempty"`
+	// Quality tunes the built-in quality check of a run. Unset means the check
+	// is on with its default limits.
+	Quality *QualityConfig `json:"quality,omitempty"`
+}
+
+// QualityConfig is factory.quality: the limits of the built-in quality check.
+// A zero limit means the default, which internal/quality owns.
+type QualityConfig struct {
+	// Enabled turns the check off when false. Unset means true.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxFunctionComplexity is the cyclomatic complexity above which a new or
+	// changed function is a finding.
+	MaxFunctionComplexity int `json:"maxFunctionComplexity,omitempty"`
+	// MaxErosionRise is how many percentage points a change may raise erosion.
+	MaxErosionRise float64 `json:"maxErosionRise,omitempty"`
+	// MinCloneLines is the shortest duplicated block, in statements.
+	MinCloneLines int `json:"minCloneLines,omitempty"`
+}
+
+// validateLimits checks the numeric settings, which must not be negative.
+func (f *FactoryConfig) validateLimits() error {
+	if f.MaxAttempts < 0 {
+		return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
+	}
+	if f.MaxConcurrent < 0 {
+		return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
+	}
+	return f.Quality.validate()
+}
+
+func (q *QualityConfig) validate() error {
+	switch {
+	case q == nil:
+		return nil
+	case q.MaxFunctionComplexity < 0:
+		return fmt.Errorf("factory.quality.maxFunctionComplexity must not be negative, got %d", q.MaxFunctionComplexity)
+	case q.MaxErosionRise < 0:
+		return fmt.Errorf("factory.quality.maxErosionRise must not be negative, got %g", q.MaxErosionRise)
+	case q.MinCloneLines < 0:
+		return fmt.Errorf("factory.quality.minCloneLines must not be negative, got %d", q.MinCloneLines)
+	}
+	return nil
+}
+
+// QualityEnabled reports whether runs measure quality; the default is yes.
+func (f *FactoryConfig) QualityEnabled() bool {
+	return f == nil || f.Quality == nil || f.Quality.Enabled == nil || *f.Quality.Enabled
 }
 
 // CacheEnabled reports whether docker sidecars share per-project cache volumes;
@@ -462,11 +509,8 @@ func (c *ProjectConfig) validate() error {
 		if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
 			return err
 		}
-		if f.MaxAttempts < 0 {
-			return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
-		}
-		if f.MaxConcurrent < 0 {
-			return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
+		if err := f.validateLimits(); err != nil {
+			return err
 		}
 		if _, err := f.CommitAuthor(); err != nil {
 			return fmt.Errorf("factory.author must look like \"Name <email>\": %w", err)

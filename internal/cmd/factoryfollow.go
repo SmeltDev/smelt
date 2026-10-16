@@ -302,9 +302,17 @@ const failedOutputLines = 20
 func (r *sessionReporter) reportCheck(c smeltd.RoundCheck) {
 	switch c.Status {
 	case smeltd.CheckPassed:
+		if c.Summary != "" {
+			r.status(iostream.LevelDone, fmt.Sprintf("  %s  %s", c.Name, c.Summary))
+			break
+		}
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
 	case smeltd.CheckFailed:
-		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
+		if c.Summary != "" {
+			r.status(iostream.LevelError, fmt.Sprintf("  %s  %s", c.Name, c.Summary))
+		} else {
+			r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
+		}
 		if c.Output == "" {
 			return
 		}

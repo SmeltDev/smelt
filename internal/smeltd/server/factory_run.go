@@ -16,6 +16,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness/all"
 	"github.com/smeltdev/smelt/internal/harness/status"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/smeltd"
@@ -228,6 +229,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Commands:                commands,
 		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
 		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
+		Quality:                 factory.QualityConfig(cfg.Factory),
 		Client:                  d.factoryClient(req.Backend),
 		OrgID:                   orgID,
 		Image:                   image,
@@ -494,7 +496,17 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		if impl := round.Implement; impl != nil && len(impl.Unproven) > 0 {
 			round.Note += "; the implementer claimed gates it did not run after its last edit: " + strings.Join(impl.Unproven, ", ")
 		}
-		e.s.Factory.SkippedTests = factory.Outcome{Checks: ev.Checks}.Skipped()
+		recordChecksLocked(e.s.Factory, ev.Checks)
+	}
+}
+
+// recordChecksLocked stores what a round's checks say about the run as a whole:
+// the tests they skipped and the quality they measured.
+func recordChecksLocked(f *smeltd.FactoryRun, checks []factory.Check) {
+	out := factory.Outcome{Checks: checks}
+	f.SkippedTests = out.Skipped()
+	if q := out.Quality(); q != nil {
+		f.Quality = wireQuality(q)
 	}
 }
 
@@ -600,7 +612,7 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		return
 	}
 	round := &e.s.Rounds[r.cur]
-	round.Checks = append(round.Checks, smeltd.RoundCheck{
+	rc := smeltd.RoundCheck{
 		Name:       c.Name,
 		Status:     string(c.Status),
 		SidecarID:  c.SidecarID,
@@ -608,7 +620,28 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		Error:      c.Error,
 		Output:     c.Output,
 		Skipped:    c.Skipped,
-	})
+	}
+	if c.Kind == factory.KindQuality {
+		rc.Output = c.Feedback
+		if c.Quality != nil {
+			rc.Summary = c.Quality.Line()
+		}
+	}
+	round.Checks = append(round.Checks, rc)
+}
+
+// wireQuality is a quality measurement as the status JSON carries it.
+func wireQuality(q *quality.Summary) *smeltd.FactoryQuality {
+	out := &smeltd.FactoryQuality{
+		Line:          q.Line(),
+		ErosionBefore: q.ErosionBefore, ErosionAfter: q.ErosionAfter,
+		OverThresholdBefore: q.OverThresholdBefore, OverThresholdAfter: q.OverThresholdAfter,
+		CloneLinesBefore: q.CloneLinesBefore, CloneLinesAfter: q.CloneLinesAfter,
+	}
+	for _, f := range q.Worst {
+		out.Worst = append(out.Worst, smeltd.QualityFunction{Func: f.Qualified(), File: f.File, CC: f.Complexity, Lines: f.Lines})
+	}
+	return out
 }
 
 // finish records what the run left behind. It runs before the session is
@@ -638,6 +671,9 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Unverified = rep.Outcome.Unverified
 		f.ContinuedFromEmpty = rep.Outcome.FromEmpty
 		f.SkippedTests = rep.Outcome.Skipped()
+		if q := rep.Outcome.Quality(); q != nil {
+			f.Quality = wireQuality(q)
+		}
 		for _, fd := range rep.Outcome.Incomplete() {
 			f.Incomplete = append(f.Incomplete, factory.FindingTitle(fd))
 		}

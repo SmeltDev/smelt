@@ -19,6 +19,7 @@ import (
 	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
@@ -104,6 +105,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, len(got.Commands), 2) // the project's command and the markers gate
 	assert.Equal(t, got.Credential.Value, testSecret)
 	assert.Equal(t, got.ImplementerInstructions, "keep the change small")
+	assert.Assert(t, got.Quality != nil, "quality is measured unless the project turns it off")
 
 	assert.Equal(t, detail.State, smeltd.SessionDone)
 	assert.Equal(t, detail.Stages[0].ID, smeltd.StageFactoryLoop)
@@ -686,4 +688,47 @@ func TestFactorySessionThatIsNotIntegrateHasNoModeOrRoundKinds(t *testing.T) {
 	assert.Equal(t, detail.Factory.Mode, "")
 	assert.Equal(t, detail.Rounds[0].Kind, smeltd.RoundKind(""))
 	assert.Assert(t, !detail.Rounds[0].Implement.Fix)
+}
+
+// A round's quality check reaches the status JSON as the check's line and as
+// the run's quality object, with the keys consumers read.
+func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.Equal(t, busy, "")
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	sum := quality.Summary{
+		Measured: true, Limit: 15, ErosionBefore: 27.3, ErosionAfter: 27.1,
+		OverThresholdBefore: 14, OverThresholdAfter: 14, CloneLinesBefore: 120, CloneLinesAfter: 118,
+		Worst: []quality.Function{{File: "a.go", Receiver: "T", Name: "run", Complexity: 22, Lines: 80}},
+	}
+	check := factory.FromQuality(sum, 0, nil)
+	rec.event(factory.Event{Kind: factory.EventChecking, Round: 1})
+	rec.checked(check)
+	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{check}})
+
+	snap := entry.snapshot()
+	assert.DeepEqual(t, snap.Rounds[0].Checks, []smeltd.RoundCheck{{
+		Name: "quality", Status: "passed",
+		Summary: "erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 118",
+	}})
+	b, err := json.Marshal(snap.Factory.Quality)
+	assert.NilError(t, err)
+	assert.Equal(t, string(b), `{"line":"erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 118",`+
+		`"erosion_before":27.3,"erosion_after":27.1,"over_threshold_before":14,"over_threshold_after":14,`+
+		`"clone_lines_before":120,"clone_lines_after":118,"worst":[{"func":"T.run","file":"a.go","cc":22,"lines":80}]}`)
+
+	rec.finish(factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1, Checks: []factory.Check{check}}}, nil)
+	assert.Equal(t, entry.snapshot().Factory.Quality.ErosionAfter, 27.1)
+}
+
+func TestFactoryRecorderOmitsQualityWhenNotMeasured(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	rec.finish(factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultPassed}}, nil)
+	b, err := json.Marshal(entry.snapshot().Factory)
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(string(b), "quality"), string(b))
 }

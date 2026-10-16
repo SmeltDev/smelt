@@ -99,7 +99,10 @@ type Sidecars struct {
 	InstallTimeout time.Duration
 	// OnInstallOutput receives each sidecar's install output as it arrives.
 	OnInstallOutput func(sidecarID string, line string)
-	// OnCheck is called as each validation command finishes. Reviews report
+	// Quality, when set, measures the change on the host after the gates of
+	// every round.
+	Quality *Quality
+	// OnCheck is called as each validation command and the quality check finish. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
 	// Status, when set, receives notices about a round, such as a summary whose
@@ -271,7 +274,7 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 		for i, p := range s.Prompts {
 			skipped[i] = skippedReview(p.Name)
 		}
-		return slices.Concat(skipped, gates), nil
+		return slices.Concat(skipped, gates, s.qualityChecks(ctx)), nil
 	}
 	start = time.Now()
 	defer func() { s.reviewsTook += time.Since(start) }()
@@ -286,7 +289,7 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(reviews, gates), nil
+	return slices.Concat(reviews, gates, s.qualityChecks(ctx)), nil
 }
 
 // checkTogether runs the reviews on the reviewers and validation on the
@@ -331,7 +334,20 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 	if reviewErr != nil {
 		return nil, reviewErr
 	}
-	return slices.Concat(carried, reviews, validation), nil
+	return slices.Concat(carried, reviews, validation, s.qualityChecks(ctx)), nil
+}
+
+// qualityChecks is the round's quality check, none when the run does not
+// measure quality. It runs after the gates, on the tree they ran against.
+func (s *Sidecars) qualityChecks(ctx context.Context) []Check {
+	if s.Quality == nil {
+		return nil
+	}
+	c := s.Quality.Check(ctx)
+	if s.OnCheck != nil {
+		s.OnCheck(c)
+	}
+	return []Check{c}
 }
 
 // reviewSet is the review prompts to run in round, as each reviewer is sent
