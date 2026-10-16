@@ -58,6 +58,10 @@ type WorktreeOptions struct {
 	// From, when set, is a branch or commit to start from instead of the
 	// developer's files; see ResolveFrom.
 	From string
+	// Against, with From, makes an integrate worktree: it is checked out at
+	// the tip of From while its baseline is the merge base with Against, so
+	// the branch's own commits are the change under review.
+	Against string
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
@@ -85,7 +89,11 @@ func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
 		return Worktree{}, err
 	}
 	git := gitexec.Runner{Dir: o.Root}
-	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, o.Path, w.Baseline); err != nil {
+	start := w.Baseline
+	if o.Against != "" {
+		start = w.Head
+	}
+	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, o.Path, start); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return w, nil
@@ -98,11 +106,22 @@ func (o WorktreeOptions) startFromRef(ctx context.Context) (Worktree, error) {
 	if err != nil {
 		return Worktree{}, err
 	}
-	return Worktree{
+	w := Worktree{
 		Path: o.Path, Branch: branchName(o.Prompt, o.RunID), Baseline: res.Commit, Head: res.Commit,
 		BaseBranch: res.Branch, From: &FromRef{Ref: o.From, Commit: res.Commit}, FromWarning: res.Warning,
 		Author: o.Author,
-	}, nil
+	}
+	if o.Against == "" {
+		return w, nil
+	}
+	in, err := ResolveIntegrate(ctx, o.Root, o.From, o.Against)
+	if err != nil {
+		return Worktree{}, err
+	}
+	// The PR goes into what the branch was compared with.
+	w.Baseline, w.Head, w.BaseBranch = in.Base, in.Tip, in.AgainstBranch
+	w.From.Commit = in.Tip
+	return w, nil
 }
 
 // startFromCheckout is the worktree that starts at the developer's HEAD, with

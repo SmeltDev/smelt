@@ -313,8 +313,9 @@ func TestPlanForSkipsContinuedRuns(t *testing.T) {
 	withGuidance := &Continuation{From: Record{RunID: "run-1"}, Guidance: "also add tests"}
 	assert.Assert(t, !withGuidance.checkFirst(), "guidance makes the continuation implement first, so CheckFirst does not skip the plan")
 
-	assert.Equal(t, planFor(true, nil, p), Planner(p))
-	assert.Assert(t, planFor(false, nil, p) == nil, "factory.plan false or --no-plan")
-	assert.Assert(t, planFor(true, withGuidance, p) == nil)
-	assert.Assert(t, planFor(true, &Continuation{From: Record{RunID: "run-1"}}, p) == nil)
+	assert.Equal(t, planFor(true, nil, nil, p), Planner(p))
+	assert.Assert(t, planFor(false, nil, nil, p) == nil, "factory.plan false or --no-plan")
+	assert.Assert(t, planFor(true, withGuidance, nil, p) == nil)
+	assert.Assert(t, planFor(true, &Continuation{From: Record{RunID: "run-1"}}, nil, p) == nil)
+	assert.Assert(t, planFor(true, nil, &IntegrateOptions{Against: "main"}, p) == nil, "an integrate run never plans")
 }

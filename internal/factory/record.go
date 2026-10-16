@@ -34,6 +34,10 @@ type Record struct {
 	DefaultBranch string `json:"default_branch,omitempty"`
 	// From is the ref the run was started from with --from, nil otherwise.
 	From *FromRef `json:"from,omitempty"`
+	// Mode is "integrate" for a run that checked a finished branch against its
+	// spec, and Against what it was compared with; both are absent otherwise.
+	Mode    string `json:"mode,omitempty"`
+	Against string `json:"against,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// ContinuedFromEmpty is set when the run continued a branch with no work

@@ -623,6 +623,23 @@ Optionally, if you generated review context
 
 See [docs/CLI.md](CLI.md) for the full command and flag reference.
 
+### Check a finished epic against its spec
+
+When an epic's tickets have all landed on a branch, check the combined change
+against the whole spec instead of building anything:
+
+```bash
+smelt factory build --from epic/memory --integrate --against main \
+  --plan epics/memory.md --pr --base main
+```
+
+The reviews see everything the branch added since it left `main`, with the spec as
+the request, and are asked whether the parts fit together. If everything passes, the
+run passes with no implementer turn. If not, the implementer gets one fix turn with
+the findings, and only the reviews that found something look again. A run that still
+fails ends `exhausted` for a person to look at. The PR comes from the run's own
+`smelt/*` branch, which has the same content as the epic when nothing needed fixing.
+
 ### Base a run on another branch
 
 To build on an epic branch while your checkout stays on whatever you are doing:

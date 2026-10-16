@@ -55,6 +55,11 @@ type RunOptions struct {
 	// GatesFirst runs Commands before the reviews and skips the reviews of a
 	// round whose commands failed.
 	GatesFirst bool
+	// Integrate, when set, checks the work already on From against the spec in
+	// Prompt: no plan and no implementer turn until the checks say what is
+	// wrong, then one fix turn and a focused re-check. It needs From, and
+	// cannot be combined with Continue.
+	Integrate *IntegrateOptions
 
 	// Author is the configured author of the branch's commits (factory.author);
 	// when it is empty, ResolveAuthor falls back to the developer's identity.
@@ -213,6 +218,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if cont != nil && opts.From != "" {
 		return rep, errors.New("a continued run keeps its base, so it cannot start from another ref")
 	}
+	if err := opts.checkIntegrate(); err != nil {
+		return rep, err
+	}
+	integ := opts.Integrate
 	request := opts.Prompt
 	if cont != nil {
 		opts.Prompt, request = cont.prompt(), cont.request()
@@ -249,9 +258,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 	rec := newRecord(rep.RunID, request, wt)
 	rec.Harness, rec.Model = opts.harnessName(), opts.Model
-	if cont != nil {
-		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
-	}
+	opts.markRecord(&rec)
 	// Until the implementer starts, a new worktree holds nothing the developer
 	// does not already have. A continued run's worktree holds the earlier
 	// run's work, so it stays. The defers set rep, so it is a named result.
@@ -268,9 +275,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}()
 	// A continued run's sidecars are synced from the baseline's files, and
 	// the work is laid on the implementer's afterwards, so the reviewers see
-	// the whole change rather than only what this run adds.
+	// the whole change rather than only what this run adds. An integrate run's
+	// worktree holds the branch's tip over the merge base the same way.
 	showingBaseline := false
-	if cont != nil {
+	if cont != nil || integ != nil {
 		if err := wt.showBaseline(ctx); err != nil {
 			return rep, err
 		}
@@ -334,6 +342,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		},
 		Commands:   opts.Commands,
 		GatesFirst: opts.GatesFirst,
+		Integrate:  integ != nil,
 		Status:     status,
 		OnCheck:    opts.OnCheck,
 		Install:    opts.Install,
@@ -350,31 +359,20 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
 	tm := timer{now: time.Now}
-	loop := Loop{Attempts: opts.Attempts, OnEvent: keepSummary(&lastSummary, chain(tm.event, opts.OnEvent))}
-	if status != nil {
-		next := loop.OnEvent
-		loop.OnEvent = func(e Event) {
-			if e.Kind == EventNoPriorWork {
-				status(iostream.LevelInfo, noPriorWork)
-			}
-			next(e)
-		}
-	}
-	loop.Planner = planFor(opts.Plan, cont, steps)
-	if cont != nil {
+	loop, loopPrompt := opts.newLoop(steps, keepSummary(&lastSummary, chain(tm.event, opts.OnEvent)))
+	if cont != nil || integ != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
-			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
+			return rep, fmt.Errorf("bring the work already on the branch to the implementer: %w", err)
 		}
-		loop.CheckFirst, loop.EmptyPrompt = cont.checkFirst(), cont.emptyPrompt()
 	}
 
 	// The record is kept once there is work to continue, and again with how
 	// the run ended, so a run whose daemon died can still be continued.
 	keepRecord(dataDir, rec, status)
 	rep.Started = true
-	rep.Outcome, err = loop.Run(ctx, steps, opts.Prompt)
+	rep.Outcome, err = loop.Run(ctx, steps, loopPrompt)
 	rep.Timing = tm.timing
-	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block}, status)
+	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block, Integrate: integ != nil}, status)
 	settleTiming(&rep.Timing, steps, runStart, status)
 	return rep, err
 }
@@ -394,9 +392,10 @@ func settleTiming(t *Timing, steps *Sidecars, runStart time.Time, status iostrea
 const noPriorWork = "continuing with no prior work: implementing from the request"
 
 // planFor is the planner a run uses, nil for none. A continued run never plans:
-// the plan already exists in the record of the run it continues.
-func planFor(enabled bool, cont *Continuation, p Planner) Planner {
-	if !enabled || cont != nil {
+// the plan already exists in the record of the run it continues. An integrate
+// run has no plan either: the work is done and the spec is its request.
+func planFor(enabled bool, cont *Continuation, integ *IntegrateOptions, p Planner) Planner {
+	if !enabled || cont != nil || integ != nil {
 		return nil
 	}
 	return p
@@ -448,6 +447,9 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 		status(iostream.LevelWarn, fmt.Sprintf("PR notes were not generated: %v", err))
 	} else {
 		status(iostream.LevelDone, "PR notes written")
+	}
+	if in.Integrate {
+		return &notes
 	}
 	amendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
@@ -633,11 +635,71 @@ func startWorktree(ctx context.Context, opts RunOptions, runID, dataDir string, 
 	}
 	wt, err := CreateWorktree(ctx, WorktreeOptions{
 		Root: opts.Root, Path: filepath.Join(dataDir, "factory", runID),
-		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From,
+		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From, Against: opts.againstRef(),
 	})
 	if err != nil {
 		return Worktree{}, fmt.Errorf("create the run's worktree: %w", err)
 	}
 	announceFrom(ctx, opts.Root, wt, opts.Status)
 	return wt, nil
+}
+
+// againstRef is the ref an integrate run compares its branch with, "" for any
+// other run.
+func (o *RunOptions) againstRef() string {
+	if o.Integrate == nil {
+		return ""
+	}
+	return o.Integrate.Against
+}
+
+// checkIntegrate refuses the combinations of integrate options that cannot run.
+func (o *RunOptions) checkIntegrate() error {
+	switch {
+	case o.Integrate == nil:
+		return nil
+	case o.Continue != nil:
+		return errors.New("an integrate run checks a branch against a spec, so it cannot continue another run")
+	case o.From == "":
+		return errors.New("an integrate run needs the branch to check, from From")
+	case o.Integrate.Against == "":
+		return errors.New("an integrate run needs a ref to compare the branch with")
+	}
+	return nil
+}
+
+// newLoop is the loop a run drives, and the prompt it starts with. onEvent
+// hears every event, and the status function hears of a continued run that
+// found no work.
+func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string) {
+	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps)}
+	if o.Status != nil {
+		loop.OnEvent = func(e Event) {
+			if e.Kind == EventNoPriorWork {
+				o.Status(iostream.LevelInfo, noPriorWork)
+			}
+			onEvent(e)
+		}
+	}
+	prompt := o.Prompt
+	if c := o.Continue; c != nil {
+		loop.CheckFirst, loop.EmptyPrompt = c.checkFirst(), c.emptyPrompt()
+	}
+	if o.Integrate != nil {
+		// The spec is the reviews' request; the implementer is only sent what
+		// fails, behind the fix lead.
+		loop.Attempts, loop.CheckFirst, prompt = IntegrateAttempts, true, integrateFixLead
+	}
+	return loop, prompt
+}
+
+// markRecord records what kind of run this is: whose request it continues, or
+// that it integrates a branch.
+func (o *RunOptions) markRecord(rec *Record) {
+	if c := o.Continue; c != nil {
+		rec.Prompt, rec.ContinuesRunID = c.From.Prompt, c.From.RunID
+	}
+	if o.Integrate != nil {
+		rec.Mode, rec.Against = ModeIntegrate, o.Integrate.Against
+	}
 }

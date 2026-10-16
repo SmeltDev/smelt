@@ -174,6 +174,8 @@ smelt
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
 │       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
+│       --integrate                 # With --from: check the finished branch against the whole spec (the prompt) and fix only what fails
+│       --against <ref>             # With --integrate: what the branch is compared with (default: the default branch)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │       --reviews <dir>             # Directory of review prompts (default: .smelt/reviews)
@@ -620,6 +622,30 @@ smelt
   by default, and the status JSON gains `from: {ref, commit}`. It is per run, not a
   config key, and `--from` with `--continue` is a user error (a continued run keeps its
   base). It works with both backends.
+- **`factory build --integrate` checks a finished branch against a whole spec.** It needs
+  `--from` and a prompt (usually `--plan epics/x.md`), and is a user error with
+  `--continue` or without `--from`; `--against` without `--integrate` is one too. The
+  change under review is `merge-base(--against, --from)..--from`, so everything the
+  branch added; `--against` defaults to the repository's default branch (an error when
+  none is recorded). The worktree is checked out at the `--from` tip with that merge
+  base as its baseline, and the sidecars see the branch's work as uncommitted changes,
+  as in a continuation. There is no plan and no implementer turn at first. Round 1 runs
+  the gates and every review together (`factory.gatesFirst` is ignored), each review
+  preceded by an integration preamble that asks whether the combined change meets every
+  requirement and acceptance item of the spec and whether the parts fit together. A
+  pass ends the run `passed` with no implementer turn. Otherwise the implementer gets
+  one fix turn, told "This branch combines several finished tickets. Fix exactly these
+  findings; do not refactor beyond them.", followed by the findings. Round 2 runs the
+  gates and only the reviews that had high or medium findings, each told to check only
+  those findings and what the fix may have broken; reviews that passed are carried
+  forward as passed, and a review that errored in round 1 gets its broad pass then.
+  A failing round 2 ends the run `exhausted`. The attempts are fixed at 2;
+  `--max-attempts` is ignored with a note (the daemon ignores `attempts` too). The PR
+  base is `--against`'s branch unless `--base` says otherwise; the PR head is the run's
+  `smelt/*` branch, which equals the epic's tip when no fix was needed. A run that
+  makes no fix commit does not amend the epic's tip commit; the notes go in the record
+  and the PR body. The status JSON has `mode: "integrate"`, `against`, and for each
+  round `kind` (`broad` or `recheck`), with `implement.fix` set on the fix turn.
 - **`factory build --continue` picks up a finished run's work.** A run whose checks
   still fail when it ends (exhausted or stuck) prints
   `smelt factory build --continue <run id>`. The continued run reopens the earlier

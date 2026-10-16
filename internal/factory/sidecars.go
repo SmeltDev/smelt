@@ -24,7 +24,10 @@ const reviewHead = `Review the implementation against the original requested cha
 
 %s
 
-## Change under review
+` + changeUnderReview
+
+// changeUnderReview tells a reviewer where the change is.
+const changeUnderReview = `## Change under review
 
 The change under review is the uncommitted work in this repository: run ` +
 	"`git diff HEAD`" + ` to see it, including new files. Committed history is the baseline and is not under review.`
@@ -83,6 +86,10 @@ type Sidecars struct {
 	// GatesFirst runs Commands before the reviews, and skips the reviews of a
 	// round whose commands failed.
 	GatesFirst bool
+	// Integrate makes the reviews those of a finished branch against the whole
+	// of Request: the first round is broad, later ones re-check only the
+	// reviews that found something. Gates and reviews always run together.
+	Integrate bool
 	// Install, when set, installs the project's dependencies once on every
 	// sidecar before the baseline commit. A prebuilt image holds only the
 	// package manager's store, since the workspace is mounted over the repo.
@@ -245,7 +252,7 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
 		return nil, err
 	}
-	if s.GatesFirst && len(s.Prompts) > 0 {
+	if s.GatesFirst && !s.Integrate && len(s.Prompts) > 0 {
 		return s.checkGatesFirst(ctx, round)
 	}
 	return s.checkTogether(ctx, round)
@@ -274,7 +281,8 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 	if err := s.relayToReviewers(ctx, round); err != nil {
 		return nil, err
 	}
-	reviews, err := s.runReviews(ctx, round)
+	prompts, _ := s.reviewSet(round)
+	reviews, err := s.runReviews(ctx, round, prompts)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +292,8 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 // checkTogether runs the reviews on the reviewers and validation on the
 // implementer at the same time.
 func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error) {
-	if len(s.Prompts) > 0 {
+	prompts, carried := s.reviewSet(round)
+	if len(prompts) > 0 {
 		if err := s.prepareReviewers(ctx); err != nil {
 			return nil, err
 		}
@@ -300,12 +309,12 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 		// Each goroutine owns its duration; they are added up after Wait.
 		reviewsTook, gatesTook time.Duration
 	)
-	if len(s.Prompts) > 0 {
+	if len(prompts) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			reviews, reviewErr = s.runReviews(ctx, round)
+			reviews, reviewErr = s.runReviews(ctx, round, prompts)
 			reviewsTook = time.Since(start)
 		}()
 	}
@@ -322,7 +331,16 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 	if reviewErr != nil {
 		return nil, reviewErr
 	}
-	return slices.Concat(reviews, validation), nil
+	return slices.Concat(carried, reviews, validation), nil
+}
+
+// reviewSet is the review prompts to run in round, as each reviewer is sent
+// them, and the checks of reviews that are not run again.
+func (s *Sidecars) reviewSet(round int) ([]review.Prompt, []Check) {
+	if s.Integrate {
+		return integratePrompts(s.Request, s.Prompts, s.history, round)
+	}
+	return scopePrompts(s.Request, s.Prompts, s.history), nil
 }
 
 // relayToReviewers relays the implementer's tree, as pulled into the
@@ -347,10 +365,10 @@ func (s *Sidecars) relayToReviewers(ctx context.Context, round int) error {
 	return nil
 }
 
-// runReviews runs every review prompt on the reviewers and remembers what each
-// found for the next round.
-func (s *Sidecars) runReviews(ctx context.Context, round int) ([]Check, error) {
-	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scopePrompts(s.Request, s.Prompts, s.history), s.Review)
+// runReviews runs prompts on the reviewers and remembers what each found for
+// the next round.
+func (s *Sidecars) runReviews(ctx context.Context, round int, prompts []review.Prompt) ([]Check, error) {
+	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, prompts, s.Review)
 	if err != nil {
 		return nil, fmt.Errorf("reviews: %w", err)
 	}

@@ -262,3 +262,33 @@ func TestFactoryChecksNothingToCheckPointsAtBootstrap(t *testing.T) {
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt factory bootstrap"), ue.Suggestion())
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt init"), ue.Suggestion())
 }
+
+func TestCheckBuildFlagsIntegrate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		c    buildChecks
+		want string
+	}{
+		{"integrate needs from", buildChecks{attempts: 3, integrate: true}, "--integrate needs --from."},
+		{"integrate refuses continue", buildChecks{attempts: 3, integrate: true, from: "epic/x", continueRun: "run-1"}, "--integrate cannot be combined with --continue."},
+		{"against needs integrate", buildChecks{attempts: 3, against: "main"}, "--against needs --integrate."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkBuildFlags(newFactoryBuildCmd(), tc.c)
+			var ue *userError
+			assert.Assert(t, errors.As(err, &ue), "got %v", err)
+			assert.Equal(t, ue.UserMessage(), tc.want)
+			assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+		})
+	}
+	assert.NilError(t, checkBuildFlags(newFactoryBuildCmd(), buildChecks{attempts: 3, integrate: true, from: "epic/x", against: "main"}))
+}
+
+func TestFactoryIntegrateSaysMaxAttemptsIsIgnored(t *testing.T) {
+	factoryProject(t)
+	_, stderr, _ := runFactoryBuildCmd(t, "--integrate", "--from", "epic/x", "--max-attempts", "5", "check it")
+	assert.Assert(t, strings.Contains(stderr, "--max-attempts is ignored with --integrate"), stderr)
+
+	_, stderr, _ = runFactoryBuildCmd(t, "--integrate", "--from", "epic/x", "check it")
+	assert.Assert(t, !strings.Contains(stderr, "--max-attempts is ignored"), stderr)
+}
