@@ -1,0 +1,98 @@
+area: testing
+patterns:
+  - name: fake-only-test
+    definition: A test that checks a fake it built itself, so it passes whatever the production code does.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          a test that stubs the runner to return "ok" and asserts the result is "ok".
+        isnt: >-
+          a fake HTTP server or a real `git init` in `t.TempDir()` driving the real code, with assertions on its behaviour.
+      python:
+        is: >-
+          a test that sets `runner = Mock(return_value="ok")` and asserts `runner() == "ok"`.
+        isnt: >-
+          a test that serves a fake HTTP endpoint or uses a real repository in `tmp_path`, and asserts on what the real code did.
+      typescript:
+        is: >-
+          a test that mocks `run` with `jest.fn(() => "ok")` and asserts that it returned `"ok"`.
+        isnt: >-
+          a test that starts a local HTTP server and calls the real client, asserting on its behaviour.
+      rust:
+        is: >-
+          a test that builds a `FakeRunner` returning `"ok"` and asserts that `runner.run()` returns `"ok"`.
+        isnt: >-
+          a test that drives the real code against a `tempfile::tempdir()` repository and asserts on the result.
+  - name: silent-skip
+    definition: A test that can skip without CI showing why, so a missing prerequisite looks like a pass.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `if _, err := exec.LookPath("docker"); err != nil { t.Skip() }` with no reason, on the only test of the requested behaviour.
+        isnt: >-
+          `t.Skip("ANTHROPIC_API_KEY not set")`, where the reason is stated and the CI report surfaces skipped tests.
+      python:
+        is: >-
+          `if not shutil.which("docker"): return` at the top of a test, or `@pytest.mark.skip` with no reason.
+        isnt: >-
+          `@pytest.mark.skipif(not os.environ.get("API_KEY"), reason="API_KEY not set")`.
+      typescript:
+        is: >-
+          `it.skip("pushes", ...)` or `if (!process.env.TOKEN) return;` inside the only test of the behaviour.
+        isnt: >-
+          `it.skipIf(!process.env.TOKEN)("pushes", ...)` with the reason in a visible skipped-test report.
+      rust:
+        is: >-
+          a bare `#[ignore]` on the only test of the behaviour, or `if which::which("docker").is_err() { return; }`.
+        isnt: >-
+          `#[ignore = "needs docker"]` that CI runs with `--ignored` in a job that has it.
+  - name: assertion-free-test
+    definition: A test that runs the code but never checks a result.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `func TestRun(t *testing.T) { _, _ = Run(ctx, opts) }`.
+        isnt: >-
+          a test that relies on `t.Fatal` inside a helper, or on a race detector run, for something that is its stated purpose.
+      python:
+        is: >-
+          `def test_run(): run(opts)` with no `assert` and no `pytest.raises`.
+        isnt: >-
+          a test whose purpose is that no exception escapes, and says so in its name.
+      typescript:
+        is: >-
+          `it("runs", async () => { await run(opts) })` with no `expect`.
+        isnt: >-
+          a test that uses `await expect(run(opts)).resolves.not.toThrow()` or a helper that asserts.
+      rust:
+        is: >-
+          `#[test] fn run_works() { let _ = run(&opts); }`.
+        isnt: >-
+          a test that calls a helper which asserts, or one whose stated purpose is that it does not panic.
+  - name: real-timeout-in-test
+    definition: A test that waits on a production timeout instead of injecting a short one.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          a test of the failure path of a readiness wait that sits through its three-minute deadline.
+        isnt: >-
+          a short `context.WithTimeout` used as a safety net around a test that normally finishes at once.
+      python:
+        is: >-
+          a test of a failing connection that calls `wait_ready()` and sits through its default 180-second timeout.
+        isnt: >-
+          `wait_ready(timeout=0.05)` in the test, or a `pytest-timeout` marker as a safety net.
+      typescript:
+        is: >-
+          a test that awaits a client whose default timeout is 30 seconds, with the Jest timeout raised to match.
+        isnt: >-
+          a test that passes `{ timeoutMs: 20 }` or uses fake timers to advance the clock.
+      rust:
+        is: >-
+          a test that calls `wait_ready()` on a down server and sits through its default `Duration::from_secs(180)`.
+        isnt: >-
+          a test that passes `Duration::from_millis(20)`, or uses `tokio::time::pause()`.

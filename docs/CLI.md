@@ -22,6 +22,12 @@ smelt
 ├── org                             # Manage CircleCI organizations
 │   └── create <name>               # Create a new standalone CircleCI organization
 │
+├── review
+│   └── patterns                    # Print the catalogue of review patterns (see "Review patterns")
+│       --language <lang>           # Limit examples to a language, repeatable (python, go, ...)
+│       --area <area>               # requirements | correctness | maintainability | testing
+│       --json                      # Output the versioned JSON document
+│
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
 │   --repos <items>                 # Comma-separated repo names
@@ -930,6 +936,55 @@ synced into the container, so uncommitted work is measured.
   `clone_lines`, `worst` (`func`, `file`, `language`, `cc`, `lines`),
   `not_measured` and, with `--base`, `base` and `findings`.
 
+## Review patterns (`smelt review patterns`)
+
+`smelt review patterns [--language L]... [--area A] [--json]` prints smelt's catalogue of review
+patterns: named ways a change goes wrong, described as behaviour, with an is/isn't example per
+language. It needs no project, login or network.
+
+- `--area` is one of `requirements`, `correctness`, `maintainability`, `testing`; `adversarial`
+  is another name for `requirements`. Any other value is a usage error listing the valid areas.
+- `--language` takes lizard's language names (the ones `smelt quality` reports), lower case; repeat
+  it or separate names with commas. Examples are limited to those languages, and a pattern that
+  does not exist in any of them (`applies_to`) is left out. A language the catalogue has no
+  example for gets the definition alone: another language's example is never substituted. Without
+  `--language` every example is printed.
+- Text output is Markdown, a `##` heading per area and a `###` section per pattern.
+
+`--json` is a contract other tools may read. It prints one object:
+
+```json
+{
+  "version": 1,
+  "patterns": [
+    {
+      "name": "silent-fallback",
+      "area": "correctness",
+      "definition": "Code that turns a failure into a plausible default, ...",
+      "severity": "medium",
+      "applies_to": ["all"],
+      "examples": {"python": {"is": "...", "isnt": "..."}}
+    }
+  ]
+}
+```
+
+- `version` is 1. A change that removes or renames a field, or changes what one means, bumps it;
+  new fields and new patterns do not.
+- `patterns` is ordered by area (requirements, correctness, maintainability, testing) and then by
+  the catalogue's own order, so the output is the same on every run. It is `[]` when nothing
+  matches.
+- `name` is unique, lowercase words joined by hyphens, and is the name a finding carries in
+  brackets, such as `[silent-fallback]`.
+- `severity` is the usual severity of a finding of the pattern: `high`, `medium`, `low` or `info`.
+- `applies_to` is `["all"]` or the languages the pattern exists in, such as the ones that have
+  interfaces for `lonely-interface`.
+- `examples` maps a language name to `{"is", "isnt"}`: text showing the pattern, and text that looks
+  similar but is not it. It holds only the requested languages that have an example, and is `{}`
+  when there are none.
+
+A prompts directory named `patterns` must be passed to `smelt review` as `./patterns`.
+
 ## Config keys
 
 | Key | Scope | Description |
@@ -999,6 +1054,13 @@ working-tree check) and writes 2–4 review prompts. It runs in-process, not on 
 - **What the agent is told.** The validation commands from the config (so reviews leave to them what
   they enforce) and, when `smelt build-prompt` wrote it, `.smelt/context/review-prompt.md` (capped at
   64 KiB).
+- **Patterns to look for.** Each prompt carries an `area` (the schema's `area` field: the four
+  catalogue areas or `other`). smelt, not the agent, appends a `## Patterns to look for` section
+  with that area's patterns from `smelt review patterns`, with examples in the project's languages:
+  those of the files `git ls-files` lists (tracked or not ignored), found with the extension map and
+  default exclusions `smelt quality` uses. Languages with no examples, or a project whose languages
+  cannot be listed, get definitions alone. A prompt in area `other` gets no section. The section is
+  capped at 24 KiB, after the 32 KiB check of the agent's own text.
 - **While it runs**, each tool call is shown as a status line; its prose is not. Then the summary,
   the files written, any dropped prompts and the cost when the agent reports it.
 - **The answer is untrusted text that becomes files.** At most 6 prompts are kept; names must be

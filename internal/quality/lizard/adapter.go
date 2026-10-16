@@ -198,12 +198,27 @@ func extensionPatterns() []string {
 	return out
 }
 
+// LanguageOf is the name of the language file is written in, judged by its
+// extension, and false when smelt does not name one.
+func LanguageOf(file string) (string, bool) {
+	lang, ok := languages()[strings.ToLower(path.Ext(file))]
+	return lang, ok
+}
+
+// LanguageNames are the language names the contract carries, sorted.
+func LanguageNames() []string {
+	names := map[string]bool{}
+	for _, lang := range languages() {
+		names[lang] = true
+	}
+	return slices.Sorted(maps.Keys(names))
+}
+
 func languageOf(file string) string {
-	ext := strings.ToLower(path.Ext(file))
-	if lang, ok := languages()[ext]; ok {
+	if lang, ok := LanguageOf(file); ok {
 		return lang
 	}
-	return strings.TrimPrefix(ext, ".")
+	return strings.TrimPrefix(strings.ToLower(path.Ext(file)), ".")
 }
 
 // languages maps the extensions lizard reads to the language names the

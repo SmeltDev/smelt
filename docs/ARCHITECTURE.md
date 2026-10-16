@@ -42,6 +42,8 @@ smelt/
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── quality/               # Code quality metrics from a provider's contract: erosion, clones, Compare, hash, exclusions
     │   └── lizard/            # The default provider: the sandbox script and the mapping of lizard's output onto the contract
+    ├── reviews/
+    │   └── patterns/          # Catalogue of review patterns (embedded YAML per area), Select, Markdown; imports nothing of smelt's, used by `cmd/` and `factory/`
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations

@@ -39,7 +39,7 @@ A retry loop that discards the first errors and reports only the last one (or no
 - Usual severity: Required.
 
 ### `error-cause-dropped`
-An error replaced by a new one that does not wrap it, or wrapped with `%v` where callers need `errors.Is` or `errors.As`.
+An error replaced by a new one that keeps no link to the original, or flattened to text where callers need to test its type or cause.
 - Is: `if err != nil { return errors.New("cannot load config") }`, or `fmt.Errorf("load config: %v", err)` where a caller tests `errors.Is(err, fs.ErrNotExist)`.
 - Isn't: `fmt.Errorf("load config: %w", err)`, or a deliberate `%v` at a boundary that must not expose the inner error type, with a comment saying so.
 - Usual severity: Required.
@@ -51,7 +51,7 @@ Input that is unknown or malformed is accepted and mapped to a default instead o
 - Usual severity: Required.
 
 ### `ignored-error`
-An error discarded with `_ =` or an unchecked call where failure changes the result: writes, commits, closes after writes, renames.
+An error discarded, or a call whose failure is never checked, where failure changes the result: writes, commits, closes after writes, renames.
 - Is: `_ = os.WriteFile(path, data, 0o600)` before reporting success; `defer f.Close()` on a file that was written to.
 - Isn't: `_ = resp.Body.Close()` after a read, or removal of a temp file in cleanup, where the failure cannot change the outcome.
 - Usual severity: Required. Critical when the lost write is the user's data.

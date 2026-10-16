@@ -19,6 +19,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/reviews/patterns"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
@@ -77,31 +78,31 @@ func TestCapUTF8(t *testing.T) {
 }
 
 func TestCheckBootstrap(t *testing.T) {
-	good := func(name string) review.Prompt { return review.Prompt{Name: name, Body: "Review " + name} }
-	many := make([]review.Prompt, 8)
+	good := func(name string) bootstrapReview { return bootstrapReview{Name: name, Body: "Review " + name} }
+	many := make([]bootstrapReview, 8)
 	for i := range many {
 		many[i] = good("area-" + string(rune('a'+i)))
 	}
 	tests := []struct {
 		name        string
-		in          []review.Prompt
+		in          []bootstrapReview
 		wantNames   []string
 		wantDropped int
 		wantErr     string
 	}{
-		{name: "good", in: []review.Prompt{good("testing"), good("core-logic")}, wantNames: []string{"testing", "core-logic"}},
-		{name: "bad names", in: []review.Prompt{good("Testing"), good("../evil"), good("a_b"), good("-a"), good("a--b"), good("")}, wantErr: "no usable"},
-		{name: "bad name beside good", in: []review.Prompt{good("testing"), good("Bad Name")}, wantNames: []string{"testing"}, wantDropped: 1},
-		{name: "repeat keeps the first", in: []review.Prompt{good("testing"), {Name: "testing", Body: "second"}}, wantNames: []string{"testing"}, wantDropped: 1},
-		{name: "empty body", in: []review.Prompt{good("a"), {Name: "b", Body: " \n"}}, wantNames: []string{"a"}, wantDropped: 1},
-		{name: "oversized body", in: []review.Prompt{good("a"), {Name: "b", Body: strings.Repeat("x", maxBootstrapPromptBytes+1)}}, wantNames: []string{"a"}, wantDropped: 1},
-		{name: "body at the cap", in: []review.Prompt{{Name: "a", Body: strings.Repeat("x", maxBootstrapPromptBytes)}}, wantNames: []string{"a"}},
+		{name: "good", in: []bootstrapReview{good("testing"), good("core-logic")}, wantNames: []string{"testing", "core-logic"}},
+		{name: "bad names", in: []bootstrapReview{good("Testing"), good("../evil"), good("a_b"), good("-a"), good("a--b"), good("")}, wantErr: "no usable"},
+		{name: "bad name beside good", in: []bootstrapReview{good("testing"), good("Bad Name")}, wantNames: []string{"testing"}, wantDropped: 1},
+		{name: "repeat keeps the first", in: []bootstrapReview{good("testing"), {Name: "testing", Body: "second"}}, wantNames: []string{"testing"}, wantDropped: 1},
+		{name: "empty body", in: []bootstrapReview{good("a"), {Name: "b", Body: " \n"}}, wantNames: []string{"a"}, wantDropped: 1},
+		{name: "oversized body", in: []bootstrapReview{good("a"), {Name: "b", Body: strings.Repeat("x", maxBootstrapPromptBytes+1)}}, wantNames: []string{"a"}, wantDropped: 1},
+		{name: "body at the cap", in: []bootstrapReview{{Name: "a", Body: strings.Repeat("x", maxBootstrapPromptBytes)}}, wantNames: []string{"a"}},
 		{name: "more than six", in: many, wantNames: []string{"area-a", "area-b", "area-c", "area-d", "area-e", "area-f"}, wantDropped: 2},
 		{name: "none", wantErr: "no usable review prompts"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := checkBootstrap(bootstrapAnswer{Summary: " learned things ", Reviews: tt.in})
+			got, err := checkBootstrap(bootstrapAnswer{Summary: " learned things ", Reviews: tt.in}, nil)
 			if tt.wantErr != "" {
 				assert.ErrorContains(t, err, tt.wantErr)
 				return
@@ -349,4 +350,107 @@ func TestRunBootstrapReadsTheTeamStandards(t *testing.T) {
 	_, err := RunBootstrap(context.Background(), o)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(promptOf(t, ex.script), "Always wrap errors."))
+}
+
+func TestBootstrapSchemaAreasAreTheCatalogues(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Reviews struct {
+				Items struct {
+					Properties struct {
+						Area struct {
+							Enum []string `json:"enum"`
+						} `json:"area"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"reviews"`
+		} `json:"properties"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(BootstrapSchema), &schema))
+	var want []string
+	for _, a := range patterns.Areas() {
+		want = append(want, string(a))
+	}
+	want = append(want, areaOther)
+	assert.DeepEqual(t, schema.Properties.Reviews.Items.Properties.Area.Enum, want)
+}
+
+// exampleMarkers are texts that appear only in one language's examples.
+var exampleMarkers = map[string][]string{
+	"go":         {"os.WriteFile", "fmt.Errorf", "t.Skip", "context.WithTimeout"},
+	"python":     {"pytest", "contextlib.suppress", "raise ConfigError", "NotImplementedError"},
+	"typescript": {"jest.fn", ".catch(", "new Error(", "it.skip"},
+	"rust":       {"unwrap_or", "todo!()", "#[ignore", "map_err"},
+}
+
+func checkAllAreas(t *testing.T, languages []string) {
+	t.Helper()
+	for _, area := range patterns.Areas() {
+		got, err := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: string(area), Body: "Review."}}}, languages)
+		assert.NilError(t, err)
+		body := got.Prompts[0].Body
+		assert.Assert(t, strings.HasPrefix(body, "Review.\n\n## Patterns to look for\n"), body)
+		for _, lang := range []string{"go", "python", "typescript", "rust"} {
+			has := slices.Contains(languages, lang)
+			assert.Equal(t, strings.Contains(body, "- Is ("+lang+"):"), has, "%s examples in the %s prompt:\n%s", lang, area, body)
+		}
+	}
+}
+
+func TestBootstrapPatternsSection(t *testing.T) {
+	t.Run("python only", func(t *testing.T) {
+		checkAllAreas(t, []string{"python"})
+		got, _ := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: "correctness", Body: "B"}}}, []string{"python"})
+		body := got.Prompts[0].Body
+		assert.Assert(t, strings.Contains(body, "raise ConfigError"), body)
+		for _, lang := range []string{"go", "typescript", "rust"} {
+			for _, m := range exampleMarkers[lang] {
+				assert.Assert(t, !strings.Contains(body, m), "%q from %s in:\n%s", m, lang, body)
+			}
+		}
+		for _, name := range []string{"silent-fallback", "retry-hides-failure", "error-cause-dropped", "lenient-parse", "ignored-error"} {
+			assert.Assert(t, strings.Contains(body, "### `"+name+"`"), name)
+		}
+	})
+	t.Run("go and typescript", func(t *testing.T) {
+		checkAllAreas(t, []string{"go", "typescript"})
+		got, _ := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: "testing", Body: "B"}}}, []string{"go", "typescript"})
+		body := got.Prompts[0].Body
+		for _, m := range append(exampleMarkers["go"][2:], "jest.fn") {
+			assert.Assert(t, strings.Contains(body, m), "%q missing:\n%s", m, body)
+		}
+		for _, lang := range []string{"python", "rust"} {
+			for _, m := range exampleMarkers[lang] {
+				assert.Assert(t, !strings.Contains(body, m), "%q from %s in:\n%s", m, lang, body)
+			}
+		}
+	})
+	t.Run("other and unknown areas get none", func(t *testing.T) {
+		for _, area := range []string{"other", "", "style"} {
+			got, err := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: area, Body: "Review."}}}, []string{"go"})
+			assert.NilError(t, err)
+			assert.Equal(t, got.Prompts[0].Body, "Review.", area)
+		}
+	})
+	t.Run("a language with no examples gets definitions", func(t *testing.T) {
+		got, _ := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: "correctness", Body: "B"}}}, []string{"java"})
+		body := got.Prompts[0].Body
+		assert.Assert(t, strings.Contains(body, "### `silent-fallback`\nCode that turns a failure"), body)
+		assert.Assert(t, !strings.Contains(body, "- Is ("), body)
+	})
+	t.Run("no languages gets definitions", func(t *testing.T) {
+		got, _ := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: "testing", Body: "B"}}}, nil)
+		assert.Assert(t, !strings.Contains(got.Prompts[0].Body, "- Is ("), got.Prompts[0].Body)
+		assert.Assert(t, strings.Contains(got.Prompts[0].Body, "fake-only-test"))
+	})
+	t.Run("many languages stay under the cap", func(t *testing.T) {
+		got, _ := checkBootstrap(bootstrapAnswer{Reviews: []bootstrapReview{{Name: "x", Area: "maintainability", Body: "B"}}},
+			[]string{"go", "python", "rust", "typescript", "java"})
+		assert.Assert(t, len(got.Prompts[0].Body) < maxPatternsBytes+10, len(got.Prompts[0].Body))
+	})
+}
+
+func TestBootstrapPromptTellsTheAgentAboutAreas(t *testing.T) {
+	got := bootstrapPrompt(nil, "")
+	assert.Assert(t, strings.Contains(got, "Patterns to look for"))
 }
