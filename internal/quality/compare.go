@@ -23,8 +23,12 @@ type Config struct {
 	MaxFunctionComplexity int
 	// MaxErosionRise is how many percentage points erosion may rise by.
 	MaxErosionRise float64
-	// MinCloneLines is the shortest duplicated block, in statements.
+	// MinCloneLines is the shortest duplicated block, in lines.
 	MinCloneLines int
+	// Exclude says which files are left out of measurement.
+	Exclude ExcludeConfig
+	// Command, when set, replaces the default provider: see CommandProvider.
+	Command string
 }
 
 func (c Config) withDefaults() Config {
@@ -82,11 +86,11 @@ const splitAdvice = "split it: a handler per case, or extract the decision into 
 func ChangedFunctions(before, after Report) []Function {
 	prior := make(map[string]string, len(before.Functions))
 	for _, f := range before.Functions {
-		prior[f.Key()] = f.BodyHash
+		prior[f.Key()] = f.Hash
 	}
 	var out []Function
 	for _, f := range after.Functions {
-		if hash, ok := prior[f.Key()]; !ok || hash != f.BodyHash {
+		if hash, ok := prior[f.Key()]; !ok || hash != f.Hash {
 			out = append(out, f)
 		}
 	}
@@ -134,9 +138,9 @@ func complexFindings(before Report, changed []Function, cfg Config) []Finding {
 			origin = fmt.Sprintf("grew from %d", was)
 		}
 		out = append(out, Finding{
-			Severity: SeverityMedium, File: f.File, Line: f.Line, Func: f.Qualified(),
+			Severity: SeverityMedium, File: f.File, Line: f.Line, Func: f.Name,
 			Message: fmt.Sprintf("%s has cyclomatic complexity %d (%s; limit %d): %s",
-				f.Qualified(), f.Complexity, origin, cfg.MaxFunctionComplexity, splitAdvice),
+				f.Name, f.Complexity, origin, cfg.MaxFunctionComplexity, splitAdvice),
 		})
 	}
 	return out
@@ -151,7 +155,7 @@ func cloneFindings(before, after Report, changed []Function) []Finding {
 	}
 	touched := map[string]bool{}
 	for _, f := range changed {
-		touched[f.File+"|"+f.Qualified()] = true
+		touched[f.File+"|"+f.Name] = true
 	}
 	var out []Finding
 	for _, c := range after.Clones {
@@ -175,7 +179,7 @@ func worstList(r Report) string {
 	worst := r.Worst(3)
 	parts := make([]string, 0, len(worst))
 	for _, f := range worst {
-		parts = append(parts, fmt.Sprintf("%s (%s, complexity %d)", f.Qualified(), locationOf(f), f.Complexity))
+		parts = append(parts, fmt.Sprintf("%s (%s, complexity %d)", f.Name, locationOf(f), f.Complexity))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -188,7 +192,8 @@ func locationOf(f Function) string { return fmt.Sprintf("%s:%d", f.File, f.Line)
 // Summary is a change's before and after, for display and for the status
 // JSON.
 type Summary struct {
-	// Measured is false when the project has no Go, so there is nothing to say.
+	// Measured is false when nothing in the project could be measured, so there
+	// is nothing to say.
 	Measured                                bool
 	ErosionBefore, ErosionAfter             float64
 	Limit                                   int
@@ -215,7 +220,7 @@ func Summarize(before, after Report, findings []Finding) Summary {
 // Line is the one-line account shown with every run.
 func (s Summary) Line() string {
 	if !s.Measured {
-		return "not measured (no Go code)"
+		return "not measured (no supported code found)"
 	}
 	return fmt.Sprintf("erosion %.1f%% → %.1f%% · functions over %d: %d → %d · clone lines %d → %d",
 		s.ErosionBefore, s.ErosionAfter, s.Limit, s.OverThresholdBefore, s.OverThresholdAfter, s.CloneLinesBefore, s.CloneLinesAfter)

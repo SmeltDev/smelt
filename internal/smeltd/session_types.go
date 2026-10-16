@@ -210,10 +210,13 @@ type FactoryQuality struct {
 
 // QualityFunction is one function of a FactoryQuality.
 type QualityFunction struct {
-	Func  string `json:"func"`
-	File  string `json:"file"`
-	CC    int    `json:"cc"`
-	Lines int    `json:"lines"`
+	Func string `json:"func"`
+	File string `json:"file"`
+	// Language is the function's language, as the metrics provider names it;
+	// absent for runs from before smelt measured every language.
+	Language string `json:"language,omitempty"`
+	CC       int    `json:"cc"`
+	Lines    int    `json:"lines"`
 }
 
 // FactoryRun is what a factory session works on and where its work is.

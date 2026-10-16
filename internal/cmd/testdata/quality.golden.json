@@ -8,12 +8,14 @@
     {
       "func": "Classify",
       "file": "shape.go",
+      "language": "go",
       "cc": 14,
       "lines": 28
     },
     {
       "func": "Add",
       "file": "shape.go",
+      "language": "go",
       "cc": 1,
       "lines": 3
     }

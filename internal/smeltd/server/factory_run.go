@@ -639,7 +639,7 @@ func wireQuality(q *quality.Summary) *smeltd.FactoryQuality {
 		CloneLinesBefore: q.CloneLinesBefore, CloneLinesAfter: q.CloneLinesAfter,
 	}
 	for _, f := range q.Worst {
-		out.Worst = append(out.Worst, smeltd.QualityFunction{Func: f.Qualified(), File: f.File, CC: f.Complexity, Lines: f.Lines})
+		out.Worst = append(out.Worst, smeltd.QualityFunction{Func: f.Name, File: f.File, Language: f.Language, CC: f.Complexity, Lines: f.Lines})
 	}
 	return out
 }

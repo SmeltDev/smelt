@@ -10,10 +10,10 @@ COPY --chown=circleci Cargo.lock Cargo.toml /tmp/smelt-deps/
 COPY --chown=circleci crates/a/Cargo.toml /tmp/smelt-deps/crates/a/
 RUN cd /tmp/smelt-deps && find . -name Cargo.toml -execdir sh -c 'mkdir -p src && touch src/lib.rs' \; && cargo fetch --locked && rm -rf /tmp/smelt-deps
 
-# --- smelt agent kit (v3) -------------------------------------------------
+# --- smelt agent kit (v4) -------------------------------------------------
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git coreutils procps ca-certificates curl bash \
+      git coreutils procps ca-certificates curl bash python3 python3-venv \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system safe.directory '*'
 USER circleci
@@ -46,5 +46,16 @@ RUN set -e; \
     mv "/tmp/${name}" "$HOME/.local/bin/codex-code-mode-host"; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex-code-mode-host"
-LABEL smelt.harnesses=claude,codex smelt.kit=3
+RUN set -e; \
+    if ! command -v python3 >/dev/null 2>&1; then \
+      echo "warning: python3 is missing, so lizard is not installed and code quality is not measured" >&2; exit 0; \
+    fi; \
+    python3 -m venv "$HOME/.local/share/smelt-tools"; \
+    printf '%s\n' 'lizard==1.24.1 --hash=sha256:746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c' 'pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9' 'pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189' > /tmp/lizard-requirements.txt; \
+    "$HOME/.local/share/smelt-tools/bin/pip" install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/lizard-requirements.txt; \
+    rm -f /tmp/lizard-requirements.txt; \
+    mkdir -p "$HOME/.local/bin"; \
+    ln -sf "$HOME/.local/share/smelt-tools/bin/lizard" "$HOME/.local/bin/lizard"; \
+    lizard --version
+LABEL smelt.harnesses=claude,codex smelt.kit=4
 CMD ["sleep", "infinity"]

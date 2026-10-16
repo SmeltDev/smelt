@@ -67,9 +67,37 @@ func TestDockerfileLocalCarriesTheKitsCodexBlock(t *testing.T) {
 	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex"))
 }
 
+func TestDockerfileLocalCarriesTheKitsLizardBlock(t *testing.T) {
+	local, err := os.ReadFile("../../Dockerfile.local")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(string(local), KitLizard()))
+	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
+	assert.Check(t, cmp.Contains(string(local), "python3-venv"))
+}
+
+// lizard is installed from hash-pinned wheels into a venv of its own, and an
+// image without python3 skips the step.
+func TestKitInstallsAPinnedLizard(t *testing.T) {
+	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
+	assert.Check(t, cmp.Contains(got, KitLizard()))
+	assert.Check(t, cmp.Contains(got, "python3 python3-venv"))
+	assert.Check(t, cmp.Contains(got, "lizard=="+LizardVersion+" --hash=sha256:"))
+	assert.Check(t, cmp.Contains(got, "pip\" install --no-cache-dir --require-hashes"))
+	assert.Check(t, cmp.Contains(got, `python3 -m venv "$HOME/.local/share/smelt-tools"`))
+	assert.Check(t, cmp.Contains(got, `ln -sf "$HOME/.local/share/smelt-tools/bin/lizard" "$HOME/.local/bin/lizard"`))
+	assert.Check(t, cmp.Contains(got, "python3 is missing"))
+	sha := regexp.MustCompile(`--hash=sha256:[0-9a-f]{64}'`)
+	reqs := lizardRequirements()
+	assert.Check(t, cmp.Len(sha.FindAllString(KitLizard(), -1), len(reqs)))
+	for _, r := range reqs {
+		assert.Check(t, sha.MatchString(r+"'"), r)
+		assert.Check(t, cmp.Contains(r, "=="), "every requirement is pinned: %s", r)
+	}
+}
+
 func TestKitInstallsTheCodexCommandHost(t *testing.T) {
 	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, "(v3)"))
+	assert.Check(t, cmp.Contains(got, "(v4)"))
 	assert.Check(t, cmp.Contains(got, `name="codex-code-mode-host-${arch}-unknown-linux-musl"`))
 	assert.Check(t, cmp.Contains(got, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
 	assert.Check(t, cmp.Equal(strings.Count(got, "sha256sum -c -"), 2))

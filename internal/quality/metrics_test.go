@@ -1,185 +1,128 @@
 package quality
 
 import (
-	"fmt"
-	"math"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 )
 
-func fixture(t *testing.T) File {
-	t.Helper()
-	b, err := os.ReadFile("testdata/complexity.go")
-	assert.NilError(t, err)
-	// Measure skips testdata, so the fixture is measured under another path.
-	return File{Path: "fixture/complexity.go", Content: b}
+// body is n lines of source, so a function at 1..n has something to hash.
+func body(n int, word string) []byte {
+	return []byte(strings.Repeat(word+"\n", n))
 }
 
-// wantComplexity are the complexities gocyclo reports for testdata/complexity.go,
-// computed once and checked in.
-var wantComplexity = map[string]int{
-	"empty":      1,
-	"ifs":        3,
-	"loops":      5,
-	"switches":   3,
-	"typeSwitch": 3,
-	"selects":    3,
-	"logic":      3,
-	"closure":    4,
-	"T.method":   2,
-	"G.get":      2,
+func cfn(file, name, lang string, start, end, cc, lines int) ContractFunction {
+	return ContractFunction{File: file, Name: name, Language: lang, Start: start, End: end, Complexity: cc, Lines: lines}
 }
 
-func TestComplexityMatchesGocyclo(t *testing.T) {
-	rep := Measure([]File{fixture(t)}, Config{})
+func TestMeasureErosionAndOverThreshold(t *testing.T) {
+	c := Contract{
+		Languages: []string{"go"},
+		Functions: []ContractFunction{cfn("a.go", "small", "go", 1, 4, 2, 4), cfn("a.go", "busy", "go", 5, 24, 16, 16)},
+	}
+	rep := Measure(c, []File{{Path: "a.go", Content: body(30, "x")}}, Config{})
 	assert.Assert(t, rep.Measured)
-	got := map[string]int{}
-	inits := []int{}
-	for _, fn := range rep.Functions {
-		if fn.Name == "init" {
-			inits = append(inits, fn.Complexity)
-			continue
-		}
-		got[fn.Qualified()] = fn.Complexity
-	}
-	assert.DeepEqual(t, got, wantComplexity)
-	assert.DeepEqual(t, inits, []int{1, 2})
+	assert.Equal(t, rep.OverThreshold, 1)
+	assert.Equal(t, rep.Limit, DefaultMaxFunctionComplexity)
+	// weights: 2*2=4 and 16*4=64; only "busy" is above 10.
+	assert.Assert(t, rep.Erosion > 94.1 && rep.Erosion < 94.2, rep.Erosion)
+	assert.Equal(t, rep.Worst(1)[0].Name, "busy")
+	assert.Assert(t, rep.Functions[0].Hash != "")
 }
 
-func TestInitFunctionsHaveDistinctKeys(t *testing.T) {
-	rep := Measure([]File{fixture(t)}, Config{})
-	keys := map[string]bool{}
-	for _, fn := range rep.Functions {
-		assert.Assert(t, !keys[fn.Key()], "duplicate key %s", fn.Key())
-		keys[fn.Key()] = true
+func TestMeasureMixedLanguages(t *testing.T) {
+	c := Contract{
+		Languages: []string{"go", "python", "typescript"},
+		Functions: []ContractFunction{
+			cfn("a.go", "f", "go", 1, 5, 3, 5), cfn("b.py", "g", "python", 1, 5, 20, 5), cfn("c.ts", "h", "typescript", 1, 5, 1, 5),
+		},
 	}
+	src := []File{{Path: "a.go", Content: body(5, "a")}, {Path: "b.py", Content: body(5, "b")}, {Path: "c.ts", Content: body(5, "c")}}
+	rep := Measure(c, src, Config{MaxFunctionComplexity: 10})
+	assert.Equal(t, len(rep.Functions), 3)
+	assert.Equal(t, rep.OverThreshold, 1)
+	assert.Equal(t, rep.Functions[1].Language, "python")
 }
 
-// TestComplexityAgreesWithInstalledGocyclo checks the table against the real
-// tool when it is on the PATH.
-func TestComplexityAgreesWithInstalledGocyclo(t *testing.T) {
-	bin, err := exec.LookPath("gocyclo")
-	if err != nil {
-		t.Skip("gocyclo is not installed")
-	}
-	out, err := exec.Command(bin, "testdata/complexity.go").Output()
-	assert.NilError(t, err)
-	byLine := map[int]int{}
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		var cc, line int
-		var pkg, name, file string
-		_, err := fmt.Sscanf(strings.ReplaceAll(l, ":", " "), "%d %s %s %s %d", &cc, &pkg, &name, &file, &line)
-		assert.NilError(t, err, l)
-		byLine[line] = cc
-	}
-	for _, fn := range Measure([]File{fixture(t)}, Config{}).Functions {
-		assert.Equal(t, fn.Complexity, byLine[fn.Line], "%s at line %d", fn.Qualified(), fn.Line)
-	}
-}
-
-// funcWithIfs is the source of a function with n ifs, each two lines, so that
-// its complexity is n+1 and its body is 2n+2 lines.
-func funcWithIfs(name string, n int) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "func %s(x int) {\n", name)
-	for range n {
-		b.WriteString("\tif x > 0 {\n\t}\n")
-	}
-	b.WriteString("}\n")
-	return b.String()
-}
-
-func TestErosion(t *testing.T) {
-	src := "package p\n\n" + funcWithIfs("big", 10) + "\n" + funcWithIfs("small", 1) + "\n" + funcWithIfs("edge", 9)
-	rep := Measure([]File{{Path: "p.go", Content: []byte(src)}}, Config{})
-	byName := map[string]Function{}
-	for _, fn := range rep.Functions {
-		byName[fn.Name] = fn
-	}
-	// big: cc 11, 22 body lines. small: cc 2, 4 lines. edge: cc 10, 20 lines,
-	// which is not above 10.
-	assert.Equal(t, byName["big"].Complexity, 11)
-	assert.Equal(t, byName["big"].Lines, 22)
-	assert.Equal(t, byName["small"].Lines, 4)
-	assert.Equal(t, byName["edge"].Complexity, 10)
-	bigW := 11 * math.Sqrt(22)
-	total := bigW + 2*math.Sqrt(4) + 10*math.Sqrt(20)
-	want := 100 * bigW / total
-	assert.Assert(t, math.Abs(rep.Erosion-want) < 1e-9, "got %v want %v", rep.Erosion, want)
-	// 51.59 / (51.59 + 4 + 44.72)
-	assert.Assert(t, math.Abs(rep.Erosion-51.43) < 0.01, "got %v", rep.Erosion)
-}
-
-func TestErosionOfNothingIsZero(t *testing.T) {
-	rep := Measure([]File{{Path: "p.go", Content: []byte("package p\n")}}, Config{})
-	assert.Assert(t, rep.Measured)
-	assert.Equal(t, rep.Erosion, 0.0)
-}
-
-func TestBodyLinesExcludeSignatureAndDoc(t *testing.T) {
-	src := "package p\n\n// Doc line one\n// Doc line two\nfunc f(\n\ta int,\n\tb int,\n) {\n\t_ = a\n\t_ = b\n}\n"
-	fn := Measure([]File{{Path: "p.go", Content: []byte(src)}}, Config{}).Functions[0]
-	assert.Equal(t, fn.Lines, 4)
-	assert.Equal(t, fn.Line, 5)
-}
-
-func TestOverThresholdCountsAboveTheLimit(t *testing.T) {
-	src := "package p\n\n" + funcWithIfs("a", 14) + funcWithIfs("b", 15) + funcWithIfs("c", 3)
-	files := []File{{Path: "p.go", Content: []byte(src)}}
-	rep := Measure(files, Config{})
-	assert.Equal(t, rep.Limit, 15)
-	assert.Equal(t, rep.OverThreshold, 1) // b: 16
-	assert.Equal(t, Measure(files, Config{MaxFunctionComplexity: 4}).OverThreshold, 2)
-}
-
-func TestExclusions(t *testing.T) {
-	big := []byte("package p\n\n" + funcWithIfs("f", 12))
-	generated := append([]byte("// Code generated by tool; DO NOT EDIT.\n\n"), big...)
-	files := []File{
-		{Path: "a_test.go", Content: big},
-		{Path: "testdata/a.go", Content: big},
-		{Path: "x/testdata/a.go", Content: big},
-		{Path: "vendor/a.go", Content: big},
-		{Path: "x/vendor/y/a.go", Content: big},
-		{Path: "gen.go", Content: generated},
-		{Path: "README.md", Content: big},
-		{Path: "kept.go", Content: big},
-		{Path: "testdatum/kept.go", Content: big},
-	}
-	rep := Measure(files, Config{})
-	var paths []string
-	for _, fn := range rep.Functions {
-		paths = append(paths, fn.File)
-	}
-	assert.DeepEqual(t, paths, []string{"kept.go", "testdatum/kept.go"})
-}
-
-func TestProjectWithoutGoIsNotMeasured(t *testing.T) {
-	rep := Measure([]File{{Path: "main.py", Content: []byte("print(1)")}, {Path: "a.go.txt"}}, Config{})
+func TestMeasureEmptyContractIsNotMeasured(t *testing.T) {
+	rep := Measure(Contract{}, nil, Config{})
 	assert.Assert(t, !rep.Measured)
-	assert.Equal(t, len(rep.Functions), 0)
+	assert.Equal(t, rep.Erosion, 0.0)
+	assert.Equal(t, Summarize(rep, rep, nil).Line(), "not measured (no supported code found)")
 }
 
-func TestUnparsedFilesAreListedAndLeftOut(t *testing.T) {
-	rep := Measure([]File{
-		{Path: "bad.go", Content: []byte("package p\nfunc (")},
-		{Path: "ok.go", Content: []byte("package p\nfunc f() {}\n")},
-	}, Config{})
-	assert.DeepEqual(t, rep.Unparsed, []string{"bad.go"})
-	assert.Equal(t, len(rep.Functions), 1)
-}
-
-func TestWorstOrdersByComplexityThenLength(t *testing.T) {
-	src := "package p\n\n" + funcWithIfs("a", 2) + funcWithIfs("b", 5) + funcWithIfs("c", 2)
-	rep := Measure([]File{{Path: "p.go", Content: []byte(src)}}, Config{})
-	var names []string
-	for _, fn := range rep.Worst(2) {
-		names = append(names, fn.Name)
+func TestMeasureLeavesOutExcludedAndGeneratedFiles(t *testing.T) {
+	c := Contract{Languages: []string{"go"}, Functions: []ContractFunction{
+		cfn("keep.go", "k", "go", 1, 3, 4, 3),
+		cfn("vendor/x/x.go", "v", "go", 1, 3, 4, 3),
+		cfn("gen.go", "g", "go", 1, 3, 4, 3),
+		cfn("api/skip.go", "s", "go", 1, 3, 4, 3),
+	}}
+	src := []File{
+		{Path: "keep.go", Content: body(3, "k")},
+		{Path: "vendor/x/x.go", Content: body(3, "v")},
+		{Path: "gen.go", Content: []byte("// Code generated by x. DO NOT EDIT.\n\n\n")},
+		{Path: "api/skip.go", Content: body(3, "s")},
 	}
-	assert.DeepEqual(t, names, []string{"b", "a"})
-	assert.Equal(t, len(rep.Worst(10)), 3)
+	rep := Measure(c, src, Config{Exclude: ExcludeConfig{Exclude: []string{"api/**"}}})
+	assert.Equal(t, len(rep.Functions), 1)
+	assert.Equal(t, rep.Functions[0].File, "keep.go")
+	assert.Equal(t, len(rep.NotMeasured), 0)
+}
+
+func TestMeasureReportsAFileWithoutSourceAsNotMeasured(t *testing.T) {
+	c := Contract{Languages: []string{"go"}, Functions: []ContractFunction{cfn("a.go", "f", "go", 1, 3, 4, 3), cfn("a.go", "g", "go", 4, 6, 4, 3)}}
+	rep := Measure(c, nil, Config{})
+	assert.Equal(t, len(rep.Functions), 0)
+	assert.DeepEqual(t, rep.NotMeasured, []string{"a.go (source not available)"})
+	assert.Assert(t, rep.Measured)
+}
+
+func TestMeasureCountsCloneLinesOncePerExtraCopy(t *testing.T) {
+	src := []File{{Path: "a.py", Content: body(40, "same")}, {Path: "b.py", Content: body(40, "same")}}
+	c := Contract{
+		Languages: []string{"python"},
+		Functions: []ContractFunction{cfn("b.py", "f", "python", 1, 40, 1, 40)},
+		Clones: []ContractClone{
+			{Lines: 20, Locations: []Location{{File: "b.py", Start: 5, End: 24}, {File: "a.py", Start: 1, End: 20}}},
+			{Lines: 5, Locations: []Location{{File: "a.py", Start: 30, End: 34}, {File: "b.py", Start: 30, End: 34}}},
+		},
+	}
+	rep := Measure(c, src, Config{})
+	// The second block is under the 15-line minimum; of the first, b.py's copy
+	// is the extra one, as a.py sorts first.
+	assert.Equal(t, rep.CloneLines, 20)
+	assert.Equal(t, len(rep.Clones), 1)
+	assert.Equal(t, rep.Clones[0].File, "b.py")
+	assert.Equal(t, rep.Clones[0].Func, "f")
+	assert.Equal(t, rep.Clones[0].Lines, 20)
+	assert.Assert(t, rep.Clones[0].Sig != 0)
+
+	rep = Measure(c, src, Config{MinCloneLines: 5})
+	assert.Equal(t, rep.CloneLines, 25)
+}
+
+func TestMeasureDropsAClonesLocationsInExcludedFiles(t *testing.T) {
+	src := []File{{Path: "a.py", Content: body(30, "same")}, {Path: "tests/b.py", Content: body(30, "same")}}
+	c := Contract{Languages: []string{"python"}, Clones: []ContractClone{
+		{Lines: 20, Locations: []Location{{File: "a.py", Start: 1, End: 20}, {File: "tests/b.py", Start: 1, End: 20}}},
+	}}
+	assert.Equal(t, Measure(c, src, Config{}).CloneLines, 0)
+}
+
+func TestKeysAreUniqueWithinAFile(t *testing.T) {
+	c := Contract{Functions: []ContractFunction{cfn("a.go", "init", "go", 1, 2, 1, 2), cfn("a.go", "init", "go", 3, 4, 1, 2)}}
+	rep := Measure(c, []File{{Path: "a.go", Content: body(5, "x")}}, Config{})
+	assert.Assert(t, rep.Functions[0].Key() != rep.Functions[1].Key())
+}
+
+func TestChangedFunctionsUsesTheSourceHash(t *testing.T) {
+	c := Contract{Functions: []ContractFunction{cfn("a.py", "f", "python", 1, 3, 2, 3)}}
+	before := Measure(c, []File{{Path: "a.py", Content: []byte("def f(x):\n    return x\n\n")}}, Config{})
+	renamed := Contract{Functions: []ContractFunction{cfn("a.py", "f", "python", 1, 3, 2, 3)}}
+	same := Measure(renamed, []File{{Path: "a.py", Content: []byte("def f(x):\n        return x\n\n")}}, Config{})
+	assert.Equal(t, len(ChangedFunctions(before, same)), 0, "re-indenting is not a change")
+	edited := Measure(c, []File{{Path: "a.py", Content: []byte("def f(x):\n    return x + 1\n\n")}}, Config{})
+	assert.Equal(t, len(ChangedFunctions(before, edited)), 1)
 }

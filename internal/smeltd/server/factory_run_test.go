@@ -701,7 +701,7 @@ func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
 	sum := quality.Summary{
 		Measured: true, Limit: 15, ErosionBefore: 27.3, ErosionAfter: 27.1,
 		OverThresholdBefore: 14, OverThresholdAfter: 14, CloneLinesBefore: 120, CloneLinesAfter: 118,
-		Worst: []quality.Function{{File: "a.go", Receiver: "T", Name: "run", Complexity: 22, Lines: 80}},
+		Worst: []quality.Function{{File: "a.go", Name: "T.run", Language: "go", Complexity: 22, Lines: 80}},
 	}
 	check := factory.FromQuality(sum, 0, nil)
 	rec.event(factory.Event{Kind: factory.EventChecking, Round: 1})
@@ -717,7 +717,7 @@ func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(b), `{"line":"erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 118",`+
 		`"erosion_before":27.3,"erosion_after":27.1,"over_threshold_before":14,"over_threshold_after":14,`+
-		`"clone_lines_before":120,"clone_lines_after":118,"worst":[{"func":"T.run","file":"a.go","cc":22,"lines":80}]}`)
+		`"clone_lines_before":120,"clone_lines_after":118,"worst":[{"func":"T.run","file":"a.go","language":"go","cc":22,"lines":80}]}`)
 
 	rec.finish(factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1, Checks: []factory.Check{check}}}, nil)
 	assert.Equal(t, entry.snapshot().Factory.Quality.ErosionAfter, 27.1)

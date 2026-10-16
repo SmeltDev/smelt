@@ -1,0 +1,6 @@
+4,2,12,1,4,"g@4-7@app/generated.py","app/generated.py","g","g( x )",4,7
+27,20,143,1,27,"classify@4-30@app/orders.py","app/orders.py","classify","classify( order )",4,30
+18,6,94,1,18,"total_for_cart@33-50@app/orders.py","app/orders.py","total_for_cart","total_for_cart( items )",33,50
+18,6,94,1,18,"total_for_quote@53-70@app/orders.py","app/orders.py","total_for_quote","total_for_quote( items )",53,70
+2,1,9,1,2,"short@73-74@app/orders.py","app/orders.py","short","short( x )",73,74
+2,1,11,0,2,"test_short@4-5@tests/test_orders.py","tests/test_orders.py","test_short","test_short( )",4,5

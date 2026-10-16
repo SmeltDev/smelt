@@ -8,7 +8,7 @@ import (
 )
 
 func fn(file, name string, cc int, hash string) Function {
-	return Function{File: file, Name: name, Line: 10, Complexity: cc, Lines: 20, BodyHash: hash}
+	return Function{File: file, Name: name, Line: 10, Complexity: cc, Lines: 20, Hash: hash}
 }
 
 func report(erosion float64, fns ...Function) Report {
@@ -125,14 +125,6 @@ func TestChangedFunctions(t *testing.T) {
 	assert.DeepEqual(t, names, []string{"a.go:edited", "a.go:added", "b.go:same"})
 }
 
-func TestChangedIgnoresRenamedVariables(t *testing.T) {
-	a := Measure([]File{{Path: "p.go", Content: []byte("package p\nfunc f(x int) int {\n\treturn x + 1\n}\n")}}, Config{})
-	b := Measure([]File{{Path: "p.go", Content: []byte("package p\nfunc f(y int) int {\n\treturn y + 2\n}\n")}}, Config{})
-	c := Measure([]File{{Path: "p.go", Content: []byte("package p\nfunc f(y int) int {\n\tif y > 0 {\n\t\treturn y\n\t}\n\treturn y + 2\n}\n")}}, Config{})
-	assert.Equal(t, len(ChangedFunctions(a, b)), 0)
-	assert.Equal(t, len(ChangedFunctions(a, c)), 1)
-}
-
 func TestSummaryLineAndFailing(t *testing.T) {
 	before, after := report(27.3), report(27.1)
 	before.OverThreshold, after.OverThreshold = 14, 14
@@ -142,7 +134,7 @@ func TestSummaryLineAndFailing(t *testing.T) {
 	assert.Equal(t, sum.Line(), "erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 120")
 	assert.Equal(t, len(sum.Failing()), 1)
 	assert.Equal(t, sum.Failing()[0].Message, "m")
-	assert.Equal(t, Summarize(Report{}, Report{}, nil).Line(), "not measured (no Go code)")
+	assert.Equal(t, Summarize(Report{}, Report{}, nil).Line(), "not measured (no supported code found)")
 }
 
 func TestConfigDefaults(t *testing.T) {

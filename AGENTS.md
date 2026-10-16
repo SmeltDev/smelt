@@ -15,7 +15,7 @@ task build              # Build binary → dist/smelt
 task test               # Run all tests
 task acceptance-test    # Run acceptance tests
 task upstream:check    # List upstream (the fork's origin) commits since the one recorded in UPSTREAM.md
-task lint               # Run linters, shellcheck on install.sh and scripts/upstream-check.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
+task lint               # Run linters, shellcheck on install.sh, scripts/upstream-check.sh and scripts/capture-lizard-fixtures.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
 task fmt                # Format code
 ```
 

@@ -124,11 +124,11 @@ tasks:
       - go mod download -x
 
   lint:shell:
-    desc: Run shellcheck on install.sh and scripts/upstream-check.sh (skipped with a notice when shellcheck is not installed)
+    desc: Run shellcheck on install.sh, scripts/upstream-check.sh and scripts/capture-lizard-fixtures.sh (skipped with a notice when shellcheck is not installed)
     cmds:
       - |
         if command -v shellcheck >/dev/null 2>&1; then
-          shellcheck install.sh scripts/upstream-check.sh
+          shellcheck install.sh scripts/upstream-check.sh scripts/capture-lizard-fixtures.sh
         else
           echo "shellcheck not installed; skipping shell lint" >&2
         fi
