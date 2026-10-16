@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "patterns": [
+    {
+      "name": "lonely-interface",
+      "area": "maintainability",
+      "definition": "An interface with one implementation and no test seam.",
+      "severity": "medium",
+      "applies_to": [
+        "go",
+        "python",
+        "typescript",
+        "rust",
+        "java",
+        "csharp",
+        "kotlin",
+        "scala",
+        "swift",
+        "php"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "single-case-dispatch",
+      "area": "maintainability",
+      "definition": "A `switch` or lookup table that has one real case, or a registry with one entry, added for variants that do not exist.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "trivial-wrapper",
+      "area": "maintainability",
+      "definition": "A function that only forwards to another with the same arguments and adds nothing.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "growing-dispatch",
+      "area": "maintainability",
+      "definition": "Another branch added to a function that is already long and branchy, instead of extracting the new case.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "narration-comment",
+      "area": "maintainability",
+      "definition": "A comment that restates the next line instead of giving the reason for it.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "echo-doc-comment",
+      "area": "maintainability",
+      "definition": "A doc comment that repeats the identifier's name and adds nothing.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "stringly-state",
+      "area": "maintainability",
+      "definition": "State or a closed set of options held in bare strings that are compared in several places.",
+      "severity": "low",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    },
+    {
+      "name": "bool-for-error",
+      "area": "maintainability",
+      "definition": "A function that returns `bool` where the caller needs to know why it failed, or that signals failure with a magic value.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {}
+    }
+  ]
+}

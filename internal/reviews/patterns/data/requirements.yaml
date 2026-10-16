@@ -1,0 +1,74 @@
+area: requirements
+patterns:
+  - name: unrequested-feature
+    definition: A flag, config key, command or behaviour the request did not ask for.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          a request to retry a failed upload, and the change also adds a `--retry-delay` flag and a `retryDelay` config key.
+        isnt: >-
+          a small unexported helper or constant that the requested behaviour needs.
+      python:
+        is: >-
+          a request to retry a failed upload, and the change also adds a `--retry-delay` option to the argparse parser and a `retry_delay` setting.
+        isnt: >-
+          a private `_backoff()` helper the requested retry needs.
+      typescript:
+        is: >-
+          a request to retry a failed upload, and the change also exports a `retryDelay` field on the public `UploadOptions` interface.
+        isnt: >-
+          a module-private `const MAX_ATTEMPTS = 3` that the retry loop needs.
+      rust:
+        is: >-
+          a request to retry a failed upload, and the change also adds a `--retry-delay` clap argument and a public `with_retry_delay` builder method.
+        isnt: >-
+          a private `fn backoff(attempt: u32) -> Duration` that the retry needs.
+  - name: excluded-case-handling
+    definition: Code that handles inputs the request rules out, adding branches and tests nobody asked for.
+    severity: low
+    examples:
+      go:
+        is: >-
+          the request says "the repository always has an `origin` remote", and the change adds a fallback that searches the other remotes.
+        isnt: >-
+          validating a flag or a file the user supplies, even if the request does not mention it.
+      python:
+        is: >-
+          the request says "`items` is never empty", and the change adds `if not items: return []` plus a test for it.
+        isnt: >-
+          checking that a path read from the command line exists before opening it.
+      typescript:
+        is: >-
+          the request says the API always returns an `id`, and the change adds `if (!res.id) { ... }` branches and tests for a missing one.
+        isnt: >-
+          parsing untrusted JSON from a request body before using it.
+      rust:
+        is: >-
+          the request says the config is always valid UTF-8, and the change adds a lossy-decoding branch and a test for invalid bytes.
+        isnt: >-
+          returning an error for a CLI argument that fails to parse.
+  - name: stub-remnant
+    definition: A placeholder standing in for behaviour the request asks for.
+    severity: high
+    examples:
+      go:
+        is: >-
+          `func (r *Relay) Push(ctx context.Context) error { return nil } // TODO` where the request needs a push, or a function that returns a canned value.
+        isnt: >-
+          a `// TODO(#123)` pointing at a linked issue, for work the request explicitly defers.
+      python:
+        is: >-
+          `def push(self): pass  # TODO` or `raise NotImplementedError` on a path the request needs, or a function that returns a hard-coded value.
+        isnt: >-
+          an abstract method that raises `NotImplementedError` because every subclass overrides it.
+      typescript:
+        is: >-
+          `async push(): Promise<void> { /* TODO */ }` or `throw new Error("not implemented")` where the request needs a push.
+        isnt: >-
+          a `// TODO(#123)` pointing at a linked issue, for work the request explicitly defers.
+      rust:
+        is: >-
+          `fn push(&self) -> Result<()> { todo!() }` or `unimplemented!()` on a path the request needs, or `Ok(())` returned without doing the work.
+        isnt: >-
+          a `todo!()` in a branch the request explicitly defers, with a linked issue in the comment.

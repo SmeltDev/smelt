@@ -1,0 +1,195 @@
+area: maintainability
+patterns:
+  - name: lonely-interface
+    definition: An interface with one implementation and no test seam.
+    severity: medium
+    applies_to: [go, python, typescript, rust, java, csharp, kotlin, scala, swift, php]
+    examples:
+      go:
+        is: >-
+          `type Formatter interface{ Format(Report) string }` with a single `textFormatter`, used only inside the package.
+        isnt: >-
+          an interface that a test fake implements, or one a second backend already implements.
+      python:
+        is: >-
+          an abstract base class or `typing.Protocol` `Formatter` with one subclass `TextFormatter`, used only inside the module.
+        isnt: >-
+          a `Protocol` that a test fake satisfies, or one a second backend already implements.
+      typescript:
+        is: >-
+          `interface Formatter { format(r: Report): string }` with a single `class TextFormatter implements Formatter`, used only inside the module.
+        isnt: >-
+          an interface that a test double implements, or one a second backend already implements.
+      rust:
+        is: >-
+          `trait Formatter { fn format(&self, r: &Report) -> String; }` with a single `impl Formatter for TextFormatter`, used only inside the crate.
+        isnt: >-
+          a trait that a test fake implements, or one a second backend already implements.
+  - name: single-case-dispatch
+    definition: A `switch` or lookup table that has one real case, or a registry with one entry, added for variants that do not exist.
+    severity: low
+    examples:
+      go:
+        is: >-
+          `switch kind { case kindText: return renderText(r) }` with no other kinds anywhere.
+        isnt: >-
+          a switch over a closed set of values the code already has, such as the backends of a daemon.
+      python:
+        is: >-
+          `RENDERERS = {"text": render_text}` looked up by a `kind` argument that only ever receives `"text"`.
+        isnt: >-
+          a `match` over an `Enum` whose members all have behaviour in the code today.
+      typescript:
+        is: >-
+          `switch (kind) { case "text": return renderText(r) }` with no other kinds anywhere.
+        isnt: >-
+          a `switch` over a union type whose every member the code already produces.
+      rust:
+        is: >-
+          `match kind { Kind::Text => render_text(r) }` over an enum with a single variant added for ones that do not exist.
+        isnt: >-
+          a `match` over an enum whose variants the code already constructs.
+  - name: trivial-wrapper
+    definition: A function that only forwards to another with the same arguments and adds nothing.
+    severity: low
+    examples:
+      go:
+        is: >-
+          `func runGit(ctx context.Context, dir string, args ...string) (string, error) { return gitexec.New(dir).Run(ctx, args...) }` next to callers that could call the runner.
+        isnt: >-
+          a wrapper that fixes a flag, adds error context, or hides a package that callers should not import.
+      python:
+        is: >-
+          `def run_git(*args): return subprocess_runner.run("git", *args)` next to callers that could call the runner.
+        isnt: >-
+          a wrapper that fixes `check=True`, adds error context, or hides a module callers should not import.
+      typescript:
+        is: >-
+          `export const runGit = (...args: string[]) => runner.run("git", ...args)` next to callers that could call the runner.
+        isnt: >-
+          a wrapper that fixes an option, adds error context, or hides a package callers should not import.
+      rust:
+        is: >-
+          `fn run_git(args: &[&str]) -> Result<String> { runner.run("git", args) }` next to callers that could call the runner.
+        isnt: >-
+          a wrapper that fixes an argument, adds `.context(...)`, or hides a crate callers should not depend on.
+  - name: growing-dispatch
+    definition: Another branch added to a function that is already long and branchy, instead of extracting the new case.
+    severity: low
+    examples:
+      go:
+        is: >-
+          a new `if opts.X { ... }` block inside a command builder that is already close to the `gocyclo` limit.
+        isnt: >-
+          a branch in a short function, or a change that extracts a helper and calls it once.
+      python:
+        is: >-
+          another `elif kind == "x":` arm in a 150-line `handle()` that already has a dozen of them.
+        isnt: >-
+          a branch in a short function, or a change that moves the new case into its own function and calls it.
+      typescript:
+        is: >-
+          another `case "x":` with an inline body in a `switch` that is already hundreds of lines long.
+        isnt: >-
+          a branch in a short function, or a case that only calls a new helper.
+      rust:
+        is: >-
+          another `Kind::X => { ... }` arm with an inline body in a `match` that is already hundreds of lines long.
+        isnt: >-
+          a branch in a short function, or an arm that only calls a new function.
+  - name: narration-comment
+    definition: A comment that restates the next line instead of giving the reason for it.
+    severity: low
+    examples:
+      go:
+        is: >-
+          `// loop over the sidecars` above `for _, s := range sidecars {`.
+        isnt: >-
+          `// Close in reverse order: the relay must outlive the pool.`
+      python:
+        is: >-
+          `# loop over the sidecars` above `for s in sidecars:`.
+        isnt: >-
+          `# Close in reverse order: the relay must outlive the pool.`
+      typescript:
+        is: >-
+          `// loop over the sidecars` above `for (const s of sidecars) {`.
+        isnt: >-
+          `// Close in reverse order: the relay must outlive the pool.`
+      rust:
+        is: >-
+          `// loop over the sidecars` above `for s in &sidecars {`.
+        isnt: >-
+          `// Close in reverse order: the relay must outlive the pool.`
+  - name: echo-doc-comment
+    definition: A doc comment that repeats the identifier's name and adds nothing.
+    severity: low
+    examples:
+      go:
+        is: >-
+          `// Pool is a pool.` or `// NewRelay creates a new Relay.`
+        isnt: >-
+          `// Pool runs sidecar jobs, bounded by Size; it must be closed before its temp dir is removed.`
+      python:
+        is: >-
+          `"""Pool is a pool."""` or `"""Creates a new Relay."""` on `def new_relay():`.
+        isnt: >-
+          `"""Runs sidecar jobs, bounded by size; close it before removing its temp dir."""`
+      typescript:
+        is: >-
+          `/** Pool is a pool. */` or `/** Creates a new Relay. */` above `function newRelay()`.
+        isnt: >-
+          `/** Runs sidecar jobs, bounded by size; close it before removing its temp dir. */`
+      rust:
+        is: >-
+          `/// A pool.` on `struct Pool` or `/// Creates a new relay.` on `fn new_relay()`.
+        isnt: >-
+          `/// Runs sidecar jobs, bounded by size; drop it before removing its temp dir.`
+  - name: stringly-state
+    definition: State or a closed set of options held in bare strings that are compared in several places.
+    severity: low
+    examples:
+      go:
+        is: >-
+          `if job.Status == "running" || job.Status == "pending"` repeated in three files.
+        isnt: >-
+          a string that is passed straight through to an external system and never compared, or one with a named constant like `smeltd.BackendDocker`.
+      python:
+        is: >-
+          `if job.status == "running" or job.status == "pending":` repeated in three modules.
+        isnt: >-
+          a `str` `Enum` member such as `Status.RUNNING`, or a string only passed through to another system.
+      typescript:
+        is: >-
+          `if (job.status === "running" || job.status === "pending")` repeated in three files, with `status: string`.
+        isnt: >-
+          a union type `"running" | "pending"` that the compiler checks, or a string only passed through.
+      rust:
+        is: >-
+          `if job.status == "running" || job.status == "pending"` repeated in three modules, with `status: String`.
+        isnt: >-
+          an `enum Status { Running, Pending }`, or a string only passed through to another system.
+  - name: bool-for-error
+    definition: A function that returns `bool` where the caller needs to know why it failed, or that signals failure with a magic value.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `func parseSpec(s string) (Spec, bool)` where the caller prints "invalid spec" and cannot say which part was wrong.
+        isnt: >-
+          `func (s Set) Has(x string) bool`, where false is a complete answer.
+      python:
+        is: >-
+          `def parse_spec(s): ... return None` on failure, or `return -1`, so the caller can only print "invalid spec".
+        isnt: >-
+          `def has(self, x) -> bool`, where False is a complete answer.
+      typescript:
+        is: >-
+          `function parseSpec(s: string): Spec | null` where the caller prints "invalid spec" and cannot say which part was wrong.
+        isnt: >-
+          `has(x: string): boolean`, where false is a complete answer.
+      rust:
+        is: >-
+          `fn parse_spec(s: &str) -> Option<Spec>` where the caller prints "invalid spec" and cannot say which part was wrong.
+        isnt: >-
+          `fn contains(&self, x: &str) -> bool`, where false is a complete answer.

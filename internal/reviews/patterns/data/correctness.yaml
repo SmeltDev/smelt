@@ -1,0 +1,123 @@
+area: correctness
+patterns:
+  - name: silent-fallback
+    definition: Code that turns a failure into a plausible default, so the caller carries on as if nothing went wrong.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          a readiness wait that treats every error from `client.Ping(ctx)` as "still starting" and sleeps until its deadline, so a daemon that is down looks like a slow one.
+        isnt: >-
+          a documented default for a value that is legitimately absent, such as `if cfg.Timeout == 0 { cfg.Timeout = defaultTimeout }`.
+      python:
+        is: >-
+          `try: return load(path)` with `except Exception: return {}`, so a corrupt file looks like an empty one.
+        isnt: >-
+          `os.environ.get("TIMEOUT", "30")` for an optional setting that is legitimately absent.
+      typescript:
+        is: >-
+          `const data = await fetchJson(url).catch(() => ({}))`, so a failed request looks like an empty response.
+        isnt: >-
+          `const timeout = opts.timeout ?? DEFAULT_TIMEOUT` for an optional field that was left out.
+      rust:
+        is: >-
+          `let cfg = read_config().unwrap_or_default();` where a parse error should stop the program, so a broken file silently becomes the defaults.
+        isnt: >-
+          `env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into())` for an optional setting.
+  - name: retry-hides-failure
+    definition: A retry loop that discards the first errors and reports only the last one (or none), so the original cause is lost.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `for i := 0; i < 3; i++ { if err = push(); err == nil { break } }` followed by `return errors.New("push failed")`.
+        isnt: >-
+          a retry that retries only errors known to be transient and returns `fmt.Errorf("push after %d attempts: %w", n, errors.Join(errs...))`.
+      python:
+        is: >-
+          `for _ in range(3): try: return push() except Exception: pass` followed by `raise RuntimeError("push failed")`, with no cause.
+        isnt: >-
+          a loop that retries only `ConnectionError` and finally raises `PushError(...)  from last_error`.
+      typescript:
+        is: >-
+          a `for` loop whose `catch {}` discards each error and ends in `throw new Error("push failed")`.
+        isnt: >-
+          a loop that retries only errors with `err.code === "ETIMEDOUT"` and finally throws `new AggregateError(errors, "push failed")`.
+      rust:
+        is: >-
+          `for _ in 0..3 { if push().is_ok() { return Ok(()); } }` followed by `Err(anyhow!("push failed"))`.
+        isnt: >-
+          a loop that retries only `io::ErrorKind::TimedOut` and returns the last error with `.context(format!("push after {n} attempts"))`.
+  - name: error-cause-dropped
+    definition: An error replaced by a new one that keeps no link to the original, or flattened to text where callers need to test its type or cause.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `if err != nil { return errors.New("cannot load config") }`, or `fmt.Errorf("load config: %v", err)` where a caller tests `errors.Is(err, fs.ErrNotExist)`.
+        isnt: >-
+          `fmt.Errorf("load config: %w", err)`, or a deliberate `%v` at a boundary that must not expose the inner error type, with a comment saying so.
+      python:
+        is: >-
+          `except KeyError: raise ConfigError("cannot load config")` raised without `from`, inside the handler of the error it replaces, or `raise ConfigError(str(e)) from None`.
+        isnt: >-
+          `except KeyError as e: raise ConfigError("cannot load config") from e`.
+      typescript:
+        is: >-
+          `catch (e) { throw new Error("cannot load config") }`, or `throw new Error(String(e))`, which loses the type and the stack.
+        isnt: >-
+          `catch (e) { throw new Error("cannot load config", { cause: e }) }`.
+      rust:
+        is: >-
+          `.map_err(|_| Error::Config)` or `.map_err(|e| Error::Msg(e.to_string()))`, so a caller cannot reach the source error.
+        isnt: >-
+          `.map_err(Error::Config)` with `#[source]` on the variant, or `.context("load config")?`.
+  - name: lenient-parse
+    definition: Input that is unknown or malformed is accepted and mapped to a default instead of rejected.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `switch s { case "docker": return BackendDocker; default: return BackendLocal }` for a user-supplied backend name, so a typo silently picks a different backend.
+        isnt: >-
+          `default: return "", fmt.Errorf("unknown backend %q", s)`, or a default for an optional field that was left out entirely.
+      python:
+        is: >-
+          `BACKENDS.get(name, "local")` for a user-supplied backend name, so a typo silently picks a different backend.
+        isnt: >-
+          `BACKENDS[name]` inside a `try` that raises `ValueError(f"unknown backend {name!r}")`, or a default for an option that was left out.
+      typescript:
+        is: >-
+          `const level = LEVELS[input] ?? LEVELS.info` for a user-supplied log level, so `--level debgu` is accepted.
+        isnt: >-
+          `if (!(input in LEVELS)) throw new Error("unknown level")`, or `opts.level ?? "info"` for an option that was left out.
+      rust:
+        is: >-
+          `s.parse().unwrap_or(Backend::Local)` for a user-supplied backend name, so a typo silently picks a different backend.
+        isnt: >-
+          `s.parse::<Backend>()?` with a `FromStr` that returns `Err` for unknown names, or `Option::unwrap_or` for a flag that was not given.
+  - name: ignored-error
+    definition: >-
+      An error discarded, or a call whose failure is never checked, where failure changes the result: writes, commits, closes after writes, renames.
+    severity: medium
+    examples:
+      go:
+        is: >-
+          `_ = os.WriteFile(path, data, 0o600)` before reporting success, or `defer f.Close()` on a file that was written to.
+        isnt: >-
+          `_ = resp.Body.Close()` after a read, or removal of a temp file in cleanup, where the failure cannot change the outcome.
+      python:
+        is: >-
+          `try: os.replace(tmp, path)` with `except OSError: pass` before reporting success, or `subprocess.run(cmd)` without `check=True` when the command's success matters.
+        isnt: >-
+          `with contextlib.suppress(FileNotFoundError): os.unlink(tmp)` in cleanup, where the failure cannot change the outcome.
+      typescript:
+        is: >-
+          `fs.promises.writeFile(path, data)` called without `await` before reporting success, so a failed write is an unhandled rejection or is lost.
+        isnt: >-
+          `await fs.promises.rm(tmp, { force: true }).catch(() => {})` in cleanup, where the failure cannot change the outcome.
+      rust:
+        is: >-
+          `fs::write(path, data).ok();` or `let _ = file.sync_all();` before reporting success.
+        isnt: >-
+          `let _ = fs::remove_file(tmp);` in cleanup, where the failure cannot change the outcome.

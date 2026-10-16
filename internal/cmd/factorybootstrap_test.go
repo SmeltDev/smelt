@@ -240,3 +240,25 @@ func TestToolLine(t *testing.T) {
 	long := toolLine(harness.Activity{Tool: "Bash", Detail: strings.Repeat("x", 500)})
 	assert.Equal(t, len([]rune(long)), maxToolLine+1)
 }
+
+func TestBootstrapWritesPatternsInTheProjectsLanguages(t *testing.T) {
+	root := bootstrapRepo(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "app.py"), []byte("print()\n"), 0o644))
+	stream := `{"type":"result","subtype":"success","is_error":false,"structured_output":{"summary":"A Python tool.","reviews":[{"name":"core-logic","area":"correctness","body":"# Core"},{"name":"misc","area":"other","body":"# Misc"}]}}` + "\n"
+	be := &bootstrapBackend{stdout: stream}
+	streams, _, _ := testStreams()
+
+	assert.NilError(t, runBootstrap(context.Background(), streams, bootstrapReq(root), bootstrapTestEnv(be)))
+
+	got, err := os.ReadFile(filepath.Join(root, review.DefaultDir, "core-logic.md"))
+	assert.NilError(t, err)
+	text := string(got)
+	assert.Assert(t, strings.HasPrefix(text, "# Core\n\n## Patterns to look for\n"), text)
+	assert.Assert(t, strings.Contains(text, "- Is (python): "), text)
+	for _, other := range []string{"(go)", "(typescript)", "(rust)", "os.WriteFile", "unwrap_or"} {
+		assert.Assert(t, !strings.Contains(text, other), "%q in:\n%s", other, text)
+	}
+	misc, err := os.ReadFile(filepath.Join(root, review.DefaultDir, "misc.md"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(misc), "# Misc\n")
+}

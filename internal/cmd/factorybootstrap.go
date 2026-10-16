@@ -45,6 +45,10 @@ when 'smelt build-prompt' wrote it, %s.
 It refuses at once when the directory already holds review prompts, and never
 overwrites a file. Pass --output to write to another directory and compare.
 
+Each prompt is given a "Patterns to look for" section from smelt's catalogue
+('smelt review patterns') for its area, with examples in the project's
+languages, found from its files.
+
 The agent runs in the project's factory backend and image (see 'smelt factory
 build'; build the image first with 'smelt factory image'), with the agent chosen
 by --harness or factory.harness. Each tool call it makes is shown as it happens.
@@ -255,11 +259,18 @@ func bootstrapOnSidecar(ctx context.Context, r bootstrapRun) (factory.Bootstrap,
 	}
 	defer pool.Release(entry)
 
+	// Without languages the prompts' patterns have definitions alone, which is
+	// a thinner prompt but not a wrong one.
+	languages, err := factory.DetectLanguages(ctx, r.req.Root)
+	if err != nil {
+		r.status(iostream.LevelWarn, "Could not detect the project's languages; the patterns will have no examples: "+err.Error())
+	}
+
 	r.status(iostream.LevelStep, fmt.Sprintf("Reading the project with %s...", r.agent.Name()))
 	result, err := factory.RunBootstrap(ctx, factory.BootstrapOptions{
 		Entry: entry, Exec: review.ClientExec, Root: r.req.Root, Harness: r.agent,
 		Credential: r.cred.Credential, BaseURL: r.cred.BaseURL, Model: r.model,
-		Commands: r.req.Cfg.Commands, Timeout: r.req.Timeout,
+		Languages: languages, Commands: r.req.Cfg.Commands, Timeout: r.req.Timeout,
 		OnTool: func(a harness.Activity) { r.status(iostream.LevelInfo, toolLine(a)) },
 	})
 	if err != nil {

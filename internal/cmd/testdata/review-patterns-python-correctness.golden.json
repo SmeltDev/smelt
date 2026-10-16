@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "patterns": [
+    {
+      "name": "silent-fallback",
+      "area": "correctness",
+      "definition": "Code that turns a failure into a plausible default, so the caller carries on as if nothing went wrong.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {
+        "python": {
+          "is": "`try: return load(path)` with `except Exception: return {}`, so a corrupt file looks like an empty one.",
+          "isnt": "`os.environ.get(\"TIMEOUT\", \"30\")` for an optional setting that is legitimately absent."
+        }
+      }
+    },
+    {
+      "name": "retry-hides-failure",
+      "area": "correctness",
+      "definition": "A retry loop that discards the first errors and reports only the last one (or none), so the original cause is lost.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {
+        "python": {
+          "is": "`for _ in range(3): try: return push() except Exception: pass` followed by `raise RuntimeError(\"push failed\")`, with no cause.",
+          "isnt": "a loop that retries only `ConnectionError` and finally raises `PushError(...)  from last_error`."
+        }
+      }
+    },
+    {
+      "name": "error-cause-dropped",
+      "area": "correctness",
+      "definition": "An error replaced by a new one that keeps no link to the original, or flattened to text where callers need to test its type or cause.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {
+        "python": {
+          "is": "`except KeyError: raise ConfigError(\"cannot load config\")` raised without `from`, inside the handler of the error it replaces, or `raise ConfigError(str(e)) from None`.",
+          "isnt": "`except KeyError as e: raise ConfigError(\"cannot load config\") from e`."
+        }
+      }
+    },
+    {
+      "name": "lenient-parse",
+      "area": "correctness",
+      "definition": "Input that is unknown or malformed is accepted and mapped to a default instead of rejected.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {
+        "python": {
+          "is": "`BACKENDS.get(name, \"local\")` for a user-supplied backend name, so a typo silently picks a different backend.",
+          "isnt": "`BACKENDS[name]` inside a `try` that raises `ValueError(f\"unknown backend {name!r}\")`, or a default for an option that was left out."
+        }
+      }
+    },
+    {
+      "name": "ignored-error",
+      "area": "correctness",
+      "definition": "An error discarded, or a call whose failure is never checked, where failure changes the result: writes, commits, closes after writes, renames.",
+      "severity": "medium",
+      "applies_to": [
+        "all"
+      ],
+      "examples": {
+        "python": {
+          "is": "`try: os.replace(tmp, path)` with `except OSError: pass` before reporting success, or `subprocess.run(cmd)` without `check=True` when the command's success matters.",
+          "isnt": "`with contextlib.suppress(FileNotFoundError): os.unlink(tmp)` in cleanup, where the failure cannot change the outcome."
+        }
+      }
+    }
+  ]
+}

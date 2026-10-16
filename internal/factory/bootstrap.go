@@ -18,6 +18,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/reviews/patterns"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
@@ -30,6 +31,8 @@ const (
 	maxBootstrapPrompts = 6
 	// maxBootstrapPromptBytes caps one prompt's body.
 	maxBootstrapPromptBytes = 32 << 10
+	// maxPatternsBytes caps the patterns section smelt appends to a prompt.
+	maxPatternsBytes = 24 << 10
 	// maxStandardsBytes caps the team standards put in the request.
 	maxStandardsBytes = 64 << 10
 	// maxBootstrapOutputBytes caps the agent's output, which with an activity
@@ -52,6 +55,9 @@ var bootstrapTools = slices.Concat(readTools, []string{gitLogTool, "Bash(git sho
 // hyphens. It is also what keeps the agent's text out of file paths.
 var promptNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// areaOther is the area of a prompt that fits none of the catalogue's.
+const areaOther = "other"
+
 // BootstrapSchema is the JSON Schema of the agent's answer. Every property is
 // required and no counts are set, as Codex's strict mode needs; the counts are
 // enforced in code.
@@ -65,9 +71,10 @@ const BootstrapSchema = `{
         "type": "object",
         "properties": {
           "name": {"type": "string", "description": "File name without extension, lowercase words joined by hyphens, such as \"testing\"."},
+          "area": {"type": "string", "enum": ["requirements", "correctness", "maintainability", "testing", "other"], "description": "The kind of review this prompt is: requirements (does the change do what was asked, and no more), correctness (bugs), maintainability, testing, or other when none fits."},
           "body": {"type": "string", "description": "The review prompt, as markdown."}
         },
-        "required": ["name", "body"],
+        "required": ["name", "area", "body"],
         "additionalProperties": false
       }
     }
@@ -88,8 +95,15 @@ type Bootstrap struct {
 
 // bootstrapAnswer is the agent's answer, as the schema shapes it.
 type bootstrapAnswer struct {
-	Summary string          `json:"summary"`
-	Reviews []review.Prompt `json:"reviews"`
+	Summary string            `json:"summary"`
+	Reviews []bootstrapReview `json:"reviews"`
+}
+
+// bootstrapReview is one prompt the agent wrote.
+type bootstrapReview struct {
+	Name string `json:"name"`
+	Area string `json:"area"`
+	Body string `json:"body"`
 }
 
 // BootstrapOptions is what RunBootstrap needs.
@@ -104,6 +118,10 @@ type BootstrapOptions struct {
 	Credential harness.Credential
 	BaseURL    string
 	Model      string
+	// Languages are the project's languages, which choose the examples in the
+	// patterns section of each prompt. With none, the section has definitions
+	// alone.
+	Languages []string
 	// Commands are the project's validation commands, which reviews leave alone.
 	Commands []config.Command
 	// Timeout bounds the agent's run; DefaultBootstrapTimeout when zero.
@@ -148,6 +166,7 @@ Read what the repository says about itself before you write anything: AGENTS.md,
   - A severity section that defines high, medium and low for the area. A high or medium finding must come with a concrete failure the reviewer can describe: the input or state, and what goes wrong.
   - These instructions: review only the change, not code it does not touch, unless the change makes a problem newly reachable; treat the requested change as the scope, so behavior it does not ask for is not required; report all the findings at once rather than holding related ones back for a later round; and report no findings when nothing clears the bar.
 - Keep each prompt under about 80 lines of markdown.
+- Set each prompt's area: requirements (does the change do what was asked, and no more), correctness (bugs), maintainability, testing, or other when none fits. smelt appends a "Patterns to look for" section for that area, with examples in the project's languages, after your prompt. Do not write one yourself or repeat its pattern names.
 - Give each prompt a name: its file name without an extension, in lowercase words joined by hyphens, such as "testing".
 - In the summary, say in a few sentences what you learned about the repository and why you chose these areas.
 `
@@ -186,9 +205,13 @@ func capUTF8(s string, n int) string {
 
 // checkBootstrap checks the agent's answer, which becomes files: prompts that
 // fail the checks are dropped and counted, and an answer with none left is an
-// error.
-func checkBootstrap(a bootstrapAnswer) (Bootstrap, error) {
+// error. Each kept prompt gets the patterns section of its area, in languages.
+func checkBootstrap(a bootstrapAnswer, languages []string) (Bootstrap, error) {
 	out := Bootstrap{Summary: strings.TrimSpace(a.Summary)}
+	catalogue, err := patterns.Load()
+	if err != nil {
+		return Bootstrap{}, fmt.Errorf("load the pattern catalogue: %w", err)
+	}
 	seen := map[string]bool{}
 	for _, r := range a.Reviews {
 		body := strings.TrimSpace(r.Body)
@@ -202,12 +225,42 @@ func checkBootstrap(a bootstrapAnswer) (Bootstrap, error) {
 			continue
 		}
 		seen[r.Name] = true
-		out.Prompts = append(out.Prompts, review.Prompt{Name: r.Name, Body: body})
+		out.Prompts = append(out.Prompts, review.Prompt{Name: r.Name, Body: body + patternsSection(catalogue, r.Area, languages)})
 	}
 	if len(out.Prompts) == 0 {
 		return Bootstrap{}, errors.New("the agent gave no usable review prompts")
 	}
 	return out, nil
+}
+
+// patternsSection is the "Patterns to look for" section for a prompt of area,
+// with examples in languages, led by a blank line; "" when the area is not one
+// of the catalogue's. smelt writes it, not the agent, so the examples are the
+// catalogue's own and in the project's languages.
+func patternsSection(catalogue []patterns.Pattern, area string, languages []string) string {
+	a, err := patterns.ParseArea(area)
+	if err != nil {
+		return ""
+	}
+	selected := patterns.Select(catalogue, a, languages)
+	if len(selected) == 0 {
+		return ""
+	}
+	if len(languages) == 0 {
+		for i := range selected {
+			selected[i].Examples = nil
+		}
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## Patterns to look for\n\nThese named patterns are common in this area. Name the pattern in brackets at the start of a finding when one applies, for example `[" + selected[0].Name + "]`. Patterns do not lower the bar: report one only when the change has a concrete failure.\n")
+	for _, p := range selected {
+		section := "\n" + patterns.Section(p)
+		if b.Len()+len(section) > maxPatternsBytes {
+			break
+		}
+		b.WriteString(section)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // CheckPromptsDir returns ErrPromptsExist when dir already holds review
@@ -296,7 +349,7 @@ func RunBootstrap(ctx context.Context, o BootstrapOptions) (Bootstrap, error) {
 	if err != nil {
 		return Bootstrap{}, err
 	}
-	b, err := checkBootstrap(answer)
+	b, err := checkBootstrap(answer, o.Languages)
 	b.CostUSD = cost
 	return b, err
 }

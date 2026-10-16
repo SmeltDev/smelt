@@ -47,7 +47,8 @@ reviewer sidecars; the primary itself is kept so that 'smelt review results' can
 read the report.
 
 A prompts directory named "results" must be passed as ./results, since
-'smelt review results' reads a detached review's report.`,
+'smelt review results' reads a detached review's report; likewise "patterns"
+must be passed as ./patterns, since 'smelt review patterns' prints the catalogue.`,
 		// Hidden until passes repeat and check for convergence.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -215,6 +216,7 @@ A prompts directory named "results" must be passed as ./results, since
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&detach, "detach", false, "run the review on a primary sidecar and return, so this machine can close")
 	cmd.AddCommand(newReviewResultsCmd())
+	cmd.AddCommand(newReviewPatternsCmd())
 	cmd.Flags().StringVar(&smeltBinary, "smelt-binary", "", "Linux smelt build to upload with --detach (default: install the latest release)")
 	return cmd
 }
