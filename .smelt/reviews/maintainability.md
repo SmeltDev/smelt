@@ -21,6 +21,60 @@ Mark a finding **Required** only for a clear violation that will cost future mai
 
 For each finding, name the existing code it duplicates or the standard it breaks, and show the cleaner shape.
 
+## Patterns
+
+Patterns do not lower the bar: they name what to look for, and the Required and Suggestions rules above still decide the severity.
+
+### `lonely-interface`
+An interface with one implementation and no test seam.
+- Is: `type Formatter interface{ Format(Report) string }` with a single `textFormatter`, used only inside the package.
+- Isn't: `review.Execer`, which a test fake implements, or an interface a second backend already implements.
+- Usual severity: Required.
+
+### `single-case-dispatch`
+A `switch` or lookup table that has one real case, or a registry with one entry, added for variants that do not exist.
+- Is: `switch kind { case kindText: return renderText(r) }` with no other kinds anywhere.
+- Isn't: a switch over a closed set of values the code already has, such as the backends in `smeltd`.
+- Usual severity: Suggestions.
+
+### `trivial-wrapper`
+A function that only forwards to another with the same arguments and adds nothing.
+- Is: `func runGit(ctx context.Context, dir string, args ...string) (string, error) { return gitexec.New(dir).Run(ctx, args...) }` next to callers that could call the runner.
+- Isn't: a wrapper that fixes a flag, adds error context, or hides a package that callers should not import.
+- Usual severity: Suggestions.
+
+### `growing-dispatch`
+Another branch added to a function that is already long and branchy, instead of extracting the new case.
+- Is: a new `if opts.X { ... }` block inside `newFactoryBuildCmd` in `internal/cmd/factory.go`, or inside `factory.Run` in `internal/factory/run.go`, both of which are already close to the `gocyclo` limit.
+- Isn't: a branch in a short function, or a change that extracts a helper and calls it once.
+- Usual severity: Required if the change pushes the function toward the limit; otherwise Suggestions.
+
+### `narration-comment`
+A comment that restates the next line instead of giving the reason for it.
+- Is: `// loop over the sidecars` above `for _, s := range sidecars {`.
+- Isn't: `// Close in reverse order: the relay must outlive the pool.`
+- Usual severity: Suggestions.
+
+### `echo-doc-comment`
+A doc comment that repeats the identifier's name and adds nothing.
+- Is: `// Pool is a pool.` or `// NewRelay creates a new Relay.`
+- Isn't: `// Pool runs sidecar jobs, bounded by Size; it must be closed before its temp dir is removed.`
+- Usual severity: Suggestions.
+
+### `stringly-state`
+State or a closed set of options held in bare strings that are compared in several places.
+- Is: `if job.Status == "running" || job.Status == "pending"` repeated in three files.
+- Isn't: a string that is passed straight through to an external system and never compared, or one with a named constant like `smeltd.BackendDocker`.
+- Usual severity: Required when compared in more than one place; otherwise Suggestions.
+
+### `bool-for-error`
+A function that returns `bool` where the caller needs to know why it failed, or that signals failure with a magic value.
+- Is: `func parseSpec(s string) (Spec, bool)` where the caller prints "invalid spec" and cannot say which part was wrong.
+- Isn't: `func (s Set) Has(x string) bool`, where false is a complete answer.
+- Usual severity: Required.
+
+Name the pattern in brackets at the start of the finding title when one applies, for example `### [pool.go:10] [lonely-interface] Title`.
+
 ## Response Format
 
 Structure your review as a markdown comment with issues grouped by severity:
