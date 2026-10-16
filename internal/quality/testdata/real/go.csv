@@ -1,0 +1,52 @@
+18,4,148,4,18,"Assess@28-45@internal/quality/assess.go","internal/quality/assess.go","Assess","Assess ctx context . Context , m Measurer , base string , cfg Config",28,45
+3,1,41,2,3,"@46-48@internal/quality/clones.go","internal/quality/clones.go",""," a , b Clone",46,48
+17,5,155,4,19,"cloneReport@32-50@internal/quality/clones.go","internal/quality/clones.go","cloneReport","cloneReport clones [ ] ContractClone , k keeper , fns [ ] Function , minLines int",32,50
+3,1,41,2,3,"@64-66@internal/quality/clones.go","internal/quality/clones.go",""," a , b Location",64,66
+13,5,80,2,15,"keptLocations@54-68@internal/quality/clones.go","internal/quality/clones.go","keptLocations","keptLocations locs [ ] Location , k keeper",54,68
+9,1,121,3,9,"cloneAt@71-79@internal/quality/clones.go","internal/quality/clones.go","cloneAt","cloneAt loc Location , src [ ] byte , fns [ ] Function",71,79
+8,5,52,3,8,"enclosing@82-89@internal/quality/clones.go","internal/quality/clones.go","enclosing","enclosing fns [ ] Function , file string , line int",82,89
+12,4,52,0,12,"withDefaults@34-45@internal/quality/compare.go","internal/quality/compare.go","withDefaults","(c Config)withDefaults",34,45
+9,3,49,0,9,"Location@69-77@internal/quality/compare.go","internal/quality/compare.go","Location","(f Finding)Location",69,77
+13,5,103,2,13,"ChangedFunctions@86-98@internal/quality/compare.go","internal/quality/compare.go","ChangedFunctions","ChangedFunctions before , after Report",86,98
+16,4,140,4,16,"Compare@104-119@internal/quality/compare.go","internal/quality/compare.go","Compare","Compare before , after Report , changed [ ] Function , cfg Config",104,119
+26,7,183,3,26,"complexFindings@122-147@internal/quality/compare.go","internal/quality/compare.go","complexFindings","complexFindings before Report , changed [ ] Function , cfg Config",122,147
+25,6,176,3,25,"cloneFindings@151-175@internal/quality/compare.go","internal/quality/compare.go","cloneFindings","cloneFindings before , after Report , changed [ ] Function",151,175
+11,3,91,1,11,"worstList@178-188@internal/quality/compare.go","internal/quality/compare.go","worstList","worstList r Report",178,188
+1,1,24,1,1,"locationOf@190-190@internal/quality/compare.go","internal/quality/compare.go","locationOf","locationOf f Function",190,190
+11,2,90,3,11,"Summarize@208-218@internal/quality/compare.go","internal/quality/compare.go","Summarize","Summarize before , after Report , findings [ ] Finding",208,218
+7,2,55,0,7,"Line@221-227@internal/quality/compare.go","internal/quality/compare.go","Line","(s Summary)Line",221,227
+1,1,14,1,1,"@231-231@internal/quality/compare.go","internal/quality/compare.go",""," f Finding",231,231
+3,1,29,0,3,"Failing@230-232@internal/quality/compare.go","internal/quality/compare.go","Failing","(s Summary)Failing",230,232
+3,1,30,0,3,"defaultExcludedDirs@14-16@internal/quality/exclude.go","internal/quality/exclude.go","defaultExcludedDirs","defaultExcludedDirs",14,16
+7,1,37,0,7,"defaultExcludedFiles@19-25@internal/quality/exclude.go","internal/quality/exclude.go","defaultExcludedFiles","defaultExcludedFiles",19,25
+3,1,22,0,3,"generatedMarkers@29-31@internal/quality/exclude.go","internal/quality/exclude.go","generatedMarkers","generatedMarkers",29,31
+11,3,78,1,11,"NewExcluder@54-64@internal/quality/exclude.go","internal/quality/exclude.go","NewExcluder","NewExcluder cfg ExcludeConfig",54,64
+4,1,19,1,4,"ValidateGlob@67-70@internal/quality/exclude.go","internal/quality/exclude.go","ValidateGlob","ValidateGlob pattern string",67,70
+9,4,50,1,9,"Path@74-82@internal/quality/exclude.go","internal/quality/exclude.go","Path","(e Excluder)Path p string",74,82
+13,5,91,0,13,"ShellPatterns@88-100@internal/quality/exclude.go","internal/quality/exclude.go","ShellPatterns","(e Excluder)ShellPatterns",88,100
+16,6,84,1,16,"defaultExcluded@102-117@internal/quality/exclude.go","internal/quality/exclude.go","defaultExcluded","defaultExcluded p string",102,117
+11,4,61,1,11,"Generated@121-131@internal/quality/exclude.go","internal/quality/exclude.go","Generated","Generated content [ ] byte",121,131
+8,3,39,2,8,"matchesAny@133-140@internal/quality/exclude.go","internal/quality/exclude.go","matchesAny","matchesAny res [ ] * regexp . Regexp , p string",133,140
+11,3,77,1,11,"compileGlobs@142-152@internal/quality/exclude.go","internal/quality/exclude.go","compileGlobs","compileGlobs globs [ ] string",142,152
+33,11,231,1,33,"globRegexp@157-189@internal/quality/exclude.go","internal/quality/exclude.go","globRegexp","globRegexp glob string",157,189
+3,1,43,4,3,"FunctionHash@17-19@internal/quality/hash.go","internal/quality/hash.go","FunctionHash","FunctionHash content [ ] byte , start , end int , name string",17,19
+9,2,67,3,9,"lineRange@22-30@internal/quality/hash.go","internal/quality/hash.go","lineRange","lineRange content [ ] byte , start , end int",22,30
+7,2,77,2,7,"textHash@34-40@internal/quality/hash.go","internal/quality/hash.go","textHash","textHash text , word string",34,40
+3,1,21,1,3,"shortName@46-48@internal/quality/hash.go","internal/quality/hash.go","shortName","shortName name string",46,48
+1,1,32,3,1,"put@51-51@internal/quality/hash.go","internal/quality/hash.go","put","put w io . Writer , format string , a ... any",51,51
+6,2,29,0,6,"Key@41-46@internal/quality/metrics.go","internal/quality/metrics.go","Key","(f Function)Key",41,46
+1,1,21,0,1,"baseKey@48-48@internal/quality/metrics.go","internal/quality/metrics.go","baseKey","(f Function)baseKey",48,48
+3,1,30,0,3,"weight@53-55@internal/quality/metrics.go","internal/quality/metrics.go","weight","(f Function)weight",53,55
+3,1,58,2,3,"@84-86@internal/quality/metrics.go","internal/quality/metrics.go",""," a , b Function",84,86
+5,1,47,1,7,"Worst@82-88@internal/quality/metrics.go","internal/quality/metrics.go","Worst","(r Report)Worst n int",82,88
+3,1,41,2,3,"@111-113@internal/quality/metrics.go","internal/quality/metrics.go",""," a , b Function",111,113
+29,6,268,3,31,"Measure@93-123@internal/quality/metrics.go","internal/quality/metrics.go","Measure","Measure c Contract , sources [ ] File , cfg Config",93,123
+11,3,84,2,13,"newKeeper@131-143@internal/quality/metrics.go","internal/quality/metrics.go","newKeeper","newKeeper cfg Config , sources [ ] File",131,143
+13,4,70,1,13,"source@147-159@internal/quality/metrics.go","internal/quality/metrics.go","source","(k keeper)source p string",147,159
+1,1,16,1,1,"missing@161-161@internal/quality/metrics.go","internal/quality/metrics.go","missing","(keeper)missing p string",161,161
+6,2,36,2,6,"appendUnique@163-168@internal/quality/metrics.go","internal/quality/metrics.go","appendUnique","appendUnique list [ ] string , s string",163,168
+14,4,60,1,14,"erosion@172-185@internal/quality/metrics.go","internal/quality/metrics.go","erosion","erosion fns [ ] Function",172,185
+11,3,79,1,11,"uniqueKeys@189-199@internal/quality/metrics.go","internal/quality/metrics.go","uniqueKeys","uniqueKeys fns [ ] Function",189,199
+1,1,23,2,1,"@23-23@internal/quality/source.go","internal/quality/source.go",""," a , b File",23,23
+3,1,18,1,3,"sortFiles@22-24@internal/quality/source.go","internal/quality/source.go","sortFiles","sortFiles files [ ] File",22,24
+28,7,194,2,28,"ReadTar@34-61@internal/quality/source.go","internal/quality/source.go","ReadTar","ReadTar data [ ] byte , limit int",34,61

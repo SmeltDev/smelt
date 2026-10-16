@@ -2,12 +2,15 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/quality"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // QualityConfig is the quality limits of a project's factory config, nil when
@@ -26,43 +29,72 @@ func QualityLimits(f *config.FactoryConfig) quality.Config {
 	if f == nil || f.Quality == nil {
 		return quality.Config{}
 	}
+	q := f.Quality
 	return quality.Config{
-		MaxFunctionComplexity: f.Quality.MaxFunctionComplexity,
-		MaxErosionRise:        f.Quality.MaxErosionRise,
-		MinCloneLines:         f.Quality.MinCloneLines,
+		MaxFunctionComplexity: q.MaxFunctionComplexity,
+		MaxErosionRise:        q.MaxErosionRise,
+		MinCloneLines:         q.MinCloneLines,
+		Command:               f.QualityCommand(),
+		Exclude: quality.ExcludeConfig{
+			Exclude: q.Exclude, Include: q.Include,
+			NoDefaults: q.DefaultExcludes != nil && !*q.DefaultExcludes,
+		},
 	}
 }
 
-// Quality measures a run's change on the host, in the run's worktree: the
-// tree as the round left it against the tree the run started from. It needs
-// no sandbox and no toolchain, so it works on every backend.
+// Quality measures a run's change in the implementer's sandbox, like the gates:
+// the tree as the round left it against the tree the run started from. The
+// provider (lizard, or the project's command) runs there, so it sees the
+// toolchain and files the implementer worked with.
 type Quality struct {
 	Config quality.Config
-	// Dir is the run's worktree, which holds the implementer's work once a
-	// round has pulled it.
-	Dir string
-	// Baseline is the commit the change is measured against.
+	Exec   review.Execer
+	// Entry is the implementer's sidecar, which holds its work.
+	Entry *sidecar.PoolEntry
+	// Baseline is the commit on Entry the change is measured against. Prepare
+	// sets it when it measures the baseline.
 	Baseline string
 	// Warn, when set, hears of a measurement that failed.
 	Warn func(msg string)
-
-	// read are the seams to the files; nil uses git. Tests replace them.
-	readTree func(ctx context.Context, dir string) ([]quality.File, error)
-	readRev  func(ctx context.Context, dir, rev string) ([]quality.File, error)
 
 	mu   sync.Mutex
 	base *quality.Report
 }
 
-// Check measures the worktree and compares it with the baseline. A
-// measurement that fails is an errored check, which is not fed back, and a
-// warning.
+func (q *Quality) measurer() SandboxMeasurer {
+	return SandboxMeasurer{Exec: q.Exec, Entry: q.Entry, Provider: ProviderFor(q.Config), Config: q.Config}
+}
+
+// MeasureBaseline measures the sandbox as it is now, which is the baseline
+// commit, and keeps the result for every round. rev is that commit. A failure
+// is warned and not kept: the first round that needs the baseline tries again.
+func (q *Quality) MeasureBaseline(ctx context.Context, rev string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.Baseline = rev
+	m, err := q.measurer().Measure(ctx, "")
+	if err != nil {
+		q.warn(fmt.Sprintf("the baseline quality was not measured: %v (it is tried again after the first round)", err))
+		return
+	}
+	rep := quality.Measure(m.Contract, m.Sources, q.Config)
+	q.base = &rep
+}
+
+func (q *Quality) warn(msg string) {
+	if q.Warn != nil {
+		q.Warn(msg)
+	}
+}
+
+// Check measures the sandbox and compares it with the baseline. A measurement
+// that fails is an errored check, which is not fed back, and a warning.
 func (q *Quality) Check(ctx context.Context) Check {
 	start := time.Now()
 	sum, err := q.measure(ctx)
 	c := FromQuality(sum, time.Since(start), err)
-	if err != nil && q.Warn != nil {
-		q.Warn(fmt.Sprintf("quality was not measured: %v", err))
+	if err != nil {
+		q.warn(fmt.Sprintf("quality was not measured: %v", err))
 	}
 	return c
 }
@@ -72,36 +104,32 @@ func (q *Quality) measure(ctx context.Context) (quality.Summary, error) {
 	if err != nil {
 		return quality.Summary{}, err
 	}
-	readTree := q.readTree
-	if readTree == nil {
-		readTree = quality.ReadTree
-	}
-	files, err := readTree(ctx, q.Dir)
+	m, err := q.measurer().Measure(ctx, "")
 	if err != nil {
 		return quality.Summary{}, err
 	}
-	after := quality.Measure(files, q.Config)
+	after := quality.Measure(m.Contract, m.Sources, q.Config)
 	findings := quality.Compare(before, after, quality.ChangedFunctions(before, after), q.Config)
 	return quality.Summarize(before, after, findings), nil
 }
 
-// baseline is the measurement of the commit the run started from, made once.
-// A failure is not kept, so the next round tries again.
+// baseline is the measurement of the commit the run started from. It is made
+// once, normally by MeasureBaseline; one that failed is made here, from the
+// commit in a temporary worktree, since the tree has moved on.
 func (q *Quality) baseline(ctx context.Context) (quality.Report, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.base != nil {
 		return *q.base, nil
 	}
-	readRev := q.readRev
-	if readRev == nil {
-		readRev = quality.ReadRev
+	if q.Baseline == "" {
+		return quality.Report{}, errors.New("no baseline commit to measure")
 	}
-	files, err := readRev(ctx, q.Dir, q.Baseline)
+	m, err := q.measurer().Measure(ctx, q.Baseline)
 	if err != nil {
 		return quality.Report{}, err
 	}
-	rep := quality.Measure(files, q.Config)
+	rep := quality.Measure(m.Contract, m.Sources, q.Config)
 	q.base = &rep
 	return rep, nil
 }

@@ -1,0 +1,37 @@
+================================================
+  NLOC    CCN   token  PARAM  length  location  
+------------------------------------------------
+       6      2     19      1       6 g@2-7@src/gen.ts
+       3      1     10      0       3 t@3-5@src/router.spec.ts
+      28     16    135      1      29 route@1-29@src/router.ts
+      24      6    133      1      25 cartTotal@29-53@src/router.ts
+      24      6    133      1      25 quoteTotal@53-77@src/router.ts
+       1      1     12      1       1 double@77-77@src/router.ts
+3 file analyzed.
+==============================================================
+NLOC    Avg.NLOC  AvgCCN  Avg.token  function_cnt    file
+--------------------------------------------------------------
+      6       6.0     2.0       19.0         1     src/gen.ts
+      4       3.0     1.0       10.0         1     src/router.spec.ts
+     74      19.2     7.2      103.2         4     src/router.ts
+
+===========================================================================================================
+!!!! Warnings (cyclomatic_complexity > 15 or length > 1000 or nloc > 1000000 or parameter_count > 100) !!!!
+================================================
+  NLOC    CCN   token  PARAM  length  location  
+------------------------------------------------
+      28     16    135      1      29 route@1-29@src/router.ts
+==========================================================================================
+Total nloc   Avg.NLOC  AvgCCN  Avg.token   Fun Cnt  Warning cnt   Fun Rt   nloc Rt
+------------------------------------------------------------------------------------------
+        84      14.3     5.3       73.7        6            1      0.17    0.33
+Duplicates
+===================================
+Duplicate block:
+--------------------------
+src/router.ts:32 ~ 53
+src/router.ts:56 ~ 77
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Total duplicate rate: 50.36%
+Total unique rate: 80.61%

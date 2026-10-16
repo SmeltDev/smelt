@@ -13,6 +13,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/quality"
 )
 
 // Command roles describe what a command does. Only RoleGate is acted on:
@@ -235,8 +236,20 @@ type QualityConfig struct {
 	MaxFunctionComplexity int `json:"maxFunctionComplexity,omitempty"`
 	// MaxErosionRise is how many percentage points a change may raise erosion.
 	MaxErosionRise float64 `json:"maxErosionRise,omitempty"`
-	// MinCloneLines is the shortest duplicated block, in statements.
+	// MinCloneLines is the shortest duplicated block, in lines.
 	MinCloneLines int `json:"minCloneLines,omitempty"`
+	// Command replaces the default provider, lizard: it runs in the sandbox from
+	// the repo root and prints the metrics contract as JSON on stdout (see
+	// internal/quality).
+	Command string `json:"command,omitempty"`
+	// Exclude are globs (** crosses directories) of files to leave out, on top
+	// of the defaults: vendored and test code and generated files.
+	Exclude []string `json:"exclude,omitempty"`
+	// Include are globs of files to measure although a default leaves them out.
+	Include []string `json:"include,omitempty"`
+	// DefaultExcludes turns the built-in exclusions off when false. Unset means
+	// true.
+	DefaultExcludes *bool `json:"defaultExcludes,omitempty"`
 }
 
 // validateLimits checks the numeric settings, which must not be negative.
@@ -261,7 +274,25 @@ func (q *QualityConfig) validate() error {
 	case q.MinCloneLines < 0:
 		return fmt.Errorf("factory.quality.minCloneLines must not be negative, got %d", q.MinCloneLines)
 	}
+	for _, g := range q.Exclude {
+		if err := quality.ValidateGlob(g); err != nil {
+			return fmt.Errorf("factory.quality.exclude: %w", err)
+		}
+	}
+	for _, g := range q.Include {
+		if err := quality.ValidateGlob(g); err != nil {
+			return fmt.Errorf("factory.quality.include: %w", err)
+		}
+	}
 	return nil
+}
+
+// QualityCommand is the project's own metrics provider, "" for the default.
+func (f *FactoryConfig) QualityCommand() string {
+	if f == nil || f.Quality == nil {
+		return ""
+	}
+	return strings.TrimSpace(f.Quality.Command)
 }
 
 // QualityEnabled reports whether runs measure quality; the default is yes.

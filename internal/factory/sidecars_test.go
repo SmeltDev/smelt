@@ -215,6 +215,13 @@ func TestCheckReviewsTheImplementersLatestWork(t *testing.T) {
 // the exec every script runs through.
 func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
 	t.Helper()
+	return newSidecarsFixtureWith(t, wrap, nil)
+}
+
+// newSidecarsFixtureWith is newSidecarsFixture with configure applied to the
+// steps before Prepare runs.
+func newSidecarsFixtureWith(t *testing.T, wrap func(review.Execer) review.Execer, configure func(*Sidecars)) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
+	t.Helper()
 	ctx := context.Background()
 	root := setupRepo(t)
 	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
@@ -260,6 +267,9 @@ func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*
 			Credential:         review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
 			StructuredFindings: true,
 		},
+	}
+	if configure != nil {
+		configure(s)
 	}
 	assert.NilError(t, s.Prepare(ctx))
 	return s, impl, reviewers, home

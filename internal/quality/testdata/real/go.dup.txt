@@ -1,0 +1,77 @@
+================================================
+  NLOC    CCN   token  PARAM  length  location  
+------------------------------------------------
+      18      4    148      4      18 Assess@28-45@internal/quality/assess.go
+       3      1     41      2       3 @46-48@internal/quality/clones.go
+      17      5    155      4      19 cloneReport@32-50@internal/quality/clones.go
+       3      1     41      2       3 @64-66@internal/quality/clones.go
+      13      5     80      2      15 keptLocations@54-68@internal/quality/clones.go
+       9      1    121      3       9 cloneAt@71-79@internal/quality/clones.go
+       8      5     52      3       8 enclosing@82-89@internal/quality/clones.go
+      12      4     52      0      12 withDefaults@34-45@internal/quality/compare.go
+       9      3     49      0       9 Location@69-77@internal/quality/compare.go
+      13      5    103      2      13 ChangedFunctions@86-98@internal/quality/compare.go
+      16      4    140      4      16 Compare@104-119@internal/quality/compare.go
+      26      7    183      3      26 complexFindings@122-147@internal/quality/compare.go
+      25      6    176      3      25 cloneFindings@151-175@internal/quality/compare.go
+      11      3     91      1      11 worstList@178-188@internal/quality/compare.go
+       1      1     24      1       1 locationOf@190-190@internal/quality/compare.go
+      11      2     90      3      11 Summarize@208-218@internal/quality/compare.go
+       7      2     55      0       7 Line@221-227@internal/quality/compare.go
+       1      1     14      1       1 @231-231@internal/quality/compare.go
+       3      1     29      0       3 Failing@230-232@internal/quality/compare.go
+       3      1     30      0       3 defaultExcludedDirs@14-16@internal/quality/exclude.go
+       7      1     37      0       7 defaultExcludedFiles@19-25@internal/quality/exclude.go
+       3      1     22      0       3 generatedMarkers@29-31@internal/quality/exclude.go
+      11      3     78      1      11 NewExcluder@54-64@internal/quality/exclude.go
+       4      1     19      1       4 ValidateGlob@67-70@internal/quality/exclude.go
+       9      4     50      1       9 Path@74-82@internal/quality/exclude.go
+      13      5     91      0      13 ShellPatterns@88-100@internal/quality/exclude.go
+      16      6     84      1      16 defaultExcluded@102-117@internal/quality/exclude.go
+      11      4     61      1      11 Generated@121-131@internal/quality/exclude.go
+       8      3     39      2       8 matchesAny@133-140@internal/quality/exclude.go
+      11      3     77      1      11 compileGlobs@142-152@internal/quality/exclude.go
+      33     11    231      1      33 globRegexp@157-189@internal/quality/exclude.go
+       3      1     43      4       3 FunctionHash@17-19@internal/quality/hash.go
+       9      2     67      3       9 lineRange@22-30@internal/quality/hash.go
+       7      2     77      2       7 textHash@34-40@internal/quality/hash.go
+       3      1     21      1       3 shortName@46-48@internal/quality/hash.go
+       1      1     32      3       1 put@51-51@internal/quality/hash.go
+       6      2     29      0       6 Key@41-46@internal/quality/metrics.go
+       1      1     21      0       1 baseKey@48-48@internal/quality/metrics.go
+       3      1     30      0       3 weight@53-55@internal/quality/metrics.go
+       3      1     58      2       3 @84-86@internal/quality/metrics.go
+       5      1     47      1       7 Worst@82-88@internal/quality/metrics.go
+       3      1     41      2       3 @111-113@internal/quality/metrics.go
+      29      6    268      3      31 Measure@93-123@internal/quality/metrics.go
+      11      3     84      2      13 newKeeper@131-143@internal/quality/metrics.go
+      13      4     70      1      13 source@147-159@internal/quality/metrics.go
+       1      1     16      1       1 missing@161-161@internal/quality/metrics.go
+       6      2     36      2       6 appendUnique@163-168@internal/quality/metrics.go
+      14      4     60      1      14 erosion@172-185@internal/quality/metrics.go
+      11      3     79      1      11 uniqueKeys@189-199@internal/quality/metrics.go
+       1      1     23      2       1 @23-23@internal/quality/source.go
+       3      1     18      1       3 sortFiles@22-24@internal/quality/source.go
+      28      7    194      2      28 ReadTar@34-61@internal/quality/source.go
+17 file analyzed.
+==============================================================
+NLOC    Avg.NLOC  AvgCCN  Avg.token  function_cnt    file
+--------------------------------------------------------------
+     32      18.0     4.0      148.0         1     internal/quality/assess.go
+     68       8.8     3.0       81.7         6     internal/quality/clones.go
+    175      11.2     3.2       83.8        12     internal/quality/compare.go
+    147      10.8     3.6       68.2        12     internal/quality/exclude.go
+     33       4.6     1.4       48.0         5     internal/quality/hash.go
+    137       8.2     2.3       64.5        13     internal/quality/metrics.go
+     47      10.7     3.0       78.3         3     internal/quality/source.go
+
+===============================================================================================================
+No thresholds exceeded (cyclomatic_complexity > 15 or length > 1000 or nloc > 1000000 or parameter_count > 100)
+==========================================================================================
+Total nloc   Avg.NLOC  AvgCCN  Avg.token   Fun Cnt  Warning cnt   Fun Rt   nloc Rt
+------------------------------------------------------------------------------------------
+      1666      10.5     2.4       98.9      135            0      0.00    0.00
+Duplicates
+===================================
+Total duplicate rate: 0.00%
+Total unique rate: 99.13%

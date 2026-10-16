@@ -388,3 +388,30 @@ func TestFactoryQualityConfigRejectsNegativeLimits(t *testing.T) {
 	}
 	assert.NilError(t, (&ProjectConfig{Factory: &FactoryConfig{Quality: &QualityConfig{}}}).Validate())
 }
+
+func TestFactoryQualityProviderAndExclusions(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"factory":{"quality":{"command":"  ./tools/metrics.sh  ","exclude":["internal/db/sqlcdb/**"],"include":["vendor/mine/**"],"defaultExcludes":false}}}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	q := cfg.Factory.Quality
+	off := false
+	assert.DeepEqual(t, q.Exclude, []string{"internal/db/sqlcdb/**"})
+	assert.DeepEqual(t, q.Include, []string{"vendor/mine/**"})
+	assert.DeepEqual(t, q.DefaultExcludes, &off)
+	assert.Equal(t, cfg.Factory.QualityCommand(), "./tools/metrics.sh")
+
+	var unset *FactoryConfig
+	assert.Equal(t, unset.QualityCommand(), "")
+	assert.Equal(t, (&FactoryConfig{Quality: &QualityConfig{}}).QualityCommand(), "")
+}
+
+func TestFactoryQualityConfigRejectsBadGlobs(t *testing.T) {
+	for name, q := range map[string]QualityConfig{
+		"exclude": {Exclude: []string{"ok/**", " "}},
+		"include": {Include: []string{""}},
+	} {
+		err := (&ProjectConfig{Factory: &FactoryConfig{Quality: &q}}).Validate()
+		assert.ErrorContains(t, err, "factory.quality."+name)
+	}
+}

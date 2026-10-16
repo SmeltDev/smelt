@@ -26,6 +26,13 @@ const (
 const kitCheck = "git --version && claude --version && codex --version && sha256sum --version && pkill -V && " +
 	`test -x "$HOME/.local/bin/` + codexHostBinary + `"`
 
+// lizardCheck is run after the kit check and only warns: an image without
+// lizard works, it just has no code quality to report.
+const lizardCheck = "lizard --version"
+
+// lizardMissing is the warning for an image whose lizard does not run.
+const lizardMissing = "lizard is not installed in the image, so code quality will not be measured (python3 and the agent kit v4 install it: smelt factory image --update-kit)"
+
 // codexSmokeTimeout bounds the one real Codex turn in the kit step; the
 // command's own timeout is the same 60 seconds.
 const codexSmokeTimeout = time.Minute
@@ -140,12 +147,23 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 		}
 		status(iostream.LevelDone, step.name+" ✓")
 		if step.name == StepKit {
+			checkLizard(ctx, b, inst, repoPath, status)
 			if res, err := smokeCodex(ctx, b, inst, repoPath, opts.Codex, status); err != nil || !res.OK() {
 				return res, err
 			}
 		}
 	}
 	return VerifyResult{}, nil
+}
+
+// checkLizard warns when lizard does not run. It never fails the verification.
+func checkLizard(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPath string, status iostream.StatusFunc) {
+	res, err := runStep(ctx, b, inst, repoPath, StepKit, lizardCheck, nil, time.Minute)
+	if err != nil || !res.OK() {
+		status(iostream.LevelWarn, lizardMissing)
+		return
+	}
+	status(iostream.LevelDone, "lizard ✓")
 }
 
 // smokeCodex runs one Codex turn, which is the only check that the agent can

@@ -3,76 +3,59 @@ package quality
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
-
-	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
-// ReadTree reads the Go files of the working tree at dir: tracked files and
-// untracked ones that are not ignored, as they are on disk now. dir must be
-// inside a git repository; paths are relative to dir.
-func ReadTree(ctx context.Context, dir string) ([]File, error) {
-	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.go")
-	if err != nil {
-		return nil, fmt.Errorf("list the files in %s: %w", dir, err)
-	}
-	var files []File
-	for p := range strings.SplitSeq(string(out), "\x00") {
-		if p == "" || Excluded(p) {
-			continue
-		}
-		content, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p)))
-		if errors.Is(err, fs.ErrNotExist) {
-			// Deleted from disk but still in the index.
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", p, err)
-		}
-		files = append(files, File{Path: p, Content: content})
-	}
-	sortFiles(files)
-	return files, nil
+// File is one source file. Path is slash-separated and relative to the project
+// root.
+type File struct {
+	Path    string
+	Content []byte
 }
 
-// sortFiles orders files by path, as the readers return them.
+// sortFiles orders files by path.
 func sortFiles(files []File) {
 	slices.SortFunc(files, func(a, b File) int { return strings.Compare(a.Path, b.Path) })
 }
 
-// ReadRev reads the Go files of the commit rev in the repository at dir,
-// without touching the working tree.
-func ReadRev(ctx context.Context, dir, rev string) ([]File, error) {
-	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "archive", "--format=tar", rev, "--", "*.go")
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", rev, err)
-	}
-	var files []File
-	tr := tar.NewReader(bytes.NewReader(out))
+// MaxSourceBytes is how much source is read back from the sandbox for one
+// measurement. Files past it are not read, and what they hold is reported as
+// not measured.
+const MaxSourceBytes = 24 << 20
+
+// ReadTar reads the regular files of a tar stream, up to limit bytes of
+// content in all. A file that would pass the limit and every one after it are
+// skipped, and their paths are returned as skipped.
+func ReadTar(data []byte, limit int) (files []File, skipped []string, err error) {
+	tr := tar.NewReader(bytes.NewReader(data))
+	total := 0
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			sortFiles(files)
-			return files, nil
+			return files, skipped, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read the archive of %s: %w", rev, err)
+			return nil, nil, fmt.Errorf("read the source archive: %w", err)
 		}
-		if hdr.Typeflag != tar.TypeReg || Excluded(hdr.Name) {
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := path.Clean(hdr.Name)
+		if total+int(hdr.Size) > limit {
+			skipped = append(skipped, name)
 			continue
 		}
 		content, err := io.ReadAll(tr)
 		if err != nil {
-			return nil, fmt.Errorf("read %s at %s: %w", hdr.Name, rev, err)
+			return nil, nil, fmt.Errorf("read %s: %w", name, err)
 		}
-		files = append(files, File{Path: hdr.Name, Content: content})
+		total += len(content)
+		files = append(files, File{Path: name, Content: content})
 	}
 }

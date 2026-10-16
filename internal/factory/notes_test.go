@@ -140,7 +140,7 @@ func TestNotesShowTheQualityLineInThePRBodyAndTheCommit(t *testing.T) {
 	assert.Assert(t, strings.Contains(n.PRBody("run-1", testOutcome, ""), want), n.PRBody("run-1", testOutcome, ""))
 	assert.Assert(t, strings.Contains(n.CommitMessage("run-1", testOutcome, ""), want))
 	// Notes that could not be written still carry it.
-	fallback := Notes{Title: "t", Fallback: "no model", Quality: "not measured (no Go code)"}
-	assert.Assert(t, strings.Contains(fallback.PRBody("run-1", testOutcome, ""), "Quality: not measured (no Go code)"))
+	fallback := Notes{Title: "t", Fallback: "no model", Quality: "not measured (no supported code found)"}
+	assert.Assert(t, strings.Contains(fallback.PRBody("run-1", testOutcome, ""), "Quality: not measured (no supported code found)"))
 	assert.Assert(t, !strings.Contains(Notes{Title: "t", What: "w"}.PRBody("run-1", testOutcome, ""), "Quality:"))
 }

@@ -68,11 +68,11 @@ func TestVerify(t *testing.T) {
 		wantStep    string
 		wantScripts int
 	}{
-		{"all pass", "", "", 3},
+		{"all pass", "", "", 4},
 		{"kit fails first", "claude --version", StepKit, 1},
 		{"kit fails without the codex command host", `test -x "$HOME/.local/bin/codex-code-mode-host"`, StepKit, 1},
-		{"install fails before gate", "pnpm install", StepInstall, 2},
-		{"gate fails", "pnpm lint", StepGate, 3},
+		{"install fails before gate", "pnpm install", StepInstall, 3},
+		{"gate fails", "pnpm lint", StepGate, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestVerifySkipsMissingInstallAndGate(t *testing.T) {
 	res, err := Verify(context.Background(), f, VerifyOptions{Dir: gitrepo.SetupGitRepo(t, "my-org", "r"), Image: "i"})
 	assert.NilError(t, err)
 	assert.Assert(t, res.OK())
-	assert.Equal(t, len(f.scripts), 1)
+	assert.Equal(t, len(f.scripts), 2)
 }
 
 func TestPickGate(t *testing.T) {
@@ -148,12 +148,12 @@ func TestVerifyCodexTurn(t *testing.T) {
 		wantScript int
 		wantNote   string
 	}{
-		{name: "no login: binary check only", wantScript: 1, wantNote: "binary check only"},
-		{name: "turn passes", smoke: smoke, wantScript: 2, wantNote: "codex turn ✓"},
-		{name: "turn fails", smoke: smoke, failing: "codex exec", wantStep: StepKit, wantScript: 2},
-		{name: "host missing is a failure", smoke: smoke, failing: "codex exec", output: "codex-code-mode-host is missing", wantStep: StepKit, wantScript: 2},
-		{name: "usage limit is not a failure", smoke: smoke, failing: "codex exec", output: "You've hit your usage limit. Try again later.", wantScript: 2, wantNote: "could not confirm"},
-		{name: "401 is not a failure", smoke: smoke, failing: "codex exec", output: "unexpected status 401 Unauthorized", wantScript: 2, wantNote: "could not confirm"},
+		{name: "no login: binary check only", wantScript: 2, wantNote: "binary check only"},
+		{name: "turn passes", smoke: smoke, wantScript: 3, wantNote: "codex turn ✓"},
+		{name: "turn fails", smoke: smoke, failing: "codex exec", wantStep: StepKit, wantScript: 3},
+		{name: "host missing is a failure", smoke: smoke, failing: "codex exec", output: "codex-code-mode-host is missing", wantStep: StepKit, wantScript: 3},
+		{name: "usage limit is not a failure", smoke: smoke, failing: "codex exec", output: "You've hit your usage limit. Try again later.", wantScript: 3, wantNote: "could not confirm"},
+		{name: "401 is not a failure", smoke: smoke, failing: "codex exec", output: "unexpected status 401 Unauthorized", wantScript: 3, wantNote: "could not confirm"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,4 +181,29 @@ func TestVerifyCodexTurnGetsTheCredential(t *testing.T) {
 	_, err := Verify(context.Background(), f, VerifyOptions{Dir: gitrepo.SetupGitRepo(t, "my-org", "r"), Image: "i", Codex: smoke})
 	assert.NilError(t, err)
 	assert.Equal(t, f.env[codex.EnvAPIKey], "sk-test")
+}
+
+func TestVerifyRunsLizardAndOnlyWarnsWhenItIsMissing(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	tests := []struct {
+		name     string
+		failing  string
+		wantNote string
+	}{
+		{"installed", "", "lizard ✓"},
+		{"missing", lizardCheck, "code quality will not be measured"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeBackend{failing: tt.failing}
+			var notes []string
+			res, err := Verify(context.Background(), f, VerifyOptions{
+				Dir: dir, Image: "i", Progress: func(_ iostream.Level, msg string) { notes = append(notes, msg) },
+			})
+			assert.NilError(t, err)
+			assert.Assert(t, res.OK(), "a missing lizard must not fail the verification: %+v", res)
+			assert.Assert(t, strings.HasSuffix(f.scripts[1], " && lizard --version"), f.scripts[1])
+			assert.Assert(t, strings.Contains(strings.Join(notes, "\n"), tt.wantNote), notes)
+		})
+	}
 }

@@ -348,7 +348,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Commands:   opts.Commands,
 		GatesFirst: opts.GatesFirst,
 		Integrate:  integ != nil,
-		Quality:    opts.qualityCheck(wt, status),
+		Quality:    opts.qualityCheck(exec, impl, status),
 		Status:     status,
 		OnCheck:    opts.OnCheck,
 		Install:    opts.Install,
@@ -573,13 +573,13 @@ func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostre
 	return ids
 }
 
-// qualityCheck is the run's quality check on the worktree, nil when the run
-// does not measure quality.
-func (o *RunOptions) qualityCheck(wt Worktree, status iostream.StatusFunc) *Quality {
+// qualityCheck is the run's quality check on the implementer's sidecar, nil
+// when the run does not measure quality.
+func (o *RunOptions) qualityCheck(exec review.Execer, impl *sidecar.PoolEntry, status iostream.StatusFunc) *Quality {
 	if o.Quality == nil {
 		return nil
 	}
-	return &Quality{Config: *o.Quality, Dir: wt.Path, Baseline: wt.Baseline,
+	return &Quality{Config: *o.Quality, Exec: exec, Entry: impl,
 		Warn: func(msg string) { status(iostream.LevelWarn, msg) }}
 }
 

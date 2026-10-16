@@ -19,7 +19,7 @@ const depsDir = "/tmp/" + brand.Command + "-deps"
 // around them; %s is the base image's user, and the lines are dropped for root.
 const (
 	kitPackages = `RUN apt-get update && apt-get install -y --no-install-recommends \
-      git coreutils procps ca-certificates curl bash \
+      git coreutils procps ca-certificates curl bash python3 python3-venv \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system safe.directory '*'
 `
@@ -88,6 +88,49 @@ func KitCodex() string {
 	return codexMain.install() + codexHost.install()
 }
 
+// lizard measures the code quality of any language (see internal/quality). It
+// is installed from PyPI into a venv of its own, from pinned wheels whose
+// SHA-256 pip checks (--require-hashes), so the project's Python is untouched.
+// The version and the hashes are pinned together: change them together, and
+// Dockerfile.local with them (a test keeps the two in step).
+const (
+	LizardVersion = "1.24.1"
+	// lizardToolsDir is the venv's home, and lizardLink the name it is on PATH as.
+	lizardToolsDir = "$HOME/.local/share/" + brand.Command + "-tools"
+	lizardLink     = "$HOME/.local/bin/lizard"
+)
+
+// lizardRequirements are lizard and the wheels it needs, with their hashes.
+func lizardRequirements() []string {
+	return []string{
+		"lizard==" + LizardVersion + " --hash=sha256:746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c",
+		"pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+		"pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+	}
+}
+
+// KitLizard is the Dockerfile block that installs lizard. An image without
+// python3 skips it with a warning and measures nothing, which is not an error.
+func KitLizard() string {
+	reqs := lizardRequirements()
+	quoted := make([]string, len(reqs))
+	for i, r := range reqs {
+		quoted[i] = "'" + r + "'"
+	}
+	return `RUN set -e; \
+    if ! command -v python3 >/dev/null 2>&1; then \
+      echo "warning: python3 is missing, so lizard is not installed and code quality is not measured" >&2; exit 0; \
+    fi; \
+    python3 -m venv "` + lizardToolsDir + `"; \
+    printf '%s\n' ` + strings.Join(quoted, " ") + ` > /tmp/lizard-requirements.txt; \
+    "` + lizardToolsDir + `/bin/pip" install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/lizard-requirements.txt; \
+    rm -f /tmp/lizard-requirements.txt; \
+    mkdir -p "$HOME/.local/bin"; \
+    ln -sf "` + lizardToolsDir + `/bin/lizard" "` + lizardLink + `"; \
+    lizard --version
+`
+}
+
 // Render writes the Dockerfile for r. It is pure.
 func Render(r Recipe) string {
 	var b strings.Builder
@@ -132,7 +175,7 @@ func kitHarnessLabel() string {
 func kitSection(user string) string {
 	return kitMarker() +
 		asUser(rootUser, user, kitPackages) +
-		kitClaude + KitCodex() + kitHarnessLabel() + kitCmd
+		kitClaude + KitCodex() + KitLizard() + kitHarnessLabel() + kitCmd
 }
 
 // asUser runs block as user, then restores the base image's user. A root base

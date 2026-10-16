@@ -99,8 +99,8 @@ type Sidecars struct {
 	InstallTimeout time.Duration
 	// OnInstallOutput receives each sidecar's install output as it arrives.
 	OnInstallOutput func(sidecarID string, line string)
-	// Quality, when set, measures the change on the host after the gates of
-	// every round.
+	// Quality, when set, measures the change on the implementer's sidecar after
+	// the gates of every round.
 	Quality *Quality
 	// OnCheck is called as each validation command and the quality check finish. Reviews report
 	// their progress through Review.ProgressFn.
@@ -150,6 +150,9 @@ func (s *Sidecars) Prepare(ctx context.Context) error {
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
 	if err := s.ws.commitBaseline(ctx); err != nil {
 		return err
+	}
+	if s.Quality != nil {
+		s.Quality.MeasureBaseline(ctx, s.ws.baseline)
 	}
 	if s.WaitReviewers != nil {
 		return nil

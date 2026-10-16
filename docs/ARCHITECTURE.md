@@ -40,7 +40,8 @@ smelt/
     │   ├── codex/             # Codex harness: exec scripts, git guard and review read-only check, JSONL parser (`ErrHostMissing` when the command host is missing)
     │   └── status/            # `harness status`: installed, login, usage windows, last rate-limit signal
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
-    ├── quality/               # Code quality metrics over Go source: complexity, erosion, clones; Compare; readers for a tree or a revision
+    ├── quality/               # Code quality metrics from a provider's contract: erosion, clones, Compare, hash, exclusions
+    │   └── lizard/            # The default provider: the sandbox script and the mapping of lizard's output onto the contract
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -644,16 +645,41 @@ GET  /validate/collect?root=<path>                 → {tasks}
 
 ## Quality Check (`internal/quality/`, `internal/factory/quality.go`)
 
-`internal/quality` is pure over parsed files: `Measure(files, cfg)` gives a `Report` (per-function
-complexity and body lines, erosion, over-threshold count, clone blocks), `ChangedFunctions` is the one
-definition of "changed" (new, or a different normalized body, keyed by file, receiver and name), and
-`Compare(before, after, changed, cfg)` turns two reports into findings. `source.go` is the only I/O: it
-reads the working tree (`git ls-files -co --exclude-standard`) or a revision (`git archive`).
+smelt parses no language. A **provider** prints the **metrics contract** (`quality.Contract`, JSON):
+`functions` (file, name, language, start, end, complexity, lines), `clones` (blocks with their
+locations), `languages`, `not_measured`. `quality.Measure(contract, sources, cfg)` is pure and gives a
+`Report` (erosion, over-threshold count, clones, `NotMeasured`); `ChangedFunctions` is the one
+definition of "changed" (new, or a different `Hash`, keyed by file and name), and
+`Compare(before, after, changed, cfg)` turns two reports into findings. The hash is smelt's: a digest
+of the function's source lines `start..end` with its own name removed and whitespace collapsed
+(`FunctionHash`), so it works for every language; likewise a clone's signature is the hash of its
+text. An empty contract is "not measured" and never fails; output that is not the contract is an
+error, never a zero report.
+
+- **Providers** (`quality.Provider`: a shell script and a parser). `internal/quality/lizard` is the
+  default: it lists the files git does not ignore, skips the default exclusions and unknown
+  extensions, and runs `lizard --csv` and `lizard -Eduplicate`; language comes from the file
+  extension. If the duplicate report is not in the format it knows, clones are `not_measured` with the
+  reason and the functions are still measured. `factory.quality.command` replaces it with
+  `quality.CommandProvider`: the command runs from the repo root and its stdout is the contract.
+- **Exclusions** (`exclude.go`) are table-driven and language-neutral: `vendor`, `node_modules`,
+  `third_party`, `testdata`, `tests`, `test`, `spec`, test-file name conventions, and generated files by
+  a marker in the first lines. `factory.quality.exclude` adds globs (`**` crosses directories),
+  `include` rescues paths from the defaults and `defaultExcludes: false` switches them off. Measure
+  applies them to whatever the provider returned, so a custom command is held to them too.
+- **Sources** come from the sandbox (`factory.SandboxMeasurer`): the second exec after the provider
+  prints a base64 tar of the files the contract names, capped at `quality.MaxSourceBytes`; files past
+  the cap, or gone, are `not measured`. The host worktree is never read, as it may lack uncommitted work.
+- **Measuring a revision** (`SandboxMeasurer.Measure(ctx, rev)`) checks it out in a temporary
+  `git worktree` on the sidecar, runs the provider there, and removes the worktree on every path,
+  also after a failure or a cancelled context.
 
 Factory runs add a built-in `quality` check (`KindQuality`) after the gates of every round, in
-`Sidecars.checkGatesFirst` and `checkTogether`. It runs on the host against the run's worktree, so it
-works on every backend. The baseline (`Worktree.Baseline`) is measured once per run and cached; the
-worktree is measured each round. Medium findings fail the check and flow through `Feedback` to the
+`Sidecars.checkGatesFirst` and `checkTogether`. It runs on the **implementer's sidecar** through the
+same `review.Execer` as the gates. `Sidecars.Prepare` measures the baseline right after the baseline
+commit and before the first turn (`Quality.MeasureBaseline`; a failure only warns) and the report is
+cached for the run; a baseline that failed is not kept, and the next round measures the baseline
+commit in a worktree instead. Medium findings fail the check and flow through `Feedback` to the
 implementer; a measurement failure is `StatusErrored`, which is not fed back. The summary rides on the
 `Check`, and reaches the run log, `Notes.Quality` (PR body and commit message), the round's checks and
 the status JSON:
@@ -662,11 +688,15 @@ the status JSON:
 "quality": {"line": "erosion 27.3% → 27.1% · …", "erosion_before": 27.3, "erosion_after": 27.1,
             "over_threshold_before": 14, "over_threshold_after": 14,
             "clone_lines_before": 120, "clone_lines_after": 120,
-            "worst": [{"func": "T.run", "file": "a.go", "cc": 22, "lines": 80}]}
+            "worst": [{"func": "run", "file": "a.go", "language": "go", "cc": 22, "lines": 80}]}
 ```
 
-`factory.quality.enabled: false` omits the check and the `quality` object. `smelt quality` is a thin
-wrapper over `quality.Assess`.
+`language` is optional and additive. `factory.quality.enabled: false` omits the check and the
+`quality` object, and makes no exec calls. `smelt quality` measures the same way in a throwaway
+container from the project's image (Docker, whatever the project's backend), through `quality.Assess`.
+Lizard is installed by agent kit v4 (`sandboximage.LizardVersion`, a venv at
+`~/.local/share/smelt-tools`, installed with `pip --require-hashes`); the image verify step runs
+`lizard --version` and only warns when it fails.
 
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 

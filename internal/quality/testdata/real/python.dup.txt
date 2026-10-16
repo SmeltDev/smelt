@@ -1,0 +1,37 @@
+================================================
+  NLOC    CCN   token  PARAM  length  location  
+------------------------------------------------
+       4      2     12      1       4 g@4-7@app/generated.py
+      27     20    143      1      27 classify@4-30@app/orders.py
+      18      6     94      1      18 total_for_cart@33-50@app/orders.py
+      18      6     94      1      18 total_for_quote@53-70@app/orders.py
+       2      1      9      1       2 short@73-74@app/orders.py
+       2      1     11      0       2 test_short@4-5@tests/test_orders.py
+3 file analyzed.
+==============================================================
+NLOC    Avg.NLOC  AvgCCN  Avg.token  function_cnt    file
+--------------------------------------------------------------
+      4       4.0     2.0       12.0         1     app/generated.py
+     65      16.2     8.2       85.0         4     app/orders.py
+      3       2.0     1.0       11.0         1     tests/test_orders.py
+
+===========================================================================================================
+!!!! Warnings (cyclomatic_complexity > 15 or length > 1000 or nloc > 1000000 or parameter_count > 100) !!!!
+================================================
+  NLOC    CCN   token  PARAM  length  location  
+------------------------------------------------
+      27     20    143      1      27 classify@4-30@app/orders.py
+==========================================================================================
+Total nloc   Avg.NLOC  AvgCCN  Avg.token   Fun Cnt  Warning cnt   Fun Rt   nloc Rt
+------------------------------------------------------------------------------------------
+        72      11.8     6.0       60.5        6            1      0.17    0.38
+Duplicates
+===================================
+Duplicate block:
+--------------------------
+app/orders.py:33 ~ 46
+app/orders.py:53 ~ 66
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Total duplicate rate: 40.82%
+Total unique rate: 87.26%

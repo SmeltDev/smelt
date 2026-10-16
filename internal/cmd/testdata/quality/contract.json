@@ -1,0 +1,8 @@
+{
+  "provider": "stand-in for a project's own provider",
+  "languages": ["go"],
+  "functions": [
+    {"file": "shape.go", "name": "Classify", "language": "go", "start": 4, "end": 31, "complexity": 14, "lines": 28},
+    {"file": "shape.go", "name": "Add", "language": "go", "start": 34, "end": 36, "complexity": 1, "lines": 3}
+  ]
+}
