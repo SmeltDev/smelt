@@ -7,8 +7,9 @@
 # --force it is stopped at once, which cancels active runs
 # (`smelt daemon stop --force`).
 #
-# A smelt without the `daemon restart` command (an older build) falls back to the
-# logic below: stop only when no factory run is active, or always with --force.
+# A smelt without the `daemon restart` command, or a daemon too old to drain,
+# falls back to the logic below: stop only when no factory run is active
+# (otherwise leave it running and print a hint, exiting 0), or always with --force.
 set -euo pipefail
 
 force=false
@@ -27,7 +28,18 @@ if [ -n "${smelt}" ] && "${smelt}" daemon restart --help 2>&1 | grep -q -- '--wh
 	if [ "${force}" = true ]; then
 		exec "${smelt}" daemon stop --force
 	fi
-	exec "${smelt}" daemon restart --when-idle
+	# A daemon too old to drain falls through to the fallback below, so a build
+	# never fails because of it; any other failure is the command's own.
+	status=0
+	out=$("${smelt}" daemon restart --when-idle 2>&1) || status=$?
+	if [ "${status}" -eq 0 ]; then
+		printf '%s\n' "${out}"
+		exit 0
+	fi
+	if ! printf '%s' "${out}" | grep -q 'too old to drain'; then
+		printf '%s\n' "${out}" >&2
+		exit "${status}"
+	fi
 fi
 
 dir="${SMELT_DAEMON_DIR:-${HOME}/.smelt/daemon}"
