@@ -292,7 +292,10 @@ func (s *Sidecars) Handoff(ctx context.Context, ticket, feedback string, plan *P
 		pack = &revalidated
 		s.Pack = pack
 	}
-	return BuildHandoff(ticket+"\n\nCurrent round feedback:\n"+feedback, plan, pack, change.Stat, prior.Summary, findings), nil
+	return BuildHandoff(HandoffOptions{
+		Ticket: ticket + "\n\nCurrent round feedback:\n" + feedback, Plan: plan, Pack: pack,
+		Change: change.Stat, Summary: prior.Summary, Findings: findings,
+	}), nil
 }
 
 func reviewFindings(checks []Check) []review.Finding {

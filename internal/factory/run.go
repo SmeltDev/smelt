@@ -37,7 +37,7 @@ type PackOptions struct {
 // picking an org or finding a credential, is settled before it.
 type RunOptions struct {
 	// Rounds selects fresh sessions or the legacy resumed session; empty defaults to fresh.
-	Rounds string
+	Rounds config.RoundPolicy
 	// ContextWindow is the implementer auto-compaction threshold; zero requests agent default.
 	ContextWindow int
 	// Root is the developer's repository root. The run's worktree is made from
@@ -719,7 +719,7 @@ func (o *RunOptions) checkIntegrate() error {
 // hears every event, and the status function hears of a continued run that
 // found no work.
 func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string) {
-	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps), CheckHints: o.Pack.Enabled, FreshRounds: o.Rounds != "resume"}
+	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps), CheckHints: o.Pack.Enabled, FreshRounds: o.Rounds != config.RoundsResume}
 	if o.Status != nil {
 		loop.OnEvent = func(e Event) {
 			if e.Kind == EventNoPriorWork {

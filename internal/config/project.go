@@ -217,10 +217,21 @@ func ValidHarness(name string) bool {
 	return false
 }
 
+// RoundPolicy says whether fix rounds resume the implementer's session or
+// start a new one.
+type RoundPolicy string
+
+const (
+	// RoundsFresh starts each fix round in a new session with a handoff.
+	RoundsFresh RoundPolicy = "fresh"
+	// RoundsResume keeps one implementer session across rounds.
+	RoundsResume RoundPolicy = "resume"
+)
+
 // FactoryConfig holds project defaults for `smelt factory build`.
 type FactoryConfig struct {
 	// Rounds selects whether implementer rounds reuse a session or start fresh.
-	Rounds string `json:"rounds,omitempty"`
+	Rounds RoundPolicy `json:"rounds,omitempty"`
 	// ContextWindow is the implementer auto-compaction threshold in tokens; zero uses the agent default.
 	ContextWindow *int `json:"contextWindow,omitempty"`
 	// Harness is the coding agent runs use: "claude" or "codex". Empty means
@@ -288,8 +299,8 @@ type QualityConfig struct {
 
 // validateLimits checks the numeric settings, which must not be negative.
 func (f *FactoryConfig) validateLimits() error {
-	if f.Rounds != "" && f.Rounds != "fresh" && f.Rounds != "resume" {
-		return fmt.Errorf("factory.rounds must be %q or %q", "fresh", "resume")
+	if f.Rounds != "" && f.Rounds != RoundsFresh && f.Rounds != RoundsResume {
+		return fmt.Errorf("factory.rounds must be %q or %q", RoundsFresh, RoundsResume)
 	}
 	if f.ContextWindow != nil && *f.ContextWindow != 0 && (*f.ContextWindow < 100000 || *f.ContextWindow > 1000000) {
 		return fmt.Errorf("factory.contextWindow must be 0 or between 100000 and 1000000")
@@ -307,9 +318,9 @@ func (f *FactoryConfig) validateLimits() error {
 }
 
 // RoundPolicy is the session policy; fresh is the default.
-func (f *FactoryConfig) RoundPolicy() string {
+func (f *FactoryConfig) RoundPolicy() RoundPolicy {
 	if f == nil || f.Rounds == "" {
-		return "fresh"
+		return RoundsFresh
 	}
 	return f.Rounds
 }
