@@ -751,7 +751,6 @@ func TestFactoryRecorderOmitsQualityWhenTheCheckIsOff(t *testing.T) {
 	assert.Assert(t, !strings.Contains(string(b), "quality"), string(b))
 }
 
-<<<<<<< HEAD
 func TestStatusCarriesContextPeaks(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
@@ -778,7 +777,8 @@ func TestStatusCarriesContextPeaks(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"context_peak_max":88412`), string(b))
 	assert.Assert(t, strings.Contains(wire.Line, "\nContext: implementer peak 88k"), wire.Line)
-=======
+}
+
 // A SARIF gate's counts reach the status JSON as {new, fixed, existing}.
 func TestFactoryRecorderRecordsRatchetCounts(t *testing.T) {
 	s := newSessionStore(context.Background())
@@ -793,5 +793,4 @@ func TestFactoryRecorderRecordsRatchetCounts(t *testing.T) {
 	b, err := json.Marshal(got)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"ratchet":{"new":1,"fixed":2,"existing":3}`), string(b))
->>>>>>> origin/main
 }

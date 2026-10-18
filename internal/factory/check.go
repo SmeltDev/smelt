@@ -78,13 +78,10 @@ type Check struct {
 	// Quality is the measurement of a quality check that ran, whether or not
 	// it found anything to fix.
 	Quality *quality.Summary
-<<<<<<< HEAD
 	// Context is how large the prompts of a review got; zero when unknown.
 	Context harness.Context
-=======
 	// Ratchet is how many findings a SARIF gate's change added, fixed and left.
 	Ratchet *sarif.Counts
->>>>>>> origin/main
 }
 
 // outputTail bounds how much of a failed command's output is fed back. The end
