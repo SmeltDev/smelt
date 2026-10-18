@@ -64,7 +64,7 @@ func TestReadyTimesOutWithoutPulling(t *testing.T) {
 
 func TestReadyMissingLocalImage(t *testing.T) {
 	for _, tt := range []struct{ name, managed, image, hint string }{
-		{"dockerfile.local", "", "smelt-sandbox:local", "Build it with: docker build -t smelt-sandbox:local -f Dockerfile.local ."},
+		{"unmanaged", "", "smelt-sandbox:local", "Build it with: docker build -t smelt-sandbox:local -f Dockerfile.smelt ."},
 		{"managed", "Dockerfile.smelt", "smelt-myrepo:3f9a", "Build it with: smelt factory image"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

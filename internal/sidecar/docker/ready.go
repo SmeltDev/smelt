@@ -64,7 +64,7 @@ func (e *missingImageError) Error() string { return e.msg }
 
 // missingLocalImage is the error for a locally built image the host lacks.
 func (b *Provider) missingLocalImage(ref string) error {
-	build := "docker build -t " + ref + " -f Dockerfile.local ."
+	build := "docker build -t " + ref + " -f Dockerfile.smelt ."
 	if b.ManagedDockerfile != "" {
 		build = brand.Command + " factory image"
 	}

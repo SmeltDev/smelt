@@ -32,7 +32,7 @@ const (
 // every command through a companion program, codex-code-mode-host, which the
 // release ships as a separate asset. The version and the checksums of the
 // four Linux archives are pinned together: change them together, and
-// Dockerfile.local with them (a test keeps the two in step).
+// Dockerfile.smelt with them (a test keeps the two in step).
 const (
 	CodexVersion = "0.162.0"
 	// codexHostBinary is the file the command host is installed as.
@@ -92,7 +92,7 @@ func KitCodex() string {
 // is installed from PyPI into a venv of its own, from pinned wheels whose
 // SHA-256 pip checks (--require-hashes), so the project's Python is untouched.
 // The version and the hashes are pinned together: change them together, and
-// Dockerfile.local with them (a test keeps the two in step).
+// Dockerfile.smelt with them (a test keeps the two in step).
 const (
 	LizardVersion = "1.24.1"
 	// lizardToolsDir is the venv's home, and lizardLink the name it is on PATH as.

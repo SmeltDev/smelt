@@ -76,10 +76,10 @@ func TestResolveBuildSettingsWarnsAboutAStaleUserImage(t *testing.T) {
 	}{
 		"label missing": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1},
 			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
-			"smelt-sandbox:local has agent kit none; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.local .)"},
+			"smelt-sandbox:local has agent kit none; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
 		"lower": {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: 3, KitLabeled: true},
 			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
-			"smelt-sandbox:local has agent kit 3; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.local .)"},
+			"smelt-sandbox:local has agent kit 3; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
 		"equal":   {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: sandboximage.KitVersion, KitLabeled: true}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
 		"missing": {sandboximage.ImageInfo{Status: sandboximage.ImageMissing}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
 		"error":   {sandboximage.ImageInfo{}, errors.New("no daemon"), `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},

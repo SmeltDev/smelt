@@ -237,12 +237,10 @@ func FindingTitle(f review.Finding) string {
 // round where a review could not run has not shown the code is clean. A quality
 // measurement that could not be made is advisory and never blocks.
 func blocksRound(c Check) bool {
-	switch {
-	case c.Kind == KindQuality && c.Status == StatusNotMeasured:
+	if c.Kind == KindQuality && c.Status == StatusNotMeasured {
 		return false
-	default:
-		return c.Status != StatusPassed
 	}
+	return c.Status != StatusPassed
 }
 
 // Passed reports whether no check blocks the round.

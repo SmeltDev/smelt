@@ -60,26 +60,23 @@ func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
 	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
 }
 
-// readDockerfileLocal reads the maintainer's hand-built image recipe. It is not
-// tracked, so a checkout without it skips the test.
-func readDockerfileLocal(t *testing.T) string {
+// readDockerfileSmelt reads the committed factory sandbox recipe, which must
+// carry the kit blocks verbatim.
+func readDockerfileSmelt(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("../../Dockerfile.local")
-	if os.IsNotExist(err) {
-		t.Skip("Dockerfile.local is not in this checkout")
-	}
+	raw, err := os.ReadFile("../../Dockerfile.smelt")
 	assert.NilError(t, err)
 	return string(raw)
 }
 
-func TestDockerfileLocalCarriesTheKitsCodexBlock(t *testing.T) {
-	local := readDockerfileLocal(t)
+func TestDockerfileSmeltCarriesTheKitsCodexBlock(t *testing.T) {
+	local := readDockerfileSmelt(t)
 	assert.Check(t, cmp.Contains(local, KitCodex()))
 	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex"))
 }
 
-func TestDockerfileLocalCarriesTheKitsLizardBlock(t *testing.T) {
-	local := readDockerfileLocal(t)
+func TestDockerfileSmeltCarriesTheKitsLizardBlock(t *testing.T) {
+	local := readDockerfileSmelt(t)
 	assert.Check(t, cmp.Contains(local, KitLizard()))
 	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
 	assert.Check(t, cmp.Contains(local, "python3-venv"))
