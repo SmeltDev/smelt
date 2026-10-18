@@ -42,7 +42,7 @@ func newWatchCmd() *cobra.Command {
 				return runRemoteWatch(cmd, focus, args)
 			}
 
-			if err := smeltd.EnsureRunning(); err != nil {
+			if err := ensureRunningForCommand(cmd); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("smelt watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 

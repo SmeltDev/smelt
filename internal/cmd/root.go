@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
@@ -338,7 +339,7 @@ func maybeAutoLaunchDaemon(cmd *cobra.Command) error {
 	if !shouldAutoLaunch(cmd) {
 		return nil
 	}
-	err := smeltd.EnsureRunning()
+	err := ensureRunningForCommand(cmd)
 	if err == nil {
 		return nil
 	}
@@ -346,6 +347,15 @@ func maybeAutoLaunchDaemon(cmd *cobra.Command) error {
 		return fmt.Errorf("start smelt daemon: %w", err)
 	}
 	return nil
+}
+
+func ensureRunningForCommand(cmd *cobra.Command) error {
+	jsonMode := false
+	if flag := cmd.Flags().Lookup("json"); flag != nil {
+		jsonMode, _ = cmd.Flags().GetBool("json")
+	}
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return smeltd.EnsureRunningWithWarning(cmd.ErrOrStderr(), interactive && !jsonMode)
 }
 
 // printUpdateNotice prints a notice to stderr if the background check has

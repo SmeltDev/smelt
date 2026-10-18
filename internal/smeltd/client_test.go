@@ -1,7 +1,9 @@
 package smeltd
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -16,6 +19,120 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 )
+
+func TestEnsureRunningStaleDaemonSessionDecisions(t *testing.T) {
+	for _, tc := range []struct {
+		name, body  string
+		unreadable  bool
+		wantDrain   bool
+		wantReplace bool
+	}{
+		{"active", `{"sessions":[{"state":"running"},{"state":"running"}]}`, false, true, false},
+		{"empty", `{"sessions":[]}`, false, false, true},
+		{"unreadable", `not-json`, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drain, launches, replaces := 0, 0, 0
+			startTestDaemon(t, "old-build", func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/ping":
+					_, _ = io.WriteString(w, "old-build")
+				case "/factory":
+					if tc.unreadable {
+						w.WriteHeader(500)
+						return
+					}
+					_, _ = io.WriteString(w, tc.body)
+				case "/drain":
+					drain++
+					w.WriteHeader(http.StatusNotFound) // compatible with daemons predating drain
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			prevLaunch, prevReplace := launch, replaceDaemon
+			launch = func() error { launches++; return nil }
+			replaceDaemon = func(int, string) error { replaces++; return nil }
+			t.Cleanup(func() { launch = prevLaunch; replaceDaemon = prevReplace })
+			assert.NilError(t, EnsureRunning())
+			assert.Equal(t, drain > 0, tc.wantDrain)
+			assert.Equal(t, replaces > 0, tc.wantReplace)
+			assert.Equal(t, launches > 0, tc.wantReplace)
+		})
+	}
+}
+
+func TestEnsureRunningSameBuildReusesDaemon(t *testing.T) {
+	startTestDaemon(t, BuildID(), func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	launches := stubLaunch(t)
+	assert.NilError(t, EnsureRunning())
+	assert.Equal(t, *launches, 0)
+}
+
+func TestEnsureRunningWarningIsInteractiveAndOnce(t *testing.T) {
+	staleWarning = sync.Once{}
+	startTestDaemon(t, "old-build", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/factory" {
+			_, _ = io.WriteString(w, `{"sessions":[{"state":"running"},{"state":"running"}]}`)
+			return
+		}
+		if r.URL.Path == "/drain" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	var out bytes.Buffer
+	assert.NilError(t, ensureRunning(&out, true))
+	assert.NilError(t, ensureRunning(&out, true))
+	assert.Equal(t, strings.Count(out.String(), "smelt daemon is from an older build"), 1)
+}
+
+func TestListSessionsDecodesOlderDaemonFixture(t *testing.T) {
+	fixture := `{"sessions":[{"id":"legacy","project_root":"/repo","state":"running","started_at":"2026-10-18T00:00:00Z"}]}`
+	startTestDaemon(t, "old-build", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/factory" {
+			_, _ = io.WriteString(w, fixture)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	sessions, err := ListSessions("")
+	assert.NilError(t, err)
+	assert.Equal(t, len(sessions), 1)
+	assert.Equal(t, sessions[0].ID, "legacy")
+	assert.Equal(t, sessions[0].State, SessionRunning)
+}
+
+func TestStaleDaemonWarningOnce(t *testing.T) {
+	var output bytes.Buffer
+	staleWarning = sync.Once{}
+	staleWarning.Do(func() { _, _ = fmt.Fprint(&output, "warning") })
+	staleWarning.Do(func() { _, _ = fmt.Fprint(&output, "warning") })
+	assert.Equal(t, output.String(), "warning")
+}
+
+func startTestDaemon(t *testing.T, build string, handler http.HandlerFunc) {
+	t.Helper()
+	dir := socketDir(t)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
+	pidPath, err := PIDPath()
+	assert.NilError(t, err)
+	assert.NilError(t, WritePID(pidPath, os.Getpid()))
+	sock, err := SocketPath()
+	assert.NilError(t, err)
+	ln, err := net.Listen("unix", sock)
+	assert.NilError(t, err)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ping" {
+			_, _ = io.WriteString(w, build)
+			return
+		}
+		handler(w, r)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+}
 
 func TestBuildID_distinguishesBuildsTheVersionCannot(t *testing.T) {
 	mod := time.Unix(1_700_000_000, 0)

@@ -318,7 +318,10 @@ func friendlyReviewError(err error) string {
 // settleSession closes a session that has ended, however it ended.
 func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
+	defer func() {
+		entry.mu.Unlock()
+		d.stopIfDrained()
+	}()
 
 	now := time.Now()
 	entry.s.EndedAt = &now

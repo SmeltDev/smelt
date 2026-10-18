@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -552,10 +553,21 @@ func launchArgs() []string { return []string{DaemonSubcommand} }
 // launch starts the daemon process. A variable so tests can see whether
 // EnsureRunning and EnsureLaunched decided to start one, without starting one.
 var launch = launchDaemon
+var staleWarning sync.Once
+var replaceDaemon = stopDaemon
 
 // EnsureRunning checks whether the smelt daemon is running and serving, and
 // launches it if not.
 func EnsureRunning() error {
+	return ensureRunning(nil, false)
+}
+
+// EnsureRunningWithWarning also reports stale daemons to interactive callers.
+func EnsureRunningWithWarning(stderr io.Writer, interactive bool) error {
+	return ensureRunning(stderr, interactive)
+}
+
+func ensureRunning(stderr io.Writer, interactive bool) error {
 	// Remote daemons are managed externally; local pid/socket operations are
 	// irrelevant and would start a stray local daemon.
 	if TCPRemoteAddr() != "" {
@@ -579,9 +591,31 @@ func EnsureRunning() error {
 			if build == BuildID() {
 				return nil
 			}
+			// A reachable old daemon may own runs that must finish on its build.
+			// Treat an unreadable list conservatively for the same reason.
+			sessions, listErr := ListSessions("")
+			active := 0
+			for _, session := range sessions {
+				if session.State == SessionRunning {
+					active++
+				}
+			}
+			if listErr != nil || active > 0 {
+				_ = DrainDaemon()
+				if interactive && stderr != nil {
+					staleWarning.Do(func() {
+						if listErr != nil {
+							_, _ = fmt.Fprintln(stderr, "smelt daemon is from an older build and its active run count is unavailable; it will be replaced when they finish")
+							return
+						}
+						_, _ = fmt.Fprintf(stderr, "smelt daemon is from an older build and has %d active run(s); it will be replaced when they finish\n", active)
+					})
+				}
+				return nil
+			}
 			// A daemon from another build is replaced rather than reused: see
 			// BuildID for why reusing it degrades silently.
-			if stopErr := stopDaemon(pid, sockPath); stopErr != nil {
+			if stopErr := replaceDaemon(pid, sockPath); stopErr != nil {
 				return fmt.Errorf("replace stale smelt daemon: %w", stopErr)
 			}
 		}
