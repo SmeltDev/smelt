@@ -68,6 +68,10 @@ type Harness interface {
 	ReviewScript(in ReviewInput) string
 	// ParseReview reads structured findings out of a review script's stdout.
 	ParseReview(stdout string) (ReviewPayload, error)
+	// ParseAnswer reads the schema-checked answer object, whatever its shape,
+	// out of a review script's stdout. The plan, the notes and the bootstrap
+	// ask for their own schemas rather than findings.
+	ParseAnswer(stdout string) (json.RawMessage, error)
 
 	// Env is the environment a turn runs with: the credential the CLI reads
 	// directly, and a base URL when it points somewhere unusual.

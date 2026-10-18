@@ -159,6 +159,16 @@ func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	return harness.ReviewPayload{Review: msg.Review, Findings: msg.Findings}, nil
 }
 
+// ParseAnswer implements harness.Harness: stdout is the last message, which is
+// the answer object itself.
+func (Harness) ParseAnswer(stdout string) (json.RawMessage, error) {
+	msg := json.RawMessage(strings.TrimSpace(stdout))
+	if !json.Valid(msg) {
+		return nil, fmt.Errorf("codex gave no structured answer: %q is not JSON", harness.Tail(stdout, 200))
+	}
+	return msg, nil
+}
+
 // ReviewContext implements harness.Harness. Codex's review prints only the
 // last message, so there is nothing to measure.
 func (Harness) ReviewContext(string) harness.Context { return harness.Context{} }

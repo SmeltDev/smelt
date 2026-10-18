@@ -252,7 +252,7 @@ func TestParseAnswerClaude(t *testing.T) {
 	})
 	t.Run("no structured output", func(t *testing.T) {
 		_, err := parseAnswer[bootstrapAnswer](h, `{"type":"result","subtype":"success","result":"prose"}`, "review prompts")
-		assert.ErrorContains(t, err, "no structured review prompts")
+		assert.ErrorContains(t, err, "no structured answer")
 	})
 }
 
@@ -261,7 +261,7 @@ func TestParseAnswerCodex(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got.Summary, "A Go CLI.")
 	_, err = parseAnswer[bootstrapAnswer](codex.Harness{}, "not json", "review prompts")
-	assert.ErrorContains(t, err, "read the review prompts")
+	assert.ErrorContains(t, err, "no structured answer")
 }
 
 // scripted runs the sidecar's script by writing fixed streams to the callback.

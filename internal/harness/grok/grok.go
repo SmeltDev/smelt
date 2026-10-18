@@ -150,6 +150,22 @@ func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	return harness.ReviewPayload{Review: res.StructuredOutput.Review, Findings: res.StructuredOutput.Findings}, nil
 }
 
+// ParseAnswer implements harness.Harness: the answer is the structuredOutput
+// of grok's json result.
+func (Harness) ParseAnswer(stdout string) (json.RawMessage, error) {
+	var res struct {
+		StructuredOutput json.RawMessage `json:"structuredOutput"`
+		StopReason       string          `json:"stopReason"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &res); err != nil {
+		return nil, fmt.Errorf("read grok's result: %w", err)
+	}
+	if len(res.StructuredOutput) == 0 || string(res.StructuredOutput) == "null" {
+		return nil, fmt.Errorf("grok gave no structured answer (stop reason %q)", res.StopReason)
+	}
+	return res.StructuredOutput, nil
+}
+
 // ReviewContext implements harness.Harness. The json output has only the turn's
 // total usage, which is one call's size only when the run made one call.
 func (Harness) ReviewContext(stdout string) harness.Context {

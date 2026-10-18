@@ -2,7 +2,6 @@ package factory
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -124,11 +123,7 @@ func (s *Sidecars) writeNotes(ctx context.Context, in NotesInput) (Notes, error)
 	if in.Log != nil {
 		in.Log("notes response", out)
 	}
-	parse := ParseNotes
-	if h.Name() != harness.Claude {
-		parse = parseNotesMessage
-	}
-	n, err := parse(out)
+	n, err := ParseNotes(h, out)
 	n.Context = h.ReviewContext(out)
 	return n, err
 }
@@ -172,20 +167,10 @@ func notesPrompt(in NotesInput) string {
 	return b.String()
 }
 
-// parseNotesMessage reads the notes out of an agent's last message, which the
-// schema made the notes object itself rather than claude's JSON result.
-func parseNotesMessage(msg string) (Notes, error) {
-	var n Notes
-	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &n); err != nil {
-		return Notes{}, fmt.Errorf("read the notes: %w", err)
-	}
-	return validNotes(n)
-}
-
-// ParseNotes reads the notes out of claude's JSON result. Every field must be
-// present, and the title is cut to fit a commit subject.
-func ParseNotes(output string) (Notes, error) {
-	n, err := parseStructured[Notes](output, "notes")
+// ParseNotes reads the notes out of a harness's review output. Every field
+// must be present, and the title is cut to fit a commit subject.
+func ParseNotes(h harness.Harness, output string) (Notes, error) {
+	n, err := parseAnswer[Notes](h, output, "notes")
 	if err != nil {
 		return Notes{}, err
 	}

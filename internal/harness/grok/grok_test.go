@@ -353,3 +353,14 @@ func TestIdentity(t *testing.T) {
 	assert.Equal(t, Harness{}.Name(), harness.Grok)
 	assert.Equal(t, Harness{}.Binary(), "grok")
 }
+
+func TestParseAnswer(t *testing.T) {
+	raw, err := Harness{}.ParseAnswer(fixture(t, "grok-review-structured.json"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(raw), `"findings"`), string(raw))
+	assert.Assert(t, !strings.Contains(string(raw), "stopReason"), string(raw))
+	_, err = Harness{}.ParseAnswer(fixture(t, "grok-review-no-structured.json"))
+	assert.Assert(t, err != nil)
+	_, err = Harness{}.ParseAnswer("not json")
+	assert.Assert(t, err != nil)
+}
