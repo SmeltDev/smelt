@@ -60,19 +60,26 @@ func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
 	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
 }
 
-func TestDockerfileLocalCarriesTheKitsCodexBlock(t *testing.T) {
-	local, err := os.ReadFile("../../Dockerfile.local")
+// readDockerfileSmelt reads the committed factory sandbox recipe, which must
+// carry the kit blocks verbatim.
+func readDockerfileSmelt(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../Dockerfile.smelt")
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Contains(string(local), KitCodex()))
-	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex"))
+	return string(raw)
 }
 
-func TestDockerfileLocalCarriesTheKitsLizardBlock(t *testing.T) {
-	local, err := os.ReadFile("../../Dockerfile.local")
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Contains(string(local), KitLizard()))
-	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
-	assert.Check(t, cmp.Contains(string(local), "python3-venv"))
+func TestDockerfileSmeltCarriesTheKitsCodexBlock(t *testing.T) {
+	local := readDockerfileSmelt(t)
+	assert.Check(t, cmp.Contains(local, KitCodex()))
+	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex"))
+}
+
+func TestDockerfileSmeltCarriesTheKitsLizardBlock(t *testing.T) {
+	local := readDockerfileSmelt(t)
+	assert.Check(t, cmp.Contains(local, KitLizard()))
+	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
+	assert.Check(t, cmp.Contains(local, "python3-venv"))
 }
 
 // lizard is installed from hash-pinned wheels into a venv of its own, and an

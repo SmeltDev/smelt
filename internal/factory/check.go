@@ -38,6 +38,10 @@ const (
 	// of the round failed. Like an errored check it says nothing about the
 	// code, so it is not fed back.
 	StatusSkipped Status = "skipped"
+	// StatusNotMeasured means a quality measurement could not be made, such as
+	// a missing metrics provider. Quality is advisory, so it never blocks a
+	// round; Reason says why.
+	StatusNotMeasured Status = "not_measured"
 )
 
 // reasonGatesFailed is why a round's reviews are skipped.
@@ -109,11 +113,12 @@ const QualityCheckName = "quality"
 
 // FromQuality converts a quality measurement into a check. It fails only on
 // medium findings, the ones worth sending back; lower ones stay in the
-// summary for display. A measurement that could not be made (err) errored.
+// summary for display. A measurement that could not be made (err) is not
+// measured, which never blocks a round.
 func FromQuality(sum quality.Summary, d time.Duration, err error) Check {
 	c := Check{Name: QualityCheckName, Kind: KindQuality, Duration: d}
 	if err != nil {
-		c.Status, c.Error = StatusErrored, err.Error()
+		c.Status, c.Reason = StatusNotMeasured, err.Error()
 		return c
 	}
 	c.Quality = &sum
@@ -227,13 +232,18 @@ func FindingTitle(f review.Finding) string {
 	return t
 }
 
-// Passed reports whether every check passed. An errored check is not a pass:
-// a round where a review could not run has not shown the code is clean.
-func Passed(checks []Check) bool {
-	for _, c := range checks {
-		if c.Status != StatusPassed {
-			return false
-		}
+// blocksRound reports whether c keeps its round from passing. Gates, reviews
+// and quality findings block, including when they errored or were skipped: a
+// round where a review could not run has not shown the code is clean. A quality
+// measurement that could not be made is advisory and never blocks.
+func blocksRound(c Check) bool {
+	if c.Kind == KindQuality && c.Status == StatusNotMeasured {
+		return false
 	}
-	return true
+	return c.Status != StatusPassed
+}
+
+// Passed reports whether no check blocks the round.
+func Passed(checks []Check) bool {
+	return !slices.ContainsFunc(checks, blocksRound)
 }

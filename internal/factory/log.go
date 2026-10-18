@@ -206,7 +206,7 @@ func (l *runLog) review(round int, c Check) {
 	case StatusSkipped:
 		l.line("info", fmt.Sprintf("round %d: review %s skipped (%s)", round, c.Name, c.Reason))
 		return
-	case StatusPassed, StatusFailed:
+	case StatusPassed, StatusFailed, StatusNotMeasured:
 	}
 	l.line(statusLevel(c.Status), fmt.Sprintf("%s with %d finding(s)", head, len(c.Findings)))
 	for _, f := range c.Findings {
@@ -240,7 +240,7 @@ func (l *runLog) check(c Check) {
 		if l.verbose {
 			l.block("  output", c.Output)
 		}
-	case StatusSkipped:
+	case StatusSkipped, StatusNotMeasured:
 	}
 	if len(c.Skipped) > 0 {
 		l.line("warn", fmt.Sprintf("%s skipped %d test(s): %s", c.Name, len(c.Skipped), strings.Join(c.Skipped, ", ")))
@@ -250,8 +250,8 @@ func (l *runLog) check(c Check) {
 // quality records the quality check: the before → after line, then each
 // finding, marked when it is sent to the implementer.
 func (l *runLog) quality(c Check) {
-	if c.Status == StatusErrored {
-		l.line("warn", "quality could not be measured: "+c.Error)
+	if c.Status == StatusNotMeasured {
+		l.line("warn", "quality not measured: "+c.Reason)
 		return
 	}
 	l.line(statusLevel(c.Status), "quality: "+c.Quality.Line())
@@ -323,7 +323,7 @@ func (l *runLog) line(level, msg string) {
 // checkTally sums up a round's checks in one line, naming those that did not
 // pass.
 func checkTally(checks []Check) string {
-	var failed, errored, skipped []string
+	var failed, errored, skipped, notMeasured []string
 	for _, c := range checks {
 		switch c.Status {
 		case StatusPassed:
@@ -333,9 +333,14 @@ func checkTally(checks []Check) string {
 			errored = append(errored, string(c.Kind)+" "+c.Name)
 		case StatusSkipped:
 			skipped = append(skipped, string(c.Kind)+" "+c.Name)
+		case StatusNotMeasured:
+			notMeasured = append(notMeasured, string(c.Kind))
 		}
 	}
 	line := fmt.Sprintf("%d of %d checks passed", len(checks)-len(failed)-len(errored)-len(skipped), len(checks))
+	if len(notMeasured) > 0 {
+		line += "; not measured: " + strings.Join(notMeasured, ", ")
+	}
 	if len(failed) > 0 {
 		line += "; failed: " + strings.Join(failed, ", ")
 	}

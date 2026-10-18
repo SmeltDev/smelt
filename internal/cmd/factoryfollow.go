@@ -322,6 +322,8 @@ func (r *sessionReporter) reportCheck(c smeltd.RoundCheck) {
 		}
 	case smeltd.CheckErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
+	case smeltd.CheckNotMeasured:
+		r.status(iostream.LevelWarn, fmt.Sprintf("  ⚠ %s not measured: %s", c.Name, c.Error))
 	case smeltd.CheckSkipped:
 		r.status(iostream.LevelInfo, fmt.Sprintf("  %s skipped", c.Name))
 	}

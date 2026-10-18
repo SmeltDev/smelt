@@ -715,7 +715,7 @@ func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
 	}})
 	b, err := json.Marshal(snap.Factory.Quality)
 	assert.NilError(t, err)
-	assert.Equal(t, string(b), `{"line":"erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 118",`+
+	assert.Equal(t, string(b), `{"measured":true,"line":"erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 118",`+
 		`"erosion_before":27.3,"erosion_after":27.1,"over_threshold_before":14,"over_threshold_after":14,`+
 		`"clone_lines_before":120,"clone_lines_after":118,"worst":[{"func":"T.run","file":"a.go","language":"go","cc":22,"lines":80}]}`)
 
@@ -723,7 +723,23 @@ func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
 	assert.Equal(t, entry.snapshot().Factory.Quality.ErosionAfter, 27.1)
 }
 
-func TestFactoryRecorderOmitsQualityWhenNotMeasured(t *testing.T) {
+func TestFactoryRecorderReportsWhyQualityWasNotMeasured(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	check := factory.FromQuality(quality.Summary{}, 0, errors.New("lizard is not installed in this image"))
+	rec.event(factory.Event{Kind: factory.EventChecking, Round: 1})
+	rec.checked(check)
+	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{check}})
+	snap := entry.snapshot()
+	assert.Equal(t, snap.Rounds[0].Checks[0].Status, smeltd.CheckNotMeasured)
+	assert.Equal(t, snap.Rounds[0].Note, "1 of 1 checks passed")
+	b, err := json.Marshal(snap.Factory.Quality)
+	assert.NilError(t, err)
+	assert.Equal(t, string(b), `{"measured":false,"reason":"lizard is not installed in this image","erosion_before":0,"erosion_after":0,"over_threshold_before":0,"over_threshold_after":0,"clone_lines_before":0,"clone_lines_after":0}`)
+}
+
+func TestFactoryRecorderOmitsQualityWhenTheCheckIsOff(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}

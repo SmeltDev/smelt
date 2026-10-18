@@ -208,3 +208,12 @@ func TestReportCheckPrintsTheQualityLine(t *testing.T) {
 	r.reportCheck(smeltd.RoundCheck{Name: "quality", Status: smeltd.CheckFailed, Summary: line, Output: "- a.go:3: f has complexity 16"})
 	assert.DeepEqual(t, lines, []string{"  quality  " + line, "  quality  " + line, "    - a.go:3: f has complexity 16"})
 }
+
+func TestReportCheckWarnsWhenQualityWasNotMeasured(t *testing.T) {
+	var lines []string
+	var levels []iostream.Level
+	r := newSessionReporter(func(l iostream.Level, msg string) { levels, lines = append(levels, l), append(lines, msg) })
+	r.reportCheck(smeltd.RoundCheck{Name: "quality", Status: smeltd.CheckNotMeasured, Error: "lizard is not installed in this image"})
+	assert.DeepEqual(t, lines, []string{"  ⚠ quality not measured: lizard is not installed in this image"})
+	assert.DeepEqual(t, levels, []iostream.Level{iostream.LevelWarn})
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -225,6 +226,9 @@ func TestResolveImageNotListedIsMissingImmediately(t *testing.T) {
 }
 
 func TestCreateAndSnapshotUseResolvedID(t *testing.T) {
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync is not installed")
+	}
 	f := observedState()
 	p := f.provider()
 	p.workRoot = t.TempDir()

@@ -637,6 +637,8 @@ func checkRow(st watchStyles, c smeltd.RoundCheck) runRow {
 		row.icon, row.detail = st.err(ui.IconFail), st.dim(dur)+"  "+st.err("failed")
 	case smeltd.CheckErrored:
 		row.icon, row.detail = st.err(ui.IconFail), st.err(truncate(strings.Join(strings.Fields(c.Error), " "), 80))
+	case smeltd.CheckNotMeasured:
+		row.icon, row.detail = st.warning(ui.IconWarn), st.warning("not measured: "+truncate(strings.Join(strings.Fields(c.Error), " "), 60))
 	default:
 		row.icon, row.detail = st.vdim("·"), st.muted(c.Status)
 	}

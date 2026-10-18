@@ -1,6 +1,7 @@
 package sandboximage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -119,4 +120,21 @@ func TestUpdateKitBringsV3UpToV4(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got, current)
 	assert.Check(t, cmp.Contains(got, KitLizard()))
+}
+
+func TestStaleImageWarning(t *testing.T) {
+	for name, tt := range map[string]struct {
+		info ImageInfo
+		err  error
+		want string
+	}{
+		"missing":   {ImageInfo{Status: ImageMissing}, nil, ""},
+		"error":     {ImageInfo{}, errors.New("x"), ""},
+		"unlabeled": {ImageInfo{Status: ImageUnlabeled, Kit: 1}, nil, "t:1 has agent kit none; this smelt expects 4: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"lower":     {ImageInfo{Status: ImageLabeled, Kit: 3, KitLabeled: true}, nil, "t:1 has agent kit 3; this smelt expects 4: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"equal":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion, KitLabeled: true}, nil, ""},
+		"newer":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion + 1, KitLabeled: true}, nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) { assert.Equal(t, StaleImageWarning("t:1", tt.info, tt.err, ""), tt.want) })
+	}
 }

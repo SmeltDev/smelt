@@ -79,6 +79,17 @@ func (o Outcome) Quality() *quality.Summary {
 	return nil
 }
 
+// QualityNotMeasured is why the last round's quality could not be measured, ""
+// when it was measured or not checked.
+func (o Outcome) QualityNotMeasured() string {
+	for _, c := range o.Checks {
+		if c.Kind == KindQuality && c.Status == StatusNotMeasured {
+			return c.Reason
+		}
+	}
+	return ""
+}
+
 // EventKind identifies a step of the loop for display.
 type EventKind int
 
