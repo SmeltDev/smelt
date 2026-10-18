@@ -3,7 +3,7 @@
 // what it prints; the factory and the reviewers do everything else.
 //
 // This package holds only the interface and what the implementations share, so
-// internal/harness/claude and internal/harness/codex can import it. Look a
+// internal/harness/claude, internal/harness/codex and internal/harness/grok can import it. Look a
 // harness up by name with internal/harness/all.
 package harness
 
@@ -26,6 +26,7 @@ type Name string
 const (
 	Claude Name = config.HarnessClaude
 	Codex  Name = config.HarnessCodex
+	Grok   Name = config.HarnessGrok
 )
 
 // MissingExitCode is the exit code a script uses for its CLI not being on PATH,
@@ -112,8 +113,9 @@ type ReviewInput struct {
 	Model    string
 	// Schema, when set, is the JSON schema the answer must satisfy.
 	Schema string
-	// Tools limits what a reviewer may use. Claude only: Codex reviews are held
-	// to read-only by checking the working tree afterwards.
+	// Tools limits what a reviewer may use. Claude only: Codex and Grok reviews are
+	// held to read-only by checking the working tree afterwards, and Grok is
+	// also given a fixed read-only tool list.
 	Tools []string
 	// Stream asks the script to also report what the agent does as it runs,
 	// in the format NewImplementParser reads, so a caller can show progress.

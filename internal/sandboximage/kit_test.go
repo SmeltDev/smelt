@@ -23,8 +23,8 @@ func TestKitVersionOf(t *testing.T) {
 		{"no marker", "FROM x\nRUN true\n", 1, false, true, false},
 		{"v1 marker without number", "FROM x\n# --- smelt agent kit ------\nRUN true\n", 1, true, true, false},
 		{"v2", "FROM x\n# --- smelt agent kit (v2) ------\n", 2, true, true, false},
-		{"current", "FROM x\n# --- smelt agent kit (v4) ------\n", 4, true, false, false},
-		{"newer than the binary", "FROM x\n# --- smelt agent kit (v5) ------\n", 5, true, false, true},
+		{"current", "FROM x\n# --- smelt agent kit (v5) ------\n", 5, true, false, false},
+		{"newer than the binary", "FROM x\n# --- smelt agent kit (v6) ------\n", 6, true, false, true},
 		{"garbage after the marker", "# --- smelt agent kit (vX) ---\n", 1, true, true, false},
 		{"huge number", "# --- smelt agent kit (v99999999999999999999) ---\n", 1, true, true, false},
 		{"marker in a comment elsewhere", "FROM x\n# see the '# --- smelt agent kit (v2)' section\nRUN echo # --- smelt agent kit (v2)\n", 1, false, true, false},
@@ -45,7 +45,7 @@ func TestRenderedKitIsCurrent(t *testing.T) {
 	v, found := KitVersionOf(got)
 	assert.Check(t, found)
 	assert.Check(t, cmp.Equal(v, KitVersion))
-	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
+	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex,grok "+LabelKit+"="+kitVersionString()))
 }
 
 func TestUpdateKitReplacesOnlyTheKitSection(t *testing.T) {
@@ -74,7 +74,7 @@ func TestUpdateKitKeepsTheBaseUsersSwitch(t *testing.T) {
 	got, err := UpdateKit(old)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Contains(got, "USER root\nRUN apt-get update"))
-	assert.Check(t, strings.HasSuffix(strings.TrimSuffix(got, "CMD [\"sleep\", \"infinity\"]\n"), "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()+"\n"))
+	assert.Check(t, strings.HasSuffix(strings.TrimSuffix(got, "CMD [\"sleep\", \"infinity\"]\n"), "LABEL "+LabelHarnesses+"=claude,codex,grok "+LabelKit+"="+kitVersionString()+"\n"))
 	assert.Check(t, cmp.Contains(got, "USER circleci\nRUN curl"))
 }
 
@@ -130,8 +130,8 @@ func TestStaleImageWarning(t *testing.T) {
 	}{
 		"missing":   {ImageInfo{Status: ImageMissing}, nil, ""},
 		"error":     {ImageInfo{}, errors.New("x"), ""},
-		"unlabeled": {ImageInfo{Status: ImageUnlabeled, Kit: 1}, nil, "t:1 has agent kit none; this smelt expects 4: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
-		"lower":     {ImageInfo{Status: ImageLabeled, Kit: 3, KitLabeled: true}, nil, "t:1 has agent kit 3; this smelt expects 4: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"unlabeled": {ImageInfo{Status: ImageUnlabeled, Kit: 1}, nil, "t:1 has agent kit none; this smelt expects 5: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"lower":     {ImageInfo{Status: ImageLabeled, Kit: 3, KitLabeled: true}, nil, "t:1 has agent kit 3; this smelt expects 5: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
 		"equal":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion, KitLabeled: true}, nil, ""},
 		"newer":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion + 1, KitLabeled: true}, nil, ""},
 	} {

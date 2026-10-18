@@ -69,7 +69,11 @@ func newDaemonCmd() *cobra.Command {
 // never part of any response.
 func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConfig {
 	refresh, codexErr := codexDaemonAuth(codexHost)
-	cfg := server.ReviewConfig{Codex: server.HarnessAuth{Refresh: refresh, AuthError: codexErr}}
+	grokRefresh, grokErr := grokDaemonAuth(grokHost)
+	cfg := server.ReviewConfig{
+		Codex: server.HarnessAuth{Refresh: refresh, AuthError: codexErr},
+		Grok:  server.HarnessAuth{Refresh: grokRefresh, AuthError: grokErr},
+	}
 	if rcErr != nil {
 		cfg.AuthError = "could not read configuration — factory runs unavailable: " + rcErr.Error()
 		return cfg

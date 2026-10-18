@@ -63,7 +63,7 @@ func (b *Builder) InspectImage(ctx context.Context, tag string) (ImageInfo, erro
 }
 
 // ProbeScript prints the agent CLIs found on the image's PATH, one per line.
-const ProbeScript = "command -v claude >/dev/null && echo claude; command -v codex >/dev/null && echo codex"
+const ProbeScript = "command -v claude >/dev/null && echo claude; command -v codex >/dev/null && echo codex; command -v grok >/dev/null && echo grok"
 
 // Harnesses lists the agent CLIs the image tag carries, from its
 // LabelHarnesses label. An image without the label, or one that is not on this

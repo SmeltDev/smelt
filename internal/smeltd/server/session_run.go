@@ -30,7 +30,7 @@ type StreamFunc func(ctx context.Context, entry *sidecar.PoolEntry, commandID st
 // placed in the environment of a Claude command, and never logged or put in a
 // snapshot.
 //
-// The fields up to Codex are Claude Code's; Codex has its own HarnessAuth. A
+// The fields up to Codex are Claude Code's; Codex and Grok each have a HarnessAuth. A
 // run needs only the credential of the harness it uses.
 type ReviewConfig struct {
 	Credential review.Credential
@@ -41,6 +41,8 @@ type ReviewConfig struct {
 	AuthError string
 	// Codex is the credential for OpenAI Codex runs.
 	Codex HarnessAuth
+	// Grok is the credential for xAI Grok runs.
+	Grok HarnessAuth
 
 	// The fields below are test seams. Left nil, the daemon talks to the
 	// sandbox through the pool entry's own client.
