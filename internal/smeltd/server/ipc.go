@@ -11,12 +11,15 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 // newServer returns an http.Server whose handler serves the daemon's HTTP API.
 func newServer(d *daemon) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(smeltd.HeaderDraining, strconv.FormatBool(d.sessions.isDraining()))
+		w.Header().Set(smeltd.HeaderRevision, version.Current().Label())
 		// The body carries this daemon's build identity. A daemon predating the
 		// identity answers with an empty body, which reads as a mismatch — which
 		// is right, since that is exactly the daemon a client needs to replace.
@@ -24,6 +27,8 @@ func newServer(d *daemon) *http.Server {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, smeltd.BuildID())
 	})
+	mux.HandleFunc("POST /drain", d.handleDrain)
+	mux.HandleFunc("DELETE /drain", d.handleUndrain)
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		var roots []string
 		if err := json.NewDecoder(r.Body).Decode(&roots); err != nil && r.ContentLength != 0 {
@@ -179,4 +184,19 @@ func (d *daemon) handleSidecarByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDrain serves POST /drain: stop admitting factory runs and exit once the
+// active ones end, at once when none are. Repeating it answers the same.
+func (d *daemon) handleDrain(w http.ResponseWriter, _ *http.Request) {
+	// The idle hook may stop the server, so the answer is written first; the
+	// hook delays its shutdown to let it flush.
+	active := d.sessions.drain()
+	writeJSON(w, http.StatusOK, smeltd.DrainResponse{Draining: true, Active: active})
+}
+
+// handleUndrain serves DELETE /drain: admit factory runs again.
+func (d *daemon) handleUndrain(w http.ResponseWriter, _ *http.Request) {
+	d.sessions.undrain()
+	writeJSON(w, http.StatusOK, smeltd.DrainResponse{Active: d.sessions.activeCount()})
 }

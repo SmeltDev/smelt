@@ -346,6 +346,22 @@ startup, which also replaces a daemon from another build. A dashboard that
 keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
 if it has gone away but never replaces one that answers.
 
+**Drain mode.** `POST /drain` sets a flag on the session store, under the same
+mutex that admits a session, so a drain cannot race a start. While it is set,
+`POST /factory` answers 503 with `{"code":"daemon.draining","active":N}`; the
+active runs are untouched. When the last session's `done` channel closes (not
+when its state turns finished, which is before the run has committed its work),
+or at once with none, the store's idle hook cancels the daemon's context and it
+exits through the normal clean shutdown, after a short delay so the `/drain`
+response is flushed. `DELETE /drain` clears the flag. Only factory sessions
+count. `/ping` keeps the build ID as its body, which clients and daemons of other
+builds compare whole, and adds `X-Smelt-Draining` and `X-Smelt-Revision` headers;
+a daemon without them reads as not draining, revision unknown. `EnsureRunning`
+leaves a draining daemon alone even when its build differs: replacing it would
+cancel the runs the drain is waiting for. Once it exits, the next call launches
+the binary on disk. The revision comes from `internal/version`, which reads the
+binary's build info (also used by `--version`).
+
 The split is in the imports, not yet everywhere at runtime:
 
 - **Validation still runs through the CLI.** `/validate` takes the caller's

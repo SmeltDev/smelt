@@ -199,3 +199,27 @@ type Snapshot struct {
 	// the credential itself.
 	ReviewAuthError string `json:"review_auth_error,omitempty"`
 }
+
+// CodeDaemonDraining is the code of the 503 a draining daemon answers a new
+// session with. It is also the code the CLI reports, so tools can retry.
+const CodeDaemonDraining = "daemon.draining"
+
+// DrainResponse answers POST and DELETE /drain.
+type DrainResponse struct {
+	Draining bool `json:"draining"`
+	// Active is the factory runs still going.
+	Active int `json:"active"`
+}
+
+// PingInfo is what /ping says about a daemon. The body carries the build ID
+// and the rest rides in headers, so clients and daemons of other builds, which
+// compare the body whole, keep working.
+type PingInfo struct {
+	// Reachable is whether the daemon answered.
+	Reachable bool
+	// BuildID is the daemon's build identity, empty from a daemon predating it.
+	BuildID string
+	// Revision is the daemon's VCS revision, empty when unknown or not reported.
+	Revision string
+	Draining bool
+}

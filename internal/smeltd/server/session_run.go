@@ -78,6 +78,10 @@ func WithReview(cfg ReviewConfig) Option {
 type apiError struct {
 	status int
 	msg    string
+	// code and active are set for refusals a client acts on, such as
+	// smeltd.CodeDaemonDraining.
+	code   string
+	active int
 }
 
 func (e *apiError) Error() string { return e.msg }

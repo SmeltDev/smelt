@@ -120,6 +120,20 @@ type sessionStore struct {
 	mu        sync.Mutex
 	sessions  map[string]*sessionEntry
 	byProject map[string][]string // project root → session IDs, oldest first
+
+	// draining refuses new sessions; it is read and set under mu, the lock add
+	// admits a session under, so a drain cannot race a start.
+	draining bool
+	// onIdle runs when the last active session has ended while draining. Set
+	// before the store is shared and never reassigned.
+	onIdle func()
+}
+
+// drainingError is add's refusal while the daemon is draining.
+type drainingError struct{ active int }
+
+func (e *drainingError) Error() string {
+	return fmt.Sprintf("smelt is restarting to finish an upgrade after %d active run(s); try again shortly", e.active)
 }
 
 func newSessionStore(parent context.Context) *sessionStore {
@@ -133,12 +147,81 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s. If the project already has limit sessions
-// that have not ended it creates nothing and says why.
-func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, context.Context, string) {
+// activeLocked counts sessions whose run has not wound down: done has not
+// closed. That is later than Finished, which is set before the run commits its
+// work, and a restart must wait for the commit.
+func (s *sessionStore) activeLocked() int {
+	n := 0
+	for _, e := range s.sessions {
+		select {
+		case <-e.done:
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// activeCount is the number of sessions still winding down or running.
+func (s *sessionStore) activeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeLocked()
+}
+
+// drain stops admitting sessions and returns how many are active. With none,
+// onIdle runs at once. Calling it again changes nothing.
+func (s *sessionStore) drain() int {
+	s.mu.Lock()
+	s.draining = true
+	active := s.activeLocked()
+	s.mu.Unlock()
+	if active == 0 {
+		s.fireIdle()
+	}
+	return active
+}
+
+// undrain admits sessions again.
+func (s *sessionStore) undrain() {
+	s.mu.Lock()
+	s.draining = false
+	s.mu.Unlock()
+}
+
+func (s *sessionStore) isDraining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
+}
+
+func (s *sessionStore) fireIdle() {
+	if s.onIdle != nil {
+		s.onIdle()
+	}
+}
+
+// ended is called after an entry's done has closed. It fires onIdle when that
+// was the last active session of a draining store.
+func (s *sessionStore) ended() {
+	s.mu.Lock()
+	idle := s.draining && s.activeLocked() == 0
+	s.mu.Unlock()
+	if idle {
+		s.fireIdle()
+	}
+}
+
+// add creates a running entry for s. If the daemon is draining, or the project
+// already has limit sessions that have not ended, it creates nothing and says
+// why; a draining refusal is a *drainingError.
+func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, context.Context, error) {
 	limit = max(limit, 1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.draining {
+		return nil, nil, &drainingError{active: s.activeLocked()}
+	}
 	active := 0
 	for _, id := range s.byProject[sess.ProjectRoot] {
 		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
@@ -146,7 +229,7 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 		}
 	}
 	if active >= limit {
-		return nil, nil, fmt.Sprintf("project already has %d active run(s) (limit %d; raise factory.maxConcurrent)", active, limit)
+		return nil, nil, fmt.Errorf("project already has %d active run(s) (limit %d; raise factory.maxConcurrent)", active, limit)
 	}
 	sess.ID = uuid.NewString()
 	sess.State = smeltd.SessionRunning
@@ -161,7 +244,7 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 	s.sessions[sess.ID] = entry
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot, retainedSessions(limit))
-	return entry, ctx, ""
+	return entry, ctx, nil
 }
 
 // evictLocked drops the oldest finished sessions until the project is within
