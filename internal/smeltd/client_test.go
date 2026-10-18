@@ -122,6 +122,17 @@ func TestListSessionsDecodesOlderDaemonFixture(t *testing.T) {
 
 func startTestDaemon(t *testing.T, build string, handler http.HandlerFunc) {
 	t.Helper()
+	startTestDaemonHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ping" {
+			_, _ = io.WriteString(w, build)
+			return
+		}
+		handler(w, r)
+	})
+}
+
+func startTestDaemonHandler(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
 	dir := socketDir(t)
 	t.Setenv("SMELT_DAEMON_DIR", dir)
 	pidPath, err := PIDPath()
@@ -131,13 +142,7 @@ func startTestDaemon(t *testing.T, build string, handler http.HandlerFunc) {
 	assert.NilError(t, err)
 	ln, err := net.Listen("unix", sock)
 	assert.NilError(t, err)
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ping" {
-			_, _ = io.WriteString(w, build)
-			return
-		}
-		handler(w, r)
-	})}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 }
@@ -390,26 +395,12 @@ func fakeDaemon(t *testing.T, build string) *int {
 // fakeDaemonWithHeaders is fakeDaemon whose /ping also sends headers.
 func fakeDaemonWithHeaders(t *testing.T, build string, headers map[string]string) *int {
 	t.Helper()
-	dir := socketDir(t)
-	t.Setenv("SMELT_DAEMON_DIR", dir)
-	pidPath, err := PIDPath()
-	assert.NilError(t, err)
-	assert.NilError(t, WritePID(pidPath, os.Getpid()))
-	sockPath, err := SocketPath()
-	assert.NilError(t, err)
-	ln, err := net.Listen("unix", sockPath)
-	assert.NilError(t, err)
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			for k, v := range headers {
-				w.Header().Set(k, v)
-			}
-			_, _ = io.WriteString(w, build)
-		}),
-		ReadHeaderTimeout: time.Second,
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
+	startTestDaemonHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		_, _ = io.WriteString(w, build)
+	})
 	return stubLaunch(t)
 }
 
@@ -490,9 +481,30 @@ func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
 // A draining daemon is finishing runs a replacement would cancel, so a client
 // whose build differs must neither stop it nor start another.
 func TestEnsureRunning_leavesADrainingDaemonOfAnotherBuildAlone(t *testing.T) {
-	launches := fakeDaemonWithHeaders(t, "some-other-build", map[string]string{HeaderDraining: "true"})
+	startTestDaemonHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ping":
+			w.Header().Set(HeaderDraining, "true")
+			_, _ = io.WriteString(w, "some-other-build")
+		case "/factory":
+			_, _ = io.WriteString(w, `{"sessions":[{"id":"active-run","state":"running"}]}`)
+		default:
+			t.Errorf("unexpected request to draining daemon: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	launches := stubLaunch(t)
+	replacements := 0
+	previous := replaceDaemon
+	replaceDaemon = func(int, string) error { replacements++; return nil }
+	t.Cleanup(func() { replaceDaemon = previous })
 	assert.NilError(t, EnsureRunning())
+	sessions, err := ListSessions("")
+	assert.NilError(t, err)
+	assert.Equal(t, len(sessions), 1)
+	assert.Equal(t, sessions[0].State, SessionRunning)
 	assert.Equal(t, *launches, 0)
+	assert.Equal(t, replacements, 0)
 }
 
 func TestPingInfoReadsTheHeaders(t *testing.T) {

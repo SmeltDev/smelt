@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 	"sync"
 	"time"
@@ -128,7 +129,11 @@ type sessionStore struct {
 	draining bool
 	// onIdle runs when the last active session has ended while draining. Set
 	// before the store is shared and never reassigned.
-	onIdle func()
+	onIdle func(uint64)
+	// drainGeneration invalidates delayed callbacks when a drain is cancelled.
+	drainGeneration uint64
+	drainCommitted  bool
+	drainRemaining  int
 }
 
 // drainingError is add's refusal while the daemon is draining.
@@ -175,20 +180,32 @@ func (s *sessionStore) activeCount() int {
 // onIdle runs at once. Calling it again changes nothing.
 func (s *sessionStore) drain() int {
 	s.mu.Lock()
+	if !s.draining {
+		s.drainGeneration++
+	}
 	s.draining = true
 	active := s.activeLocked()
+	s.drainRemaining = active
+	// Serialize the request log with completion notifications, so a fast run
+	// cannot log its completion before the request that started the drain.
+	log.Printf("smeltd: drain requested (%d active runs)", active)
+	generation := s.drainGeneration
 	s.mu.Unlock()
 	if active == 0 {
-		s.fireIdle()
+		s.fireIdle(generation)
 	}
 	return active
 }
 
-// undrain admits sessions again.
+// undrain admits sessions again unless shutdown has already committed.
 func (s *sessionStore) undrain() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.drainCommitted {
+		return
+	}
 	s.draining = false
-	s.mu.Unlock()
+	s.drainGeneration++
 }
 
 func (s *sessionStore) isDraining() bool {
@@ -197,20 +214,39 @@ func (s *sessionStore) isDraining() bool {
 	return s.draining
 }
 
-func (s *sessionStore) fireIdle() {
+func (s *sessionStore) fireIdle(generation uint64) {
 	if s.onIdle != nil {
-		s.onIdle()
+		s.onIdle(generation)
 	}
 }
 
-// ended is called after an entry's done has closed. It fires onIdle when that
-// was the last active session of a draining store.
+// commitDrain revalidates a delayed idle decision and cancels the root under
+// the admission lock. No undrain or new session can slip between the check
+// and cancellation. Once committed, admission stays closed until exit.
+func (s *sessionStore) commitDrain(generation uint64, shutdown context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.draining || s.drainCommitted || s.drainGeneration != generation || s.activeLocked() != 0 {
+		return
+	}
+	s.drainCommitted = true
+	shutdown()
+}
+
+// ended is called after an entry's done has closed. Progress and idle decisions
+// share the admission lock with drain requests and shutdown commitment.
 func (s *sessionStore) ended() {
 	s.mu.Lock()
-	idle := s.draining && s.activeLocked() == 0
+	active := s.activeLocked()
+	if s.draining && active != s.drainRemaining {
+		s.drainRemaining = active
+		log.Printf("smeltd: draining: %d runs left", active)
+	}
+	idle := s.draining && active == 0
+	generation := s.drainGeneration
 	s.mu.Unlock()
 	if idle {
-		s.fireIdle()
+		s.fireIdle(generation)
 	}
 }
 
@@ -250,14 +286,18 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 }
 
 // evictLocked drops the oldest finished sessions until the project is within
-// the cap.
+// the cap. A terminal state alone does not mean teardown has completed.
 func (s *sessionStore) evictLocked(root string, keep int) {
 	ids := s.byProject[root]
 	for len(ids) > keep {
 		dropped := false
 		for i, id := range ids {
-			if e := s.sessions[id]; e != nil && !e.snapshot().State.Finished() {
-				continue
+			if e := s.sessions[id]; e != nil {
+				select {
+				case <-e.done:
+				default:
+					continue
+				}
 			}
 			delete(s.sessions, id)
 			ids = slices.Delete(ids, i, i+1)

@@ -188,7 +188,14 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		sessions: newSessionStore(ctx),
 		rcfg:     dopts.review,
 	}
-	d.sessions.onIdle = func() { time.AfterFunc(drainFlushDelay, shutdown) }
+	d.sessions.onIdle = func(generation uint64) {
+		time.AfterFunc(drainFlushDelay, func() {
+			d.sessions.commitDrain(generation, func() {
+				log.Printf("smeltd: drained: exiting")
+				shutdown()
+			})
+		})
+	}
 	d.cci.resolve = dopts.resolve
 	// A client or an auth message handed in is the caller's resolution, final.
 	if client != nil || authMessage != "" {

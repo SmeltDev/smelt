@@ -351,10 +351,16 @@ mutex that admits a session, so a drain cannot race a start. While it is set,
 `POST /factory` answers 503 with `{"code":"daemon.draining","active":N}`; the
 active runs are untouched. When the last session's `done` channel closes (not
 when its state turns finished, which is before the run has committed its work),
-or at once with none, the store's idle hook cancels the daemon's context and it
-exits through the normal clean shutdown, after a short delay so the `/drain`
-response is flushed. `DELETE /drain` clears the flag. Only factory sessions
-count. `/ping` keeps the build ID as its body, which clients and daemons of other
+or at once with none, the store's idle hook schedules shutdown after a short
+response-flush delay. Entries remain tracked until `done` closes, even if their
+state is already finished and retention would otherwise evict them. At the end
+of the delay, shutdown rechecks the drain generation, flag and all tracked
+`done` channels under the admission mutex, and cancels the root context while
+holding that mutex. `DELETE /drain` invalidates pending callbacks and admits
+runs again; after shutdown commits, admission stays closed. Killing the
+requesting CLI leaves drain enabled; an explicit restart timeout cancels drain.
+The daemon logs drain requests, remaining-run transitions and committed exit.
+Only factory sessions count. `/ping` keeps the build ID as its body, which clients and daemons of other
 builds compare whole, and adds `X-Smelt-Draining` and `X-Smelt-Revision` headers;
 a daemon without them reads as not draining, revision unknown. `EnsureRunning`
 leaves a draining daemon alone even when its build differs: replacing it would
