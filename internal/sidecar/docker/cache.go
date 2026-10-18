@@ -215,8 +215,8 @@ func (b *Provider) ownCaches(ctx context.Context, id string, l cacheLayout) erro
 		args[i] = shellQuote(v.Target)
 	}
 	var out strings.Builder
-	code, err := b.execAs(ctx, id, "root", "chown "+shellQuote(l.Owner)+" "+strings.Join(args, " "), nil,
-		func(_ string, data []byte) { out.Write(data) }, nil)
+	code, err := b.execAs(ctx, id, "root", "chown "+shellQuote(l.Owner)+" "+strings.Join(args, " "),
+		func(_ string, data []byte) { out.Write(data) })
 	switch {
 	case err != nil:
 		return fmt.Errorf("docker: hand the cache volumes to %s: %w", l.Owner, err)
@@ -257,7 +257,7 @@ func (b *Provider) foreignCaches(ctx context.Context, id string, l cacheLayout) 
 	if l.Owner == "" || len(l.Volumes) == 0 {
 		return false, nil
 	}
-	code, err := b.execAs(ctx, id, "root", foreignContentScript(l.UID, l.targets()), nil, nil, nil)
+	code, err := b.execAs(ctx, id, "root", foreignContentScript(l.UID, l.targets()), nil)
 	if err != nil {
 		return false, fmt.Errorf("docker: check the cache volumes: %w", err)
 	}
@@ -270,7 +270,7 @@ func (b *Provider) unwritableCaches(ctx context.Context, id string, l cacheLayou
 	if l.Owner == "" || len(l.Volumes) == 0 {
 		return false, nil
 	}
-	code, err := b.execAs(ctx, id, "", writableScript(l.targets()), nil, nil, nil)
+	code, err := b.execAs(ctx, id, "", writableScript(l.targets()), nil)
 	if err != nil {
 		return false, fmt.Errorf("docker: check the cache volumes: %w", err)
 	}
@@ -312,7 +312,7 @@ func (b *Provider) useFallbackCache(ctx context.Context, id string, l cacheLayou
 		dirs = append(dirs, shellQuote(d))
 	}
 	sort.Strings(dirs)
-	code, err := b.execAs(ctx, id, "", "mkdir -p "+strings.Join(dirs, " "), nil, nil, nil)
+	code, err := b.execAs(ctx, id, "", "mkdir -p "+strings.Join(dirs, " "), nil)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("docker: make the temporary cache: %w", err)

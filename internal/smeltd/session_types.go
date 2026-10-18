@@ -543,6 +543,9 @@ type Session struct {
 
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// StoppedAfterMS is the time from a stop request to the run ending, set
+	// only on a run that was stopped.
+	StoppedAfterMS *int64 `json:"stopped_after_ms,omitempty"`
 }
 
 // ReviewResult is what one review found.

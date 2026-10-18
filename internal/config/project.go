@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/envspec"
@@ -251,6 +252,9 @@ type FactoryConfig struct {
 	// MaxConcurrent is how many factory runs may be active in the project at
 	// once. 0 means 1.
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// StopGrace is how many seconds a stopped run's commands get to exit on
+	// SIGTERM before they are killed. 0 means DefaultStopGrace.
+	StopGrace int `json:"stopGrace,omitempty"`
 	// Author is who the commits on a run's branch are attributed to, as
 	// "Name <email>". Empty means the developer's own git identity.
 	Author string `json:"author,omitempty"`
@@ -315,10 +319,25 @@ func (f *FactoryConfig) validateLimits() error {
 	if f.MaxConcurrent < 0 {
 		return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
 	}
+	if f.StopGrace < 0 {
+		return fmt.Errorf("factory.stopGrace must not be negative, got %d", f.StopGrace)
+	}
 	if f.Pack != nil && f.Pack.MaxTokens < 0 {
 		return fmt.Errorf("factory.pack.maxTokens must not be negative, got %d", f.Pack.MaxTokens)
 	}
 	return f.Quality.validate()
+}
+
+// DefaultStopGrace is how long a stopped run's commands get to exit on
+// SIGTERM when factory.stopGrace sets none.
+const DefaultStopGrace = 10 * time.Second
+
+// StopGraceDuration is the grace a stopped run's commands get before SIGKILL.
+func (f *FactoryConfig) StopGraceDuration() time.Duration {
+	if f == nil || f.StopGrace == 0 {
+		return DefaultStopGrace
+	}
+	return time.Duration(f.StopGrace) * time.Second
 }
 
 // RoundPolicy is the session policy; fresh is the default.

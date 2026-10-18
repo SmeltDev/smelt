@@ -318,3 +318,37 @@ func TestNewLoopMapsRoundPolicyToFreshRounds(t *testing.T) {
 		assert.Equal(t, loop.FreshRounds, tc.fresh, "rounds %q", tc.rounds)
 	}
 }
+
+// blockingSteps is a loop whose implementer turn runs until it is cancelled.
+type blockingSteps struct {
+	fakeSteps
+	started   chan struct{}
+	implement int
+	collected int
+}
+
+func (b *blockingSteps) Implement(ctx context.Context, _ string) (Turn, error) {
+	b.implement++
+	close(b.started)
+	<-ctx.Done()
+	return Turn{}, ctx.Err()
+}
+
+func (b *blockingSteps) Collect(ctx context.Context) (Change, error) {
+	b.collected++
+	return b.fakeSteps.Collect(ctx)
+}
+
+func TestLoopStopsAtACancelledImplementerTurn(t *testing.T) {
+	steps := &blockingSteps{started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-steps.started
+		cancel()
+	}()
+	_, err := Loop{Attempts: 3}.Run(ctx, steps, "add a flag")
+	assert.Assert(t, errors.Is(err, context.Canceled), "%v", err)
+	assert.Equal(t, steps.implement, 1)
+	assert.Equal(t, steps.collected, 0)
+	assert.Equal(t, steps.checked, 0)
+}

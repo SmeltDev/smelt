@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"os"
 	"os/exec"
@@ -53,6 +54,14 @@ const label = brand.LabelPrefix + "factory"
 // own name has a uniqueness suffix appended.
 const labelName = brand.LabelPrefix + "name"
 
+// defaultStopGrace is the SIGTERM-to-SIGKILL delay when Provider.StopGrace is
+// unset.
+const defaultStopGrace = 10 * time.Second
+
+// killTimeout bounds each step of tearing down a cancelled exec, which runs on
+// a context detached from the cancelled one.
+const killTimeout = 10 * time.Second
+
 // Provider runs sidecars as local Docker containers with bind-mounted workspaces.
 type Provider struct {
 	cli       client.APIClient
@@ -69,6 +78,9 @@ type Provider struct {
 	CacheKey string
 	// GoStack also mounts the Go module cache, for a Go project.
 	GoStack bool
+	// StopGrace is how long a cancelled command gets to exit on SIGTERM before
+	// its process group is killed. Zero means defaultStopGrace.
+	StopGrace time.Duration
 
 	// now and sleep are test seams for the readiness wait; nil means real time.
 	now   func() time.Time
@@ -332,6 +344,10 @@ func (b *Provider) Pull(ctx context.Context, id, repoPath, localDir string, stat
 // Exec runs script with `sh -c` inside container id and streams its stdout and
 // stderr to onOutput, returning the command's exit code. onSubmitted, when
 // non-nil, receives the Docker exec ID between creation and streaming.
+//
+// The script runs in its own process group. When ctx is done the group gets
+// SIGTERM, then SIGKILL after StopGrace, because Docker has no API to kill an
+// exec and the stream would otherwise stay open until the command ends.
 func (b *Provider) Exec(ctx context.Context, id, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
 	if m, ok := b.member(id); ok && len(m.env) > 0 {
 		merged := make(map[string]string, len(m.env)+len(env))
@@ -339,14 +355,29 @@ func (b *Provider) Exec(ctx context.Context, id, script string, env map[string]s
 		maps.Copy(merged, env)
 		env = merged
 	}
-	return b.execAs(ctx, id, "", script, env, onOutput, onSubmitted)
+	pgidFile := pgidPath()
+	return b.run(ctx, id, execSpec{cmd: groupedCommand(pgidFile, script), pgidFile: pgidFile}, env, onOutput, onSubmitted)
 }
 
-// execAs is Exec as user, or as the image's own user when user is empty.
-func (b *Provider) execAs(ctx context.Context, id, user, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
+// execAs is Exec as user, or as the image's own user when user is empty. It is
+// for the short helper scripts of the cache setup, which are not killed on
+// cancel.
+func (b *Provider) execAs(ctx context.Context, id, user, script string, onOutput iostream.OutputFn) (int, error) {
+	return b.run(ctx, id, execSpec{user: user, cmd: []string{"sh", "-c", script}}, nil, onOutput, nil)
+}
+
+// execSpec is what to run in a container. A pgidFile means the command records
+// its process group there and is killed through it when the context ends.
+type execSpec struct {
+	user     string
+	cmd      []string
+	pgidFile string
+}
+
+func (b *Provider) run(ctx context.Context, id string, spec execSpec, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
 	created, err := b.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
-		User:         user,
-		Cmd:          []string{"sh", "-c", script},
+		User:         spec.user,
+		Cmd:          spec.cmd,
 		Env:          envSlice(env),
 		AttachStdout: true,
 		AttachStderr: true,
@@ -364,10 +395,19 @@ func (b *Provider) execAs(ctx context.Context, id, user, script string, env map[
 	}
 	defer att.Close()
 
+	if spec.pgidFile != "" {
+		finished := make(chan struct{})
+		defer close(finished)
+		go b.killOnCancel(ctx, finished, id, spec.pgidFile, att.Close)
+	}
+
 	out := streamWriter{stream: iostream.StreamStdout, fn: onOutput}
 	errW := streamWriter{stream: iostream.StreamStderr, fn: onOutput}
 	if _, err := stdcopy.StdCopy(out, errW, att.Reader); err != nil && ctx.Err() == nil {
 		return 0, fmt.Errorf("docker exec stream: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 
 	insp, err := b.cli.ContainerExecInspect(ctx, created.ID)
@@ -375,6 +415,89 @@ func (b *Provider) execAs(ctx context.Context, id, user, script string, env map[
 		return 0, fmt.Errorf("docker exec inspect: %w", err)
 	}
 	return insp.ExitCode, nil
+}
+
+// killOnCancel waits for ctx to end or the exec to finish. On cancel it sends
+// SIGTERM to the exec's process group, SIGKILL after the grace, and closes the
+// stream so the copy returns even when nothing could be signalled.
+func (b *Provider) killOnCancel(ctx context.Context, finished <-chan struct{}, id, pgidFile string, closeStream func()) {
+	select {
+	case <-finished:
+		return
+	case <-ctx.Done():
+	}
+	defer closeStream()
+	b.signalGroup(ctx, id, pgidFile, "TERM")
+	grace := b.StopGrace
+	if grace <= 0 {
+		grace = defaultStopGrace
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-finished:
+		return
+	case <-timer.C:
+	}
+	b.signalGroup(ctx, id, pgidFile, "KILL")
+}
+
+// signalGroup sends sig to the process group recorded in pgidFile. It runs on a
+// context detached from the cancelled one; a failure leaves the group alone and
+// the stream close ends the wait.
+func (b *Provider) signalGroup(ctx context.Context, id, pgidFile, sig string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killTimeout)
+	defer cancel()
+	created, err := b.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		User: "root",
+		Cmd:  []string{"sh", "-c", signalScript, "sh", pgidFile, sig},
+	})
+	if err != nil {
+		log.Printf("docker: signal %s: %v", id, err)
+		return
+	}
+	if err := b.cli.ContainerExecStart(ctx, created.ID, container.ExecStartOptions{Detach: true}); err != nil {
+		log.Printf("docker: signal %s: %v", id, err)
+		return
+	}
+	// ExecStart returns before the command ends; wait so KILL follows TERM.
+	for ctx.Err() == nil {
+		insp, err := b.cli.ContainerExecInspect(ctx, created.ID)
+		if err != nil || !insp.Running {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// signalScript sends signal $2 to the process group whose id is in file $1. The
+// command may not have written the file yet when the stop arrives, so it waits
+// a moment for it.
+const signalScript = `for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$1" ] && break; sleep 0.2; done
+p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -"$2" -- "-$p"`
+
+// pgidPath is a fresh file name in the container for a command's process group.
+func pgidPath() string {
+	var r [8]byte
+	_, _ = rand.Read(r[:])
+	return "/tmp/" + brand.Command + "-pgid-" + hex.EncodeToString(r[:])
+}
+
+// groupedCommand runs script under `sh -c` in its own session, whose id is the
+// process group the exec is killed through, written to pgidFile. setsid runs in
+// the background and is waited for: a foreground setsid forks when its caller
+// leads a group and would lose the exit code. Without setsid the script runs
+// ungrouped and cannot be signalled.
+func groupedCommand(pgidFile, script string) []string {
+	const wrapper = `if command -v setsid >/dev/null 2>&1; then
+  setsid sh -c 'echo $$ > "$0"; exec sh -c "$1"' "$1" "$2" &
+  wait $!
+  code=$?
+  rm -f "$1"
+  exit $code
+fi
+exec sh -c "$2"`
+	return []string{"sh", "-c", wrapper, "sh", pgidFile, script}
 }
 
 // rsyncMirror makes dst an exact copy of src (archive mode, deleting extraneous

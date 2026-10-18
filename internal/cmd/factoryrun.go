@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/smeltd"
@@ -67,6 +68,29 @@ func detachRun(ctx context.Context, streams iostream.Streams, sessionID string, 
 			return newUserError("The run was started but has not set up its branch yet.").
 				withSuggestion("Follow it in 'smelt watch' (press r), or with 'smelt factory status'.").
 				withoutDetail()
+		case <-ticker.C:
+		}
+	}
+}
+
+// stopWaitMargin is how long past the stop grace 'factory stop' waits for the
+// run to end: the commit of the work so far and the sidecar cleanup.
+const stopWaitMargin = 5 * time.Second
+
+// waitForRunEnd polls until the run's session has finished, reporting whether it
+// did within limit. A session the daemon no longer has counts as ended.
+func waitForRunEnd(ctx context.Context, root, runID string, limit time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s := runSession(root, runID); s == nil || s.State.Finished() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
 		case <-ticker.C:
 		}
 	}
@@ -235,6 +259,15 @@ A run that has finished is reported, not an error. Follow the stop with
 				return sessionError(err)
 			}
 			streams.Printf("Stopping run %s. The work so far is committed on its branch as it winds down.\n", runID)
+			grace := config.DefaultStopGrace
+			if cfg, err := config.LoadProjectConfig(root); err == nil {
+				grace = cfg.Factory.StopGraceDuration()
+			}
+			if waitForRunEnd(ctx, root, runID, grace+stopWaitMargin) {
+				streams.Printf("Run %s has stopped.\n", runID)
+			} else {
+				streams.Printf("Run %s is still winding down; follow it with 'smelt factory status'.\n", runID)
+			}
 			return nil
 		},
 	}
