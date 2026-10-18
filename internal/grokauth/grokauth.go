@@ -116,27 +116,36 @@ func ContainerCopy(raw []byte) ([]byte, error) {
 	}
 	blank, _ := json.Marshal("")
 	for _, e := range doc {
+		if e == nil {
+			continue
+		}
 		e["refresh_token"] = blank
 	}
 	return json.Marshal(doc)
 }
 
 // Expiry is when the login in auth.json stops working: the latest expires_at
-// of its entries. The token itself is never returned or printed.
+// of its readable entries. Unreadable sibling expiries are skipped; no readable
+// expiry is an error. The token itself is never returned or printed.
 func Expiry(raw []byte) (time.Time, error) {
 	doc, err := parse(raw)
 	if err != nil {
 		return time.Time{}, err
 	}
 	var latest time.Time
+	readable := false
 	for _, e := range doc {
 		t, err := parseExpiry(e["expires_at"])
 		if err != nil {
-			return time.Time{}, err
+			continue
 		}
-		if t.After(latest) {
+		if !readable || t.After(latest) {
 			latest = t
 		}
+		readable = true
+	}
+	if !readable {
+		return time.Time{}, errors.New("auth.json has no readable expires_at")
 	}
 	return latest, nil
 }

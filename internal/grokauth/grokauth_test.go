@@ -155,3 +155,35 @@ func TestNoCredential(t *testing.T) {
 	_, err = h.Find()
 	assert.ErrorIs(t, err, ErrNone)
 }
+
+func TestExpiryAndForRunWithUnreadableSiblings(t *testing.T) {
+	for _, sibling := range []string{`{"expires_at":"soon"}`, `{}`, `{"expires_at":null}`, `null`} {
+		t.Run(sibling, func(t *testing.T) {
+			late := now.Add(5 * time.Hour)
+			raw := `{"good":{"expires_at":` + quoted(late) + `},"bad":` + sibling + `}`
+			exp, err := Expiry([]byte(raw))
+			assert.NilError(t, err)
+			assert.Assert(t, exp.Equal(late))
+			h := Host{AuthPath: writeAuth(t, raw), Env: noEnv, Run: func(context.Context, string, ...string) error {
+				t.Fatal("must not renew a long readable login")
+				return nil
+			}}
+			_, err = h.ForRun(t.Context(), now)
+			assert.NilError(t, err)
+		})
+	}
+	for _, raw := range []string{`{"a":{},"b":{"expires_at":"soon"}}`, `{"a":null}`} {
+		_, err := Expiry([]byte(raw))
+		assert.Assert(t, err != nil)
+		h := Host{AuthPath: writeAuth(t, raw), Env: noEnv, Run: func(context.Context, string, ...string) error {
+			t.Fatal("unreadable login must fail before renewal")
+			return nil
+		}}
+		_, err = h.ForRun(t.Context(), now)
+		assert.Assert(t, err != nil)
+	}
+	// A readable historical timestamp must not be mistaken for no readable value.
+	exp, err := Expiry([]byte(`{"a":{},"b":{"expires_at":"0001-01-01T00:00:00Z"}}`))
+	assert.NilError(t, err)
+	assert.Assert(t, exp.IsZero())
+}

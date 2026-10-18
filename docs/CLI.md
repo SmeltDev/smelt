@@ -506,6 +506,16 @@ smelt
   decide. Only `role: gate` commands count, never `install` or other setup commands. Tests a gate's output
   reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail, as `skipped_tests` in
   `factory status --json`, and in the PR notes under "Skipped in the sandbox".
+  Grok: a bounded `grok --version` probe checks the host; kit v5's harness label
+  includes Grok in the image. `XAI_API_KEY` takes precedence (`source: "api_key"`).
+  Otherwise `~/.grok/auth.json` supplies `source: "oauth"` and RFC3339 `expires_at`:
+  the latest readable expiry strictly after now is `ok`, otherwise `expired`
+  with an instruction to run `grok login`. Unreadable sibling expiries are skipped;
+  no readable expiry or credential is `missing`. Status never renews credentials.
+  Grok exposes session costs (`total_cost_usd`, and `grok usage` per session),
+  but no published rate-limit windows, so `rate_limits: []` stays empty, including
+  when a run recorded a signal. No daily cost aggregate is reported: smelt's
+  persisted implementer-turn costs do not cover all Grok turns.
 - **The docker backend keeps a warm cache.** Every sidecar of a project mounts the named volume
   `smelt-cache-<project hash>-<uid>` at the image user's `~/.cache` (Go's build cache lives there), and, for a Go
   project (`environment.stack: go`), `smelt-gomod-<project hash>-<uid>` at the Go module cache (`GOMODCACHE`, else
