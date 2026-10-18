@@ -15,6 +15,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/codexauth"
+	"github.com/smeltdev/smelt/internal/grokauth"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/sandboximage"
@@ -37,7 +38,9 @@ func chatgptLogin() (codexauth.Login, error) {
 func baseDeps(t *testing.T) Deps {
 	t.Helper()
 	return Deps{
-		Dir: t.TempDir(), Now: func() time.Time { return now },
+		Grok:    grokauth.Host{AuthPath: filepath.Join(t.TempDir(), "missing"), Env: func(string) string { return "" }},
+		GrokRun: func(context.Context, string, ...string) error { return os.ErrNotExist },
+		Dir:     t.TempDir(), Now: func() time.Time { return now },
 		LookPath:   func(string) (string, error) { return "/bin/x", nil },
 		ClaudeAuth: func(context.Context) (ClaudeLogin, error) { return ClaudeLogin{}, nil },
 		CodexLogin: chatgptLogin,
@@ -232,10 +235,106 @@ func TestReportJSONHasTheDocumentedShapeAndNoSecrets(t *testing.T) {
 	}
 	assert.NilError(t, json.Unmarshal(raw, &got))
 	assert.Equal(t, got.Default, "claude")
-	assert.Equal(t, len(got.Harnesses), 2)
+	assert.Equal(t, len(got.Harnesses), 3)
 	for _, key := range []string{"name", "installed_host", "installed_image", "auth", "rate_limits"} {
 		_, ok := got.Harnesses[0][key]
 		assert.Assert(t, ok, key)
 	}
 	assert.Assert(t, !strings.Contains(string(raw), "refresh-secret"))
+}
+
+func TestGrokStatus(t *testing.T) {
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	doc := func(at time.Time) string {
+		return `{"a":{"key":"access-secret","expires_at":"` + at.Format(time.RFC3339) + `"}`
+	}
+	tests := []struct {
+		name, raw, key, auth, source string
+		expiry                       *time.Time
+	}{
+		{"future", doc(future) + `}`, "", "ok", "oauth", &future},
+		{"malformed sibling", doc(future) + `,"b":{"expires_at":"soon"}}`, "", "ok", "oauth", &future},
+		{"missing sibling", doc(future) + `,"b":{}}`, "", "ok", "oauth", &future},
+		{"expired", doc(past) + `}`, "", "expired", "oauth", &past},
+		{"multiple expired", doc(past) + `,"b":{"expires_at":"2000-01-01T00:00:00Z"}}`, "", "expired", "oauth", &past},
+		{"equal now", doc(now) + `}`, "", "expired", "oauth", &now},
+		{"unreadable", `{"a":{},"b":{"expires_at":"secret-invalid"}}`, "", "missing", "", nil},
+		{"invalid", "secret-invalid", "", "missing", "", nil},
+		{"missing", "", "", "missing", "", nil},
+		{"api key precedence", doc(past) + `}`, "api-secret", "ok", "api_key", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := baseDeps(t)
+			path := filepath.Join(t.TempDir(), "auth.json")
+			if tt.raw != "" {
+				assert.NilError(t, os.WriteFile(path, []byte(tt.raw), 0o600))
+			}
+			d.Grok = grokauth.Host{AuthPath: path, Env: func(string) string { return tt.key },
+				Run: func(context.Context, string, ...string) error { t.Fatal("status must never renew"); return nil }}
+			d.GrokRun = func(ctx context.Context, name string, args ...string) error {
+				_, bounded := ctx.Deadline()
+				assert.Assert(t, bounded)
+				assert.Equal(t, name, "grok")
+				assert.DeepEqual(t, args, []string{"--version"})
+				return nil
+			}
+			RecordSignal(d.Dir, harness.Grok, harness.RateLimit{Bucket: "invented", Status: "warning"}, now)
+			e := entry(t, Build(t.Context(), d), harness.Grok)
+			assert.Equal(t, e.Auth, tt.auth)
+			assert.Equal(t, e.Source, tt.source)
+			assert.DeepEqual(t, e.ExpiresAt, tt.expiry)
+			assert.Assert(t, e.InstalledHost)
+			assert.Assert(t, !e.InstalledImage)
+			assert.Assert(t, e.RateLimits != nil && len(e.RateLimits) == 0)
+			if tt.auth == "expired" {
+				assert.Assert(t, strings.Contains(e.Note, "run `grok login`"))
+			}
+			raw, err := json.Marshal(e)
+			assert.NilError(t, err)
+			for _, secret := range []string{"access-secret", "api-secret", "secret-invalid"} {
+				assert.Assert(t, !strings.Contains(string(raw), secret))
+			}
+		})
+	}
+}
+
+func TestGrokVersionProbeFailureAndCancellation(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		d := baseDeps(t)
+		d.GrokProbeTimeout = time.Millisecond
+		d.GrokRun = func(ctx context.Context, _ string, _ ...string) error {
+			if timeout {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return os.ErrNotExist
+		}
+		assert.Assert(t, !entry(t, Build(t.Context(), d), harness.Grok).InstalledHost)
+	}
+}
+
+func TestGrokKitV5Membership(t *testing.T) {
+	f := &fakeImages{info: sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: 5, Harnesses: []string{"claude", "codex", "grok"}}}
+	e := entry(t, Build(t.Context(), imageDeps(t, f)), harness.Grok)
+	assert.Assert(t, e.InstalledImage)
+	assert.Equal(t, f.probes, 0)
+}
+
+func TestGrokReportGoldenPreservesExistingEntries(t *testing.T) {
+	d := baseDeps(t)
+	d.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	d.CodexLogin = func() (codexauth.Login, error) { return codexauth.Login{}, codexauth.ErrNone }
+	raw, err := json.MarshalIndent(Build(t.Context(), d), "", "  ")
+	assert.NilError(t, err)
+	golden, err := os.ReadFile("testdata/status.golden.json")
+	assert.NilError(t, err)
+	assert.Equal(t, string(raw)+"\n", string(golden))
+	before, err := os.ReadFile("testdata/status-before.golden.json")
+	assert.NilError(t, err)
+	var baseline, current struct{ Harnesses []json.RawMessage }
+	assert.NilError(t, json.Unmarshal(before, &baseline))
+	assert.NilError(t, json.Unmarshal(raw, &current))
+	assert.DeepEqual(t, current.Harnesses[:2], baseline.Harnesses)
 }

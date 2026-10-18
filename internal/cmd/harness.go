@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +39,7 @@ func newHarnessStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   statusCmdName,
 		Short: "Show which agents are installed and logged in, and their usage limits",
-		Long: `Show, for Claude Code and Codex: whether the CLI is installed on this machine and
+		Long: `Show, for Claude Code, Codex and Grok: whether the CLI is installed on this machine and
 in the sandbox image, whether its login works, the plan, and the best usage
 data available.
 
@@ -48,6 +49,9 @@ and asks Anthropic's usage endpoint. That endpoint is undocumented, and
 Anthropic has said third-party tools should not call it; turn the probe off
 with "harness": {"claude": {"usage_probe": false}} in ~/.config/smelt/config.json.
 Without it, or when it fails, the last rate-limit signal a run saw is shown.
+
+Grok reports local OAuth expiry or XAI_API_KEY authentication, without renewing.
+It has no published rate-limit windows; its rate_limits list is empty.
 
 smelt only reports; choosing between agents is up to the caller.`,
 		Args:         cobra.NoArgs,
@@ -164,6 +168,12 @@ func printHarnessStatus(streams iostream.Streams, rep status.Report) {
 			login += " (" + e.AuthKind + ")"
 		}
 		streams.Printf("  login:      %s\n", login)
+		if e.Source != "" {
+			streams.Printf("  source:     %s\n", e.Source)
+		}
+		if e.ExpiresAt != nil {
+			streams.Printf("  expires:    %s\n", e.ExpiresAt.Format(time.RFC3339))
+		}
 		if e.Plan != "" {
 			streams.Printf("  plan:       %s\n", e.Plan)
 		}

@@ -1,0 +1,27 @@
+{
+  "default": "",
+  "harnesses": [
+    {
+      "name": "claude",
+      "installed_host": false,
+      "installed_image": false,
+      "auth": "missing",
+      "rate_limits": []
+    },
+    {
+      "name": "codex",
+      "installed_host": false,
+      "installed_image": false,
+      "auth": "missing",
+      "rate_limits": []
+    },
+    {
+      "name": "grok",
+      "installed_host": false,
+      "installed_image": false,
+      "auth": "missing",
+      "rate_limits": [],
+      "note": "no readable Grok credential; run `grok login`, or set XAI_API_KEY"
+    }
+  ]
+}

@@ -11,10 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync"
+
 	"time"
 
 	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/grokauth"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/sandboximage"
@@ -60,6 +63,8 @@ type Entry struct {
 	ImageStatus sandboximage.ImageStatus `json:"image_status,omitempty"`
 	Auth        string                   `json:"auth"`
 	AuthKind    string                   `json:"auth_kind,omitempty"`
+	Source      string                   `json:"source,omitempty"`
+	ExpiresAt   *time.Time               `json:"expires_at,omitempty"`
 	Plan        string                   `json:"plan,omitempty"`
 	RateLimits  []harness.Window         `json:"rate_limits"`
 	// Note says why something above is missing or stale.
@@ -82,6 +87,11 @@ type Deps struct {
 	// UsageProbe is the Claude probe; nil turns it off.
 	UsageProbe *claude.UsageProbe
 	Codex      codexauth.Host
+	Grok       grokauth.Host
+	// GrokRun probes the host CLI version; grokauth.ExecRunner when nil.
+	GrokRun grokauth.Runner
+	// GrokProbeTimeout bounds the version probe; five seconds when zero.
+	GrokProbeTimeout time.Duration
 	// LookPath finds a binary; exec.LookPath when nil.
 	LookPath func(string) (string, error)
 	// ClaudeAuth reads `claude auth status --json`; the real CLI when nil.
@@ -111,15 +121,17 @@ func Build(ctx context.Context, d Deps) Report {
 		d.LookPath = exec.LookPath
 	}
 	img := d.checkImage(ctx)
-	rep := Report{Default: d.Default, Harnesses: make([]Entry, 2), Image: img.report}
+	rep := Report{Default: d.Default, Harnesses: make([]Entry, 3), Image: img.report}
 	d.image = img
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		rep.Harnesses[0] = d.claude(ctx)
-	}()
-	rep.Harnesses[1] = d.codex(ctx)
-	<-done
+	var wg sync.WaitGroup
+	for i, probe := range []func(context.Context) Entry{d.claude, d.codex, d.grok} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rep.Harnesses[i] = probe(ctx)
+		}()
+	}
+	wg.Wait()
 	return rep
 }
 
@@ -197,6 +209,44 @@ func (d Deps) codex(ctx context.Context) Entry {
 		e.RateLimits = append(e.RateLimits, acct.Windows...)
 	}
 	e.RateLimits = d.withRunSignal(e.RateLimits, harness.Codex)
+	return e
+}
+
+func (d Deps) grok(ctx context.Context) Entry {
+	e := d.base(harness.Grok, grokauth.Binary)
+	run := d.GrokRun
+	if run == nil {
+		run = grokauth.ExecRunner
+	}
+	timeout := d.GrokProbeTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	e.InstalledHost = run(probeCtx, grokauth.Binary, "--version") == nil
+	login, err := d.Grok.Find()
+	e.Auth = codexauth.AuthMissing
+	if err != nil {
+		e.Note = joinNotes(e.Note, "no readable Grok credential; run `grok login`, or set XAI_API_KEY")
+		return e
+	}
+	if login.APIKey != "" {
+		e.Auth, e.Source = codexauth.AuthOK, "api_key"
+		return e
+	}
+	expiry, err := grokauth.Expiry(login.Auth)
+	if err != nil {
+		e.Note = joinNotes(e.Note, "Grok login has no readable expiry; run `grok login`")
+		return e
+	}
+	e.Source, e.ExpiresAt = "oauth", &expiry
+	if expiry.After(d.Now()) {
+		e.Auth = codexauth.AuthOK
+	} else {
+		e.Auth = "expired"
+		e.Note = joinNotes(e.Note, "run `grok login`")
+	}
 	return e
 }
 
