@@ -60,3 +60,5 @@ test-fetch-on-stale-sidecar.log
 
 # Test and lint reports written by Taskfile (RESULTS_DIR).
 test-reports/
+
+.smelt-pilot/
