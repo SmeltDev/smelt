@@ -260,6 +260,10 @@ type FactoryConfig struct {
 	// GatesFirst runs the validation commands before the reviews and skips
 	// the reviews of a round whose gates failed. Unset means true.
 	GatesFirst *bool `json:"gatesFirst,omitempty"`
+	// FocusedRechecks makes a run's later rounds carry forward the reviews
+	// that passed and re-check the rest against their own earlier findings,
+	// instead of reviewing from scratch. Default true.
+	FocusedRechecks *bool `json:"focusedRechecks,omitempty"`
 	// Cache keeps the docker backend's build and module caches in volumes that
 	// outlive sidecars. Unset means true.
 	Cache *bool `json:"cache,omitempty"`
@@ -404,6 +408,12 @@ func (f *FactoryConfig) CacheEnabled() bool {
 // PlanEnabled reports whether runs plan before implementing; the default is yes.
 func (f *FactoryConfig) PlanEnabled() bool {
 	return f == nil || f.Plan == nil || *f.Plan
+}
+
+// FocusedRechecksEnabled reports whether later rounds re-check earlier
+// findings rather than review the change again. It is on unless set to false.
+func (f *FactoryConfig) FocusedRechecksEnabled() bool {
+	return f == nil || f.FocusedRechecks == nil || *f.FocusedRechecks
 }
 
 // GatesFirstEnabled reports whether a round's validation commands run before its

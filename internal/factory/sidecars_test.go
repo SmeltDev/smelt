@@ -26,7 +26,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":""
 
 func TestScopePromptsIncludesOriginalRequestAndReusableInstructions(t *testing.T) {
 	prompts := []review.Prompt{{Name: "testing", Body: "Check tests for every requested behavior."}}
-	got := scopePrompts("Add shareable search.\nPreserve the URL hash.", prompts, nil)
+	got := legacyScope("Add shareable search.\nPreserve the URL hash.", prompts, nil).Prompts
 
 	assert.Equal(t, len(got), 1)
 	assert.Equal(t, got[0].Name, "testing")
@@ -51,7 +51,7 @@ func TestScopePromptsCarriesAReviewersEarlierRounds(t *testing.T) {
 			Reply:    "The request says not to wire it in.",
 		}},
 	}
-	got := scopePrompts("Add a package.", prompts, history)
+	got := legacyScope("Add a package.", prompts, history).Prompts
 
 	assert.Assert(t, strings.Contains(got[0].Body, "## Earlier rounds"), got[0].Body)
 	assert.Assert(t, strings.Contains(got[0].Body, "- [medium] a.go:7: wire the new package in"), got[0].Body)
@@ -63,7 +63,7 @@ func TestScopePromptsCarriesAReviewersEarlierRounds(t *testing.T) {
 
 func TestScopePromptsSeverityAddsTheRubric(t *testing.T) {
 	prompts := []review.Prompt{{Name: "testing", Body: "Check tests."}}
-	got := scopePrompts("Add a package.", prompts, nil)
+	got := legacyScope("Add a package.", prompts, nil).Prompts
 
 	assert.Assert(t, strings.Contains(got[0].Body, "## What blocks a change"), got[0].Body)
 	assert.Assert(t, !strings.Contains(got[0].Body, "## Earlier rounds"), got[0].Body)
@@ -71,15 +71,15 @@ func TestScopePromptsSeverityAddsTheRubric(t *testing.T) {
 
 func TestAnswerAttachesTheReplyToEachReviewsLatestRoundOnce(t *testing.T) {
 	s := &Sidecars{}
-	s.remember(1, Check{Name: "a", Kind: KindReview, Status: StatusFailed, Findings: []review.Finding{{File: "a.go", Severity: "high", Body: "x"}}})
-	s.remember(1, Check{Name: "b", Kind: KindReview, Status: StatusPassed})
+	s.remember(1, Check{Name: "a", Kind: KindReview, Status: StatusFailed, Findings: []review.Finding{{File: "a.go", Severity: "high", Body: "x"}}}, "")
+	s.remember(1, Check{Name: "b", Kind: KindReview, Status: StatusPassed}, "")
 
 	s.answer("  fixed it  ")
 	assert.Equal(t, s.history["a"][0].Reply, "fixed it")
 	assert.Equal(t, s.history["b"][0].Reply, "fixed it")
 
 	// A later turn answers the next round, not this one again.
-	s.remember(2, Check{Name: "a", Kind: KindReview, Status: StatusFailed, Findings: []review.Finding{{File: "a.go", Severity: "medium", Body: "y"}}})
+	s.remember(2, Check{Name: "a", Kind: KindReview, Status: StatusFailed, Findings: []review.Finding{{File: "a.go", Severity: "medium", Body: "y"}}}, "")
 	s.answer("fixed that too")
 	assert.Equal(t, s.history["a"][0].Reply, "fixed it")
 	assert.Equal(t, s.history["a"][1].Reply, "fixed that too")
@@ -90,9 +90,9 @@ func TestRememberKeepsOnlyFixableFindingsOfReviewsThatRan(t *testing.T) {
 	s.remember(1, Check{Name: "testing", Kind: KindReview, Status: StatusFailed, Findings: []review.Finding{
 		{File: "a.go", Severity: "medium", Body: "keep"},
 		{File: "b.go", Severity: "low", Body: "drop"},
-	}})
-	s.remember(1, Check{Name: "correctness", Kind: KindReview, Status: StatusErrored})
-	s.remember(1, Check{Name: "lint", Kind: KindValidate, Status: StatusFailed})
+	}}, "")
+	s.remember(1, Check{Name: "correctness", Kind: KindReview, Status: StatusErrored}, "")
+	s.remember(1, Check{Name: "lint", Kind: KindValidate, Status: StatusFailed}, "")
 
 	assert.Equal(t, len(s.history), 1)
 	got := s.history["testing"]

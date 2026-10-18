@@ -84,9 +84,47 @@ git diff HEAD --shortstat`,
 	return c, nil
 }
 
+// treeCmd prints the tree object of the working tree in the current directory,
+// new files included. It uses an index of its own so the intent-to-add marks
+// `git diff HEAD` relies on stay as they are.
+const treeCmd = `idx=$(git rev-parse --git-path smelt-tree-index) || exit 1
+rm -f "$idx"
+GIT_INDEX_FILE=$idx git read-tree HEAD && GIT_INDEX_FILE=$idx git add -A && GIT_INDEX_FILE=$idx git write-tree
+status=$?
+rm -f "$idx"
+exit $status`
+
+// changedCmd prints the line-level diff between two trees, without rename
+// detection so a moved file reads as new and every changed line is named.
+func changedCmd(from, to string) string {
+	return "git diff --unified=0 --no-renames --no-color --no-ext-diff " + sidecar.ShellEscape(from) + " " + sidecar.ShellEscape(to)
+}
+
+// tree is the tree object of the implementer's work as it stands.
+func (w *workspace) tree(ctx context.Context) (string, error) {
+	out, err := w.run(ctx, "cd "+sidecar.ShellEscape(w.entry.RepoPath)+" && "+treeCmd)
+	if err != nil {
+		return "", fmt.Errorf("record tree: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// changedRanges is the lines that differ between two trees recorded by tree.
+func (w *workspace) changedRanges(ctx context.Context, from, to string) (changedLines, error) {
+	out, err := review.RunScript(ctx, w.exec, w.entry, "cd "+sidecar.ShellEscape(w.entry.RepoPath)+" && "+changedCmd(from, to), maxDiffOutput)
+	if err != nil {
+		return nil, fmt.Errorf("diff trees: %w", err)
+	}
+	return parseHunks(out), nil
+}
+
 // maxScriptOutput caps what a workspace script may print: a commit, or git's
 // summary of the change. Past this something has gone wrong.
 const maxScriptOutput = 64 << 10
+
+// maxDiffOutput caps the line-level diff between two rounds. A diff over it
+// fails rather than being cut, and the guard then downgrades nothing.
+const maxDiffOutput = 8 << 20
 
 // run executes script on the implementer's sidecar and returns its stdout.
 func (w *workspace) run(ctx context.Context, script string) (string, error) {

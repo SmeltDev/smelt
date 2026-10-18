@@ -90,6 +90,11 @@ type Sidecars struct {
 	// GatesFirst runs Commands before the reviews, and skips the reviews of a
 	// round whose commands failed.
 	GatesFirst bool
+	// FocusedRechecks makes rounds after the first carry forward the reviews
+	// that passed and re-check the rest against their own earlier findings,
+	// downgrading new medium findings on code the fix did not touch. Off, every
+	// round is a full review that is asked to hold back.
+	FocusedRechecks bool
 	// Integrate makes the reviews those of a finished branch against the whole
 	// of Request: the first round is broad, later ones re-check only the
 	// reviews that found something. Gates and reviews always run together.
@@ -127,6 +132,9 @@ type Sidecars struct {
 	reviewersReady bool
 	// history is what each review found in earlier rounds, by prompt name.
 	history map[string][]priorRound
+	// downgraded are the findings the guard lowered, over all rounds, as the
+	// PR notes list them.
+	downgraded []string
 	// fingerprint is the implementer's change as last collected, which is
 	// what each round's reviews are of.
 	fingerprint string
@@ -380,24 +388,34 @@ func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, err
 	}
 	start = time.Now()
 	defer func() { s.reviewsTook += time.Since(start) }()
-	if err := s.prepareReviewers(ctx); err != nil {
-		return nil, err
+	return s.reviewAndConclude(ctx, round, gates)
+}
+
+// reviewAndConclude runs the round's reviews after its gates passed, and
+// returns every check of the round.
+func (s *Sidecars) reviewAndConclude(ctx context.Context, round int, gates []Check) ([]Check, error) {
+	scope := s.reviewSet(round)
+	var reviews []Check
+	if len(scope.Prompts) > 0 {
+		if err := s.prepareReviewers(ctx); err != nil {
+			return nil, err
+		}
+		if err := s.relayToReviewers(ctx, round); err != nil {
+			return nil, err
+		}
+		var err error
+		if reviews, err = s.runReviews(ctx, round, scope); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.relayToReviewers(ctx, round); err != nil {
-		return nil, err
-	}
-	prompts, _ := s.reviewSet(round)
-	reviews, err := s.runReviews(ctx, round, prompts)
-	if err != nil {
-		return nil, err
-	}
-	return slices.Concat(reviews, gates, s.qualityChecks(ctx)), nil
+	return slices.Concat(scope.Carried, reviews, gates, s.qualityChecks(ctx)), nil
 }
 
 // checkTogether runs the reviews on the reviewers and validation on the
 // implementer at the same time.
 func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error) {
-	prompts, carried := s.reviewSet(round)
+	scope := s.reviewSet(round)
+	prompts := scope.Prompts
 	if len(prompts) > 0 {
 		if err := s.prepareReviewers(ctx); err != nil {
 			return nil, err
@@ -419,7 +437,7 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			reviews, reviewErr = s.runReviews(ctx, round, prompts)
+			reviews, reviewErr = s.runReviews(ctx, round, scope)
 			reviewsTook = time.Since(start)
 		}()
 	}
@@ -436,7 +454,7 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 	if reviewErr != nil {
 		return nil, reviewErr
 	}
-	return slices.Concat(carried, reviews, validation, s.qualityChecks(ctx)), nil
+	return slices.Concat(scope.Carried, reviews, validation, s.qualityChecks(ctx)), nil
 }
 
 // qualityChecks is the round's quality check, none when the run does not
@@ -452,13 +470,22 @@ func (s *Sidecars) qualityChecks(ctx context.Context) []Check {
 	return []Check{c}
 }
 
-// reviewSet is the review prompts to run in round, as each reviewer is sent
-// them, and the checks of reviews that are not run again.
-func (s *Sidecars) reviewSet(round int) ([]review.Prompt, []Check) {
-	if s.Integrate {
-		return integratePrompts(s.Request, s.Prompts, s.history, round)
+// reviewSet is the reviews to run in round, as each reviewer is sent them, and
+// the checks of reviews that are not run again.
+func (s *Sidecars) reviewSet(round int) roundScope {
+	switch {
+	case s.Integrate:
+		return scopePrompts(scopeInput{Broad: broadPreamble(s.Request), Spec: s.Request}, s.Prompts, s.history, round)
+	case s.FocusedRechecks:
+		return scopePrompts(normalScope(s.reviewRequest()), s.Prompts, s.history, round)
 	}
-	return scopePrompts(s.reviewRequest(), s.Prompts, s.history), nil
+	return legacyScope(s.reviewRequest(), s.Prompts, s.history)
+}
+
+// normalScope is the scoping of a normal run: the request, with the context
+// pack when there is one, is both the broad review's and the re-check's.
+func normalScope(request string) scopeInput {
+	return scopeInput{Broad: fmt.Sprintf(reviewHead, request), Spec: request}
 }
 
 // relayToReviewers relays the implementer's tree, as pulled into the
@@ -483,20 +510,80 @@ func (s *Sidecars) relayToReviewers(ctx context.Context, round int) error {
 	return nil
 }
 
-// runReviews runs prompts on the reviewers and remembers what each found for
-// the next round.
-func (s *Sidecars) runReviews(ctx context.Context, round int, prompts []review.Prompt) ([]Check, error) {
-	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, prompts, s.Review)
+// runReviews runs the scope's prompts on the reviewers and remembers what each
+// found for the next round. In a focused re-check, a new medium finding on code
+// the fix did not touch is downgraded before it is judged.
+func (s *Sidecars) runReviews(ctx context.Context, round int, scope roundScope) ([]Check, error) {
+	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scope.Prompts, s.Review)
 	if err != nil {
 		return nil, fmt.Errorf("reviews: %w", err)
 	}
+	tree := ""
+	if s.FocusedRechecks && !s.Integrate {
+		tree = s.recordTree(ctx)
+	}
+	changes := map[string]changedLines{}
 	checks := make([]Check, 0, len(results))
 	for _, r := range results {
+		mode := scope.Modes[r.Prompt]
+		if mode == ModeRecheck {
+			r.Parsed.Findings = s.guardFindings(ctx, r, round, tree, changes)
+		}
 		c := FromReview(r)
+		c.Mode = mode
 		checks = append(checks, c)
-		s.remember(round, c)
+		s.remember(round, c, tree)
 	}
 	return checks, nil
+}
+
+// recordTree is the tree the reviewers are about to be shown, "" when it
+// cannot be read. Without it the next round's guard has nothing to compare.
+func (s *Sidecars) recordTree(ctx context.Context) string {
+	tree, err := s.ws.tree(ctx)
+	if err != nil {
+		s.notify(iostream.LevelWarn, "could not record the reviewed tree; later findings will not be downgraded: "+err.Error())
+		return ""
+	}
+	return tree
+}
+
+// guardFindings applies guard to a re-checking review's findings, and notes
+// the ones it lowered. changes caches the diff from each tree a review last saw.
+func (s *Sidecars) guardFindings(ctx context.Context, r review.Result, round int, tree string, changes map[string]changedLines) []review.Finding {
+	rounds := s.history[r.Prompt]
+	in := guardInput{Round: round}
+	for _, p := range rounds {
+		in.Prior = append(in.Prior, p.Findings...)
+	}
+	if base := rounds[len(rounds)-1].Tree; base != "" && tree != "" {
+		cl, cached := changes[base]
+		if !cached {
+			var err error
+			if cl, err = s.ws.changedRanges(ctx, base, tree); err != nil {
+				s.notify(iostream.LevelWarn, "could not tell what changed since the last review; its findings will not be downgraded: "+err.Error())
+				cl = nil
+			}
+			changes[base] = cl
+		}
+		in.Changed = cl
+	}
+	out := make([]review.Finding, len(r.Parsed.Findings))
+	for i, f := range r.Parsed.Findings {
+		out[i] = guard(f, in)
+		if out[i].Downgraded != "" {
+			note := fmt.Sprintf("%s: %s (downgraded: %s)", out[i].Location(), strings.Join(strings.Fields(out[i].Body), " "), out[i].Downgraded)
+			s.downgraded = append(s.downgraded, note)
+			s.notify(iostream.LevelInfo, "review "+r.Prompt+": "+note)
+		}
+	}
+	return out
+}
+
+// Downgraded lists the findings the guard lowered to low in any round, for the
+// run's PR notes.
+func (s *Sidecars) Downgraded() []string {
+	return s.downgraded
 }
 
 // Pull brings the implementer's work so far into the worktree. Check does it
@@ -574,7 +661,7 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 
 // remember keeps what a review found this round for the reviews of later ones.
 // A review that could not run, or was not started, has nothing to remember.
-func (s *Sidecars) remember(round int, c Check) {
+func (s *Sidecars) remember(round int, c Check, tree string) {
 	if c.Kind != KindReview || c.Status == StatusErrored || c.Status == StatusSkipped {
 		return
 	}
@@ -587,26 +674,27 @@ func (s *Sidecars) remember(round int, c Check) {
 			worth = append(worth, f)
 		}
 	}
-	s.history[c.Name] = append(s.history[c.Name], priorRound{Round: round, Findings: worth})
+	s.history[c.Name] = append(s.history[c.Name], priorRound{Round: round, Findings: worth, Tree: tree})
 }
 
-// scopePrompts is prompts as each reviewer is sent them, with the stable
-// request being checked, the location of the change under review, the severity
-// rubric, and what that reviewer reported in earlier rounds.
-func scopePrompts(request string, prompts []review.Prompt, history map[string][]priorRound) []review.Prompt {
-	out := make([]review.Prompt, len(prompts))
-	for i, p := range prompts {
+// legacyScope is a run's reviews with factory.focusedRechecks off: every
+// review is a full one in every round, asked to hold back by what it reported
+// before. Nothing is carried forward.
+func legacyScope(request string, prompts []review.Prompt, history map[string][]priorRound) roundScope {
+	rs := roundScope{Modes: map[string]Mode{}}
+	for _, p := range prompts {
 		var b strings.Builder
 		fmt.Fprintf(&b, reviewHead, request)
 		b.WriteString("\n\n")
 		b.WriteString(severityScope + "\n\n")
-		if h := historyScope(history[p.Name]); h != "" {
+		if h := legacyHistory(history[p.Name]); h != "" {
 			b.WriteString(h + "\n")
 		}
 		fmt.Fprintf(&b, reviewTail, p.Body)
-		out[i] = review.Prompt{Name: p.Name, Body: b.String()}
+		rs.Prompts = append(rs.Prompts, review.Prompt{Name: p.Name, Body: b.String()})
+		rs.Modes[p.Name] = ModeBroad
 	}
-	return out
+	return rs
 }
 
 // installDependencies runs Install in each entry's workspace at once. What

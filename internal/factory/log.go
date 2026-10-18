@@ -132,7 +132,7 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 	// every turn, and each review gets the original request and the location of
 	// the change under review.
 	l.block("implementer system prompt", implementerSystemPrompt(opts.ImplementerInstructions, gateCommands(opts.Commands)))
-	for _, p := range scopePrompts(request, opts.Prompts, nil) {
+	for _, p := range scopePrompts(normalScope(request), opts.Prompts, nil, 1).Prompts {
 		l.block("review prompt "+p.Name, p.Body)
 	}
 }

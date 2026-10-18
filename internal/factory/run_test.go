@@ -259,6 +259,19 @@ func TestConcludeRunWritesNotesIntoTheCommit(t *testing.T) {
 	assert.Assert(t, !strings.Contains(msg, "secret"), msg)
 }
 
+func TestConcludeRunListsDowngradedFindingsInTheNotes(t *testing.T) {
+	wt, steps, _ := concludeFixture(t, true, func() (int, string) { return 0, notesJSON })
+	steps.downgraded = []string{"a.go:3: stray (downgraded: new in round 2 on unchanged code)"}
+	rep := Report{RunID: "run-1", Outcome: Outcome{Result: ResultPassed, Rounds: 2}}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag"}, func(iostream.Level, string) {})
+
+	assert.Assert(t, rep.Notes != nil)
+	assert.DeepEqual(t, rep.Notes.Low, steps.downgraded)
+	msg := gitOutput(t, wt.Path, "log", "-1", "--format=%B", wt.Branch)
+	assert.Assert(t, strings.Contains(msg, "Low findings") && strings.Contains(msg, "a.go:3: stray"), msg)
+}
+
 func TestConcludeRunTimesTheNotesContext(t *testing.T) {
 	wt, steps, _ := concludeFixture(t, true, func() (int, string) { return 0, measured(notesJSON) })
 	rep := Report{RunID: "run-1", Outcome: Outcome{Result: ResultPassed, Rounds: 1}}

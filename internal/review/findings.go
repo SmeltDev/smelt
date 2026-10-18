@@ -48,6 +48,9 @@ type Finding struct {
 	Body     string `json:"body"`
 	// Patch is an optional unified diff that would fix the finding.
 	Patch string `json:"patch,omitempty"`
+	// Downgraded is why smelt lowered the finding's severity, "" when it did
+	// not. The finding keeps its text; only its weight changes.
+	Downgraded string `json:"downgraded,omitempty"`
 }
 
 // FindingsSchema is the JSON Schema a review's answer must satisfy when
@@ -212,6 +215,14 @@ func (f Finding) Location() string {
 // so a loop does not churn the code over style remarks.
 func (f Finding) WorthChanging() bool {
 	return f.Severity == SeverityHigh || f.Severity == SeverityMedium
+}
+
+// Downgrade is f lowered to low severity, with reason recorded. The finding is
+// kept, so a person can still read it; it is just no longer worth a round.
+func (f Finding) Downgrade(reason string) Finding {
+	f.Severity = SeverityLow
+	f.Downgraded = reason
+	return f
 }
 
 // DedupeFindings drops repeats: several reviews of the same change often flag

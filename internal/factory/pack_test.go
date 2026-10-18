@@ -223,11 +223,11 @@ func TestPlanPreambleCarriesThePack(t *testing.T) {
 func TestReviewersGetThePackAfterTheRequest(t *testing.T) {
 	pk := Pack{Entries: []PackEntry{{Kind: PackReference, Path: "b.go", Reason: "reuse", Priority: 1, Excerpt: "func B() {}"}}}
 	s := &Sidecars{Request: "Add a thing.\n", Prompts: []review.Prompt{{Name: "bugs", Body: "find bugs"}}}
-	without, _ := s.reviewSet(1)
-	assert.Equal(t, without[0].Body, scopePrompts("Add a thing.\n", s.Prompts, nil)[0].Body)
+	without := s.reviewSet(1).Prompts
+	assert.Equal(t, without[0].Body, legacyScope("Add a thing.\n", s.Prompts, nil).Prompts[0].Body)
 
 	s.Pack = &pk
-	with, _ := s.reviewSet(1)
+	with := s.reviewSet(1).Prompts
 	body := with[0].Body
 	assert.Assert(t, contains(body, "## Requested change\n\nAdd a thing.\n\n## Context pack\n\n"+reviewPackIntro), body)
 	assert.Assert(t, contains(body, "```\nfunc B() {}\n```\n\n## Change under review"), body)

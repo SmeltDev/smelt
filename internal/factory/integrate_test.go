@@ -45,20 +45,25 @@ func TestIntegratePromptsSelectByRound(t *testing.T) {
 		// docs errored in round 1, so it has no history.
 	}
 
-	first, carried := integratePrompts("spec", prompts, nil, 1)
+	integ := scopeInput{Broad: broadPreamble("spec"), Spec: "spec"}
+	r1 := scopePrompts(integ, prompts, nil, 1)
+	first, carried := r1.Prompts, r1.Carried
 	assert.Equal(t, len(first), 3)
 	assert.Equal(t, len(carried), 0)
 	for i, p := range prompts {
 		assert.Equal(t, first[i].Body, wantBroadSpec+"\n\n"+severityScope+"\n\n## Review instructions\n\n"+p.Body)
 	}
 
-	second, carried := integratePrompts("spec", prompts, history, 2)
+	r2 := scopePrompts(integ, prompts, history, 2)
+	second, carried := r2.Prompts, r2.Carried
 	assert.Equal(t, len(second), 2)
 	assert.Equal(t, second[0].Name, "bugs")
 	assert.Equal(t, second[0].Body, recheckPreamble("spec", history["bugs"][0])+"\n\n"+severityScope+"\n\n## Review instructions\n\nfind bugs")
 	assert.Equal(t, second[1].Name, "docs")
 	assert.Assert(t, strings.HasPrefix(second[1].Body, broadPreamble("spec")), "a review with no broad pass yet gets one")
-	assert.DeepEqual(t, carried, []Check{{Name: "style", Kind: KindReview, Status: StatusPassed}})
+	assert.DeepEqual(t, carried, []Check{{Name: "style", Kind: KindReview, Status: StatusPassed, Mode: ModeCarried}})
+	assert.DeepEqual(t, r1.Modes, map[string]Mode{"bugs": ModeBroad, "style": ModeBroad, "docs": ModeBroad})
+	assert.DeepEqual(t, r2.Modes, map[string]Mode{"bugs": ModeRecheck, "docs": ModeBroad})
 	// The project's own prompts are not rewritten.
 	assert.Equal(t, prompts[0].Body, "find bugs")
 }
@@ -205,4 +210,28 @@ func TestIntegrateWorktreeChangeIsMergeBaseToTip(t *testing.T) {
 func TestIntegrateNotesSayTheRequestIsTheSpec(t *testing.T) {
 	assert.Assert(t, strings.Contains(notesPrompt(NotesInput{Request: "spec", Integrate: true}), "combines several finished tickets"))
 	assert.Assert(t, !strings.Contains(notesPrompt(NotesInput{Request: "spec"}), "finished tickets"))
+}
+
+func TestNormalScopeUsesTheRequestPreambleAndTheSameRecheck(t *testing.T) {
+	prompts := []review.Prompt{{Name: "bugs", Body: "find bugs"}, {Name: "style", Body: "check style"}}
+	worth := []review.Finding{{File: "a.go", Line: 1, Severity: "medium", Body: "x"}}
+	history := map[string][]priorRound{"bugs": {{Round: 1, Findings: worth}}, "style": {{Round: 1}}}
+	in := normalScope("Add it.")
+
+	first := scopePrompts(in, prompts, nil, 1)
+	// Round 1 is byte-identical to the prompt of a run without focused re-checks.
+	assert.DeepEqual(t, first.Prompts, legacyScope("Add it.", prompts, nil).Prompts)
+
+	second := scopePrompts(in, prompts, history, 2)
+	assert.Equal(t, len(second.Prompts), 1)
+	assert.Assert(t, strings.HasPrefix(second.Prompts[0].Body, recheckPreamble("Add it.", history["bugs"][0])))
+	assert.DeepEqual(t, second.Carried, []Check{{Name: "style", Kind: KindReview, Status: StatusPassed, Mode: ModeCarried}})
+}
+
+func TestNotesListLowFindings(t *testing.T) {
+	n := Notes{Title: "t", What: "w", Low: []string{"a.go:3: odd (downgraded: new in round 3 on unchanged code)"}}
+	body := n.PRBody("run-1", Outcome{}, "")
+	assert.Assert(t, contains(body, "Low findings"), body)
+	assert.Assert(t, contains(body, "- a.go:3: odd (downgraded: new in round 3 on unchanged code)"), body)
+	assert.Assert(t, !contains(Notes{Title: "t", What: "w"}.PRBody("run-1", Outcome{}, ""), "Low findings"))
 }
