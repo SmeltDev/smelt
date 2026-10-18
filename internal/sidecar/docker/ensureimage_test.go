@@ -52,11 +52,20 @@ type fakeDocker struct {
 	// removedVolumes the volumes it removed.
 	volumeErrs     map[string]error
 	removedVolumes []string
+	// uid is what the `id -u` probe prints; probes counts the probe containers
+	// and imgID is the ID ImageInspect reports.
+	uid    string
+	probes int
+	imgID  string
+	// volumes are what VolumeList reports.
+	volumes []string
+	// execCodeFor, when set, picks an exec's exit code from its request.
+	execCodeFor func(container.ExecOptions) int
 }
 
 func newFakeDocker() *fakeDocker {
 	t := time.Unix(1_700_000_000, 0)
-	return &fakeDocker{clock: t, start: t, hasImage: true}
+	return &fakeDocker{clock: t, start: t, hasImage: true, uid: "1001", imgID: "sha256:img"}
 }
 
 func (f *fakeDocker) ready() bool { return f.clock.Sub(f.start) >= f.readyAt }
@@ -79,13 +88,13 @@ func (f *fakeDocker) ImageInspect(_ context.Context, ref string, _ ...client.Ima
 	f.inspects++
 	switch {
 	case f.byNameMissing && strings.HasPrefix(ref, "sha256:") && f.ready():
-		return image.InspectResponse{Config: f.imgConfig}, nil
+		return image.InspectResponse{ID: f.imgID, Config: f.imgConfig}, nil
 	case f.byNameMissing:
 		return image.InspectResponse{}, errNoSuchImage
 	case f.inspErr != nil:
 		return image.InspectResponse{}, f.inspErr
 	case f.hasImage && f.ready():
-		return image.InspectResponse{Config: f.imgConfig}, nil
+		return image.InspectResponse{ID: f.imgID, Config: f.imgConfig}, nil
 	}
 	return image.InspectResponse{}, errNoSuchImage
 }
@@ -249,6 +258,10 @@ func TestCreateAndSnapshotUseResolvedID(t *testing.T) {
 }
 
 func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+	if len(cfg.Entrypoint) > 0 {
+		f.probes++
+		return container.CreateResponse{ID: "probe"}, nil
+	}
 	f.created = append(f.created, cfg.Image)
 	f.hostConfigs = append(f.hostConfigs, host)
 	return container.CreateResponse{ID: "c" + strconv.Itoa(len(f.created))}, nil

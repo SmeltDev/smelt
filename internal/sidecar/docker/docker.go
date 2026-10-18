@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,6 +76,11 @@ type Provider struct {
 
 	mu      sync.Mutex
 	members map[string]member // by container ID
+
+	// uids caches the image user's uid by image ID; uidMu is held across the
+	// probe, so concurrent Creates of one image probe it once.
+	uidMu sync.Mutex
+	uids  map[string]string
 }
 
 // member is a container the provider created: its bind-mounted workspace on
@@ -83,6 +89,9 @@ type Provider struct {
 type member struct {
 	hostDir string
 	image   string
+	// env is set in every command run in the container: the temporary cache
+	// directories when the cache volumes could not be used.
+	env map[string]string
 }
 
 // Layout of a snapshot directory: the workspace copy, and the image it ran on.
@@ -227,13 +236,14 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, fmt.Errorf("docker: start container: %w", err)
 	}
-	if err := b.ownCaches(ctx, created.ID, caches); err != nil {
+	cacheEnv, err := b.prepareCaches(ctx, created.ID, caches)
+	if err != nil {
 		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, err
 	}
 
-	b.remember(created.ID, member{hostDir: hostDir, image: containerImage})
+	b.remember(created.ID, member{hostDir: hostDir, image: containerImage, env: cacheEnv})
 	return sidecar.Instance{ID: created.ID, HostDir: hostDir, RepoPath: repoPath}, nil
 }
 
@@ -323,6 +333,12 @@ func (b *Provider) Pull(ctx context.Context, id, repoPath, localDir string, stat
 // stderr to onOutput, returning the command's exit code. onSubmitted, when
 // non-nil, receives the Docker exec ID between creation and streaming.
 func (b *Provider) Exec(ctx context.Context, id, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
+	if m, ok := b.member(id); ok && len(m.env) > 0 {
+		merged := make(map[string]string, len(m.env)+len(env))
+		maps.Copy(merged, m.env)
+		maps.Copy(merged, env)
+		env = merged
+	}
 	return b.execAs(ctx, id, "", script, env, onOutput, onSubmitted)
 }
 

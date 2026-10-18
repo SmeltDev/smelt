@@ -230,7 +230,7 @@ smelt
 │   │   --yes                       # Remove without asking
 │   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
 │   │   --dry-run                   # List what would be removed and stop
-│   │   --cache                     # Remove the project's docker cache volumes (smelt-cache-<hash>, smelt-gomod-<hash>) instead of runs
+│   │   --cache                     # Remove the project's docker cache volumes (smelt-cache-<hash>-<uid>, smelt-gomod-<hash>-<uid>, every uid, and older ones without a uid) instead of runs
 │   ├── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
 │   │   --unset                     # Remove factory.author, so each person commits as themselves
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
@@ -442,12 +442,18 @@ smelt
   reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail, as `skipped_tests` in
   `factory status --json`, and in the PR notes under "Skipped in the sandbox".
 - **The docker backend keeps a warm cache.** Every sidecar of a project mounts the named volume
-  `smelt-cache-<project hash>` at the image user's `~/.cache` (Go's build cache lives there), and, for a Go
-  project (`environment.stack: go`), `smelt-gomod-<project hash>` at the Go module cache (`GOMODCACHE`, else
+  `smelt-cache-<project hash>-<uid>` at the image user's `~/.cache` (Go's build cache lives there), and, for a Go
+  project (`environment.stack: go`), `smelt-gomod-<project hash>-<uid>` at the Go module cache (`GOMODCACHE`, else
   `GOPATH/pkg/mod`, else `~/go/pkg/mod`). The home directory comes from the image. The volumes outlive
   containers and runs, so a second run's gates start warm. `factory.cache: false` turns both off;
-  `smelt factory clean --cache` removes them (a volume in use by a running sidecar is kept). The CircleCI
-  backend is unaffected.
+  `smelt factory clean --cache` removes them for every uid, and older volumes without a uid, which runs no
+  longer use (a volume in use by a running sidecar is kept). The `<uid>` is the image's runtime user, read once
+  per image with `id -u`, so a project that switches to an image with another user gets fresh caches instead
+  of files it cannot write. At container start a self-check looks for cache content the user does not own
+  (to a depth of three) and for a mount point it cannot write; if it finds either, one warning is logged and
+  `GOCACHE`, `GOMODCACHE`, `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at `/tmp/smelt-cache-<uid>` in the
+  container for that member's commands, so the run goes on, with a cold cache. The CircleCI backend is
+  unaffected.
 - **Where the time went.** At the end of a run `factory build` prints, the run log records and
   `factory status --json` carries (as `factory.timing`, in milliseconds, with the `line`) one line:
   `Time: plan 1m02s · implement 3m40s (commands 1m10s) · gates 0m52s · reviews 0m21s · notes 0m15s · total 6m10s`.
