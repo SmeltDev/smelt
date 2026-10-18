@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/iostream"
@@ -70,8 +71,10 @@ uncommitted changes is skipped unless --force is given, which discards them.
 
 With --cache nothing about runs is touched. Instead the project's Docker cache
 volumes are removed: the build cache every docker sidecar shares and, for a Go
-project, its module cache. The next run fills them again. Use it when a stale
-cache is suspected, or to free the disk space.`,
+project, its module cache. The volumes are kept per image user, so those of
+every user are removed, and so are older ones that carry no user. The next run
+fills them again. Use it when a stale cache is suspected, or to free the disk
+space.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cache {
@@ -257,8 +260,29 @@ func runFactoryCleanCache(cmd *cobra.Command, flags cleanFlags) error {
 		return err
 	}
 	key := config.ProjectHash(root)
-	cache, gomod := docker.CacheVolumeNames(key)
-	streams.Printf("Cache volumes of this project: %s, %s\n", cache, gomod)
+	provider, err := docker.New()
+	if err != nil {
+		return &userError{msg: "Could not reach Docker.", err: err}
+	}
+	defer func() { _ = provider.Close() }()
+	vols, err := provider.ListCacheVolumes(ctx, key)
+	switch {
+	case err != nil && flags.dryRun:
+		streams.Printf("Could not list the volumes (%v).\nCache volumes of this project are named %s-cache-%s-<uid> and %s-gomod-%s-<uid>.\n", err, brand.Command, key, brand.Command, key)
+		return nil
+	case err != nil:
+		return &userError{msg: "Could not list the cache volumes.", err: err}
+	case len(vols) == 0:
+		streams.Printf("No cache volumes for this project.\n")
+		return nil
+	}
+	for _, v := range vols {
+		if v.Legacy {
+			streams.Printf("%s (from before volumes were kept per image user)\n", v.Name)
+		} else {
+			streams.Printf("%s\n", v.Name)
+		}
+	}
 	if flags.dryRun {
 		return nil
 	}
@@ -267,11 +291,6 @@ func runFactoryCleanCache(cmd *cobra.Command, flags cleanFlags) error {
 			return err
 		}
 	}
-	provider, err := docker.New()
-	if err != nil {
-		return &userError{msg: "Could not reach Docker.", err: err}
-	}
-	defer func() { _ = provider.Close() }()
 	removed, err := provider.RemoveCacheVolumes(ctx, key)
 	for _, name := range removed {
 		streams.Printf("removed %s\n", name)
