@@ -143,15 +143,17 @@ type Turn struct {
 	CostUSD  float64
 	// Harness and Model are what ran the turn; Model is "" when the CLI's own
 	// default was used.
-	Harness      harness.Name
-	Model        string
-	InputTokens  int
-	CachedTokens int
-	OutputTokens int
+	Harness       harness.Name
+	Model         string
+	ContextWindow int
+	InputTokens   int
+	CachedTokens  int
+	OutputTokens  int
 	// ContextPeak and ModelCalls are the largest prompt of the turn in tokens
 	// and its number of model calls; 0 when the agent does not report them.
 	ContextPeak int
 	ModelCalls  int
+	Compactions int
 	// RateLimit is the last rate-limit signal the agent emitted, if any.
 	RateLimit *harness.RateLimit
 	// Activity is what the implementer did in the turn, in order.
@@ -168,14 +170,15 @@ type Turn struct {
 // far.
 type Implementer struct {
 	// Harness is the agent; Claude Code when nil.
-	Harness      harness.Harness
-	Exec         review.Execer
-	Entry        *sidecar.PoolEntry
-	Credential   review.Credential
-	BaseURL      string
-	Model        string
-	Timeout      time.Duration
-	Instructions string
+	Harness       harness.Harness
+	Exec          review.Execer
+	Entry         *sidecar.PoolEntry
+	Credential    review.Credential
+	BaseURL       string
+	Model         string
+	Timeout       time.Duration
+	Instructions  string
+	ContextWindow int
 	// Gates are the commands the implementer is asked to run before it
 	// finishes; see gateCommands.
 	Gates      []config.Command
@@ -219,7 +222,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	script := h.ImplementScript(harness.ImplementInput{
 		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Gates),
 		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
-		LongestGate: longestGate(im.Gates), Timeout: timeout,
+		LongestGate: longestGate(im.Gates), Timeout: timeout, ContextWindow: im.ContextWindow,
 	})
 	code, err := im.Exec(ctx, im.Entry, script, h.Env(im.Credential, im.BaseURL), func(stream string, data []byte) {
 		if stream == iostream.StreamStderr {
@@ -243,7 +246,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 		Summary: out.Turn.Summary, Duration: time.Since(start), CostUSD: out.Turn.CostUSD,
 		Harness: h.Name(), Model: im.Model, InputTokens: out.Turn.InputTokens,
 		CachedTokens: out.Turn.CachedTokens, OutputTokens: out.Turn.OutputTokens,
-		ContextPeak: out.Turn.ContextPeak, ModelCalls: out.Turn.ModelCalls, RateLimit: out.Turn.RateLimit,
+		ContextPeak: out.Turn.ContextPeak, ModelCalls: out.Turn.ModelCalls, Compactions: out.Turn.Compactions, RateLimit: out.Turn.RateLimit,
 		Activity: acts, Calls: toolCalls(acts, seen, time.Now()),
 	}
 
@@ -273,3 +276,6 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	}
 	return turn, nil
 }
+
+// FreshSession makes the next turn start a new agent session.
+func (im *Implementer) FreshSession() { im.sessionID = uuid.NewString(); im.started = false }

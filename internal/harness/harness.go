@@ -101,6 +101,8 @@ type ImplementInput struct {
 	// unknown.
 	LongestGate time.Duration
 	Timeout     time.Duration
+	// ContextWindow is the auto-compaction threshold; zero leaves agent defaults.
+	ContextWindow int
 }
 
 // ReviewInput is one review.
@@ -149,7 +151,8 @@ type Turn struct {
 	// model in the turn; 0 when the CLI does not report it.
 	ContextPeak int
 	// ModelCalls is how many model calls the turn made; 0 when unknown.
-	ModelCalls int
+	ModelCalls  int
+	Compactions int
 	// RateLimit is the last rate-limit signal seen, if any.
 	RateLimit *RateLimit
 	SessionID string
@@ -160,7 +163,8 @@ type Context struct {
 	// Peak is the largest prompt of the turn, in tokens.
 	Peak int
 	// Calls is how many model calls the turn made.
-	Calls int
+	Calls       int
+	Compactions int
 }
 
 // RateLimit is a rate-limit signal an agent emitted during a turn.

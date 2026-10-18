@@ -65,12 +65,23 @@ func TestParserRecognisesAUsageLimit(t *testing.T) {
 	assert.Assert(t, rl.ResetsAt != nil && rl.ResetsAt.Equal(time.Date(2026, 10, 11, 14, 5, 0, 0, time.UTC)))
 }
 
+func TestParserCountsCompactionEvent(t *testing.T) {
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(`{"type":"context.compacted"}` + "\n"))
+	p.Write([]byte(`{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":80,"output_tokens":5}}` + "\n"))
+	out := p.Outcome()
+	assert.Assert(t, out.Done)
+	assert.Equal(t, out.Turn.Compactions, 1)
+}
+
 func TestImplementScript(t *testing.T) {
 	h := Harness{}
 	script := h.ImplementScript(harness.ImplementInput{RepoPath: "/work/my repo", Prompt: "do it", SystemPrompt: "no commits", Model: "gpt-5-codex"})
 	assert.Assert(t, strings.Contains(script, `export PATH="/tmp/smelt-guard:$HOME/.local/bin:$PATH"`), script)
 	assert.Assert(t, strings.Contains(script, "'codex' 'exec' '--json' '--dangerously-bypass-approvals-and-sandbox' '--skip-git-repo-check' '-C' '/work/my repo' '-m' 'gpt-5-codex' '-'"), script)
 	assert.Assert(t, !strings.Contains(script, "resume"), script)
+	compact := h.ImplementScript(harness.ImplementInput{RepoPath: "/r", Prompt: "p", ContextWindow: 150000})
+	assert.Assert(t, strings.Contains(compact, "'model_auto_compact_token_limit=150000'"), compact)
 
 	resumed := h.ImplementScript(harness.ImplementInput{RepoPath: "/r", Prompt: "p", SessionID: "thread-1", Resume: true})
 	assert.Assert(t, strings.Contains(resumed, "'resume' 'thread-1' '-'"), resumed)

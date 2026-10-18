@@ -94,6 +94,8 @@ func TestTimingFormatsTheContextLine(t *testing.T) {
 	base.ReviewsContext = harness.Context{Peak: 41000, Calls: 1}
 	base.PlanContext = harness.Context{Peak: 31000, Calls: 1}
 	assert.Equal(t, base.Format(), timeLine+"\nContext: implementer peak 88k (round 1), 52k (round 2) · reviews peak 41k · plan 31k")
+	compacted := Timing{ImplementContext: []RoundContext{{Round: 1, Context: harness.Context{Peak: 151000, Compactions: 1}}}}
+	assert.Assert(t, strings.Contains(compacted.Format(), "implementer peak 151k (compacted 1×)"), compacted.Format())
 	assert.Equal(t, base.PeakMax(), 88412)
 
 	unknown := Timing{Plan: time.Second, Reviews: time.Second, ImplementContext: []RoundContext{{Round: 1, Context: harness.Context{Peak: 90000}}}}

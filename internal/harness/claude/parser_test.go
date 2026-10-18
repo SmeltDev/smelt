@@ -35,6 +35,14 @@ func TestParserDropsOversizedLines(t *testing.T) {
 	assert.Assert(t, p.Outcome().Done)
 }
 
+func TestParserCountsCompactionBoundary(t *testing.T) {
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(`{"type":"system","subtype":"compact_boundary"}` + "\n"))
+	p.Write([]byte(`{"type":"result","result":"continued"}` + "\n"))
+	assert.Equal(t, p.Outcome().Turn.Compactions, 1)
+	assert.Assert(t, p.Outcome().Done)
+}
+
 func TestParserReadsTheRealStream(t *testing.T) {
 	b, err := os.ReadFile("../testdata/real/claude-stream.jsonl")
 	assert.NilError(t, err)
