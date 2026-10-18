@@ -8,9 +8,15 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
+
+func TestFromReviewKeepsTheContext(t *testing.T) {
+	c := FromReview(review.Result{Prompt: "tests", Context: harness.Context{Peak: 41000, Calls: 1}})
+	assert.Equal(t, c.Context, harness.Context{Peak: 41000, Calls: 1})
+}
 
 func TestFromReview(t *testing.T) {
 	clean := FromReview(review.Result{Prompt: "tests", Output: "Nothing found."})

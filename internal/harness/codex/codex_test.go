@@ -321,3 +321,18 @@ func TestReviewScriptStreamNeedsNothingExtra(t *testing.T) {
 	p.Write([]byte(`{"type":"item.completed","item":{"type":"command_execution","command":"git log","exit_code":0}}` + "\n"))
 	assert.DeepEqual(t, seen, []harness.Activity{{Tool: "Bash", Detail: "git log"}})
 }
+
+// TestContextIsNotAvailable pins that Codex reports only a turn's total usage,
+// from which no peak can be read.
+func TestContextIsNotAvailable(t *testing.T) {
+	b, err := os.ReadFile("../testdata/real/codex-exec-pass.jsonl")
+	assert.NilError(t, err)
+	p := Harness{}.NewImplementParser(nil)
+	p.Write(b)
+	p.Flush()
+	turn := p.Outcome().Turn
+	assert.Assert(t, turn.InputTokens > 0)
+	assert.Equal(t, turn.ContextPeak, 0)
+	assert.Equal(t, turn.ModelCalls, 0)
+	assert.Equal(t, Harness{}.ReviewContext(`{"review":"fine","findings":[]}`), harness.Context{})
+}

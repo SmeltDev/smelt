@@ -15,6 +15,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -256,6 +257,14 @@ func TestConcludeRunWritesNotesIntoTheCommit(t *testing.T) {
 	assert.Assert(t, strings.HasPrefix(msg, "Add a flag\n\nWhat:\n- a flag"), msg)
 	assert.Assert(t, strings.Contains(msg, "passed after 2 round(s)"), msg)
 	assert.Assert(t, !strings.Contains(msg, "secret"), msg)
+}
+
+func TestConcludeRunTimesTheNotesContext(t *testing.T) {
+	wt, steps, _ := concludeFixture(t, true, func() (int, string) { return 0, measured(notesJSON) })
+	rep := Report{RunID: "run-1", Outcome: Outcome{Result: ResultPassed, Rounds: 1}}
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag"}, func(iostream.Level, string) {})
+	assert.Equal(t, rep.Timing.NotesContext, harness.Context{Peak: 3210, Calls: 1})
+	assert.Equal(t, rep.Timing.PeakMax(), 3210)
 }
 
 func TestConcludeRunKeepsTheFallbackWhenNotesFail(t *testing.T) {

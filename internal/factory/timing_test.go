@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/smeltdev/smelt/internal/harness"
 )
 
 func TestToolCallsTimeEachCallUntilTheNextActivity(t *testing.T) {
@@ -80,4 +82,40 @@ func TestGatesOnlyFailed(t *testing.T) {
 	} {
 		assert.Equal(t, GatesOnlyFailed(tt.checks), tt.want, name)
 	}
+}
+
+func TestTimingFormatsTheContextLine(t *testing.T) {
+	timeLine := "Time: plan 1m09s · implement 3m40s (commands 1m10s) · gates 0m52s · reviews 0m21s · notes 0m15s · total 6m10s"
+	base := Timing{Plan: 69 * time.Second, Implement: 220 * time.Second, Commands: 70 * time.Second, Gates: 52 * time.Second,
+		Reviews: 21 * time.Second, Notes: 15 * time.Second, Total: 370 * time.Second}
+	assert.Equal(t, base.Format(), timeLine)
+
+	base.ImplementContext = []RoundContext{{Round: 1, Context: harness.Context{Peak: 88412, Calls: 24}}, {Round: 2, Context: harness.Context{Peak: 52100, Calls: 9}}}
+	base.ReviewsContext = harness.Context{Peak: 41000, Calls: 1}
+	base.PlanContext = harness.Context{Peak: 31000, Calls: 1}
+	assert.Equal(t, base.Format(), timeLine+"\nContext: implementer peak 88k (round 1), 52k (round 2) · reviews peak 41k · plan 31k")
+	assert.Equal(t, base.PeakMax(), 88412)
+
+	unknown := Timing{Plan: time.Second, Reviews: time.Second, ImplementContext: []RoundContext{{Round: 1, Context: harness.Context{Peak: 90000}}}}
+	assert.Assert(t, strings.HasSuffix(unknown.Format(), "\nContext: implementer peak 90k · reviews peak n/a · plan n/a"), unknown.Format())
+
+	// A turn with a context of its own size known only for the notes is not shown.
+	notesOnly := Timing{NotesContext: harness.Context{Peak: 30700}, ImplementContext: []RoundContext{{Round: 1}}}
+	assert.Assert(t, !strings.Contains(notesOnly.Format(), "Context"), notesOnly.Format())
+	assert.Equal(t, notesOnly.PeakMax(), 30700)
+}
+
+func TestTimerCollectsContext(t *testing.T) {
+	tm := timer{now: time.Now}
+	tm.event(Event{Kind: EventPlanReviewed, Plan: &Plan{Context: harness.Context{Peak: 31000, Calls: 1}}})
+	tm.event(Event{Kind: EventImplemented, Round: 1, Turn: Turn{ContextPeak: 88412, ModelCalls: 24}})
+	tm.event(Event{Kind: EventChecked, Round: 1, Checks: []Check{
+		{Kind: KindReview, Context: harness.Context{Peak: 20000, Calls: 1}},
+		{Kind: KindReview, Context: harness.Context{Peak: 41000, Calls: 1}},
+		{Kind: KindValidate},
+	}})
+	got := tm.timing
+	assert.Equal(t, got.PlanContext.Peak, 31000)
+	assert.DeepEqual(t, got.ImplementContext, []RoundContext{{Round: 1, Context: harness.Context{Peak: 88412, Calls: 24}}})
+	assert.Equal(t, got.ReviewsContext.Peak, 41000)
 }

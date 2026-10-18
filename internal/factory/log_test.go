@@ -11,6 +11,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
@@ -71,6 +72,7 @@ func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 		"    Fixing the lint",
 		"    failure.",
 		"2026-10-02T15:04:05Z info  round 2: implementer finished in 3s ($0.50)",
+		"2026-10-02T15:04:05Z info  round 2: implementer context peak n/a (not streamed)",
 		"2026-10-02T15:04:05Z info  round 2: implementer's summary:",
 		"    Fixed it.",
 		"2026-10-02T15:04:05Z error validate lint on impl failed in 0s, exit 1",
@@ -79,6 +81,7 @@ func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 		// A passing command's output is left out without verbose.
 		"2026-10-02T15:04:05Z done  validate test on impl passed in 0s",
 		"2026-10-02T15:04:05Z error round 2: review bugs on rev-1 failed in 0s with 2 finding(s)",
+		"2026-10-02T15:04:05Z info  round 2: review bugs context peak n/a (not streamed)",
 		"2026-10-02T15:04:05Z info    [high] a.go:3 (sent to the implementer):",
 		"    nil deref",
 		"    when empty",
@@ -256,4 +259,31 @@ func TestLogRecordsTheQualityLineAndFindings(t *testing.T) {
 func TestCheckTallyCountsNotMeasuredAsPassed(t *testing.T) {
 	nm := FromQuality(quality.Summary{}, 0, errors.New("x"))
 	assert.Equal(t, checkTally([]Check{pass, nm}), "2 of 2 checks passed; not measured: quality")
+}
+
+func TestLogRecordsEachTurnsContext(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.event(Event{Kind: EventPlanReviewed, Plan: &Plan{Summary: "s", Context: harness.Context{Peak: 31000, Calls: 1}}})
+	lg.event(Event{Kind: EventImplemented, Round: 1, Turn: Turn{ContextPeak: 88412, ModelCalls: 24}})
+	lg.event(Event{Kind: EventImplemented, Round: 2})
+	lg.event(Event{Kind: EventChecked, Round: 1, Checks: []Check{
+		{Name: "bugs", Kind: KindReview, Status: StatusPassed, Context: harness.Context{Peak: 41000, Calls: 1}},
+		{Name: "style", Kind: KindReview, Status: StatusPassed},
+	}})
+	lg.close(Report{Started: true, Notes: &Notes{Context: harness.Context{Peak: 30700, Calls: 1}}, Timing: Timing{
+		ImplementContext: []RoundContext{{Round: 1, Context: harness.Context{Peak: 88412, Calls: 24}}},
+	}}, nil)
+
+	got := readLog(t, path)
+	for _, want := range []string{
+		"plan: context peak 31,000 tokens (1 model call)",
+		"round 1: implementer context peak 88,412 tokens (24 model calls)",
+		"round 2: implementer context peak n/a (not streamed)",
+		"round 1: review bugs context peak 41,000 tokens (1 model call)",
+		"round 1: review style context peak n/a (not streamed)",
+		"notes: context peak 30,700 tokens (1 model call)",
+		"Context: implementer peak 88k",
+	} {
+		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
+	}
 }

@@ -3,7 +3,11 @@ package factory
 import (
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/smeltdev/smelt/internal/harness"
 )
 
 // slowCallAfter is how long one tool call may take before the run warns about
@@ -72,12 +76,101 @@ type Timing struct {
 	GateOnlyRounds []int
 	// SlowCalls are the implementer's tool calls over slowCallAfter.
 	SlowCalls []SlowCall
+	// PlanContext, ImplementContext, ReviewsContext and NotesContext are how
+	// large the prompts of each phase's turns got. ImplementContext has one
+	// entry per implementer turn; ReviewsContext is the largest of the
+	// reviews' turns. Zero values are unknown.
+	PlanContext      harness.Context
+	ImplementContext []RoundContext
+	ReviewsContext   harness.Context
+	NotesContext     harness.Context
 }
 
-// Format is the one-line account of the timing.
+// RoundContext is the context size of one round's implementer turn.
+type RoundContext struct {
+	Round int
+	harness.Context
+}
+
+// Format is the account of the timing: the Time line, and below it the Context
+// line when any turn's context size is known.
 func (t Timing) Format() string {
-	return fmt.Sprintf("Time: plan %s · implement %s (commands %s) · gates %s · reviews %s · notes %s · total %s",
+	line := fmt.Sprintf("Time: plan %s · implement %s (commands %s) · gates %s · reviews %s · notes %s · total %s",
 		minSec(t.Plan), minSec(t.Implement), minSec(t.Commands), minSec(t.Gates), minSec(t.Reviews), minSec(t.Notes), minSec(t.Total))
+	if ctx := t.contextLine(); ctx != "" {
+		line += "\n" + ctx
+	}
+	return line
+}
+
+// PeakMax is the largest context of any turn of the run, 0 when none is known.
+func (t Timing) PeakMax() int {
+	peak := max(t.PlanContext.Peak, t.ReviewsContext.Peak, t.NotesContext.Peak)
+	for _, c := range t.ImplementContext {
+		peak = max(peak, c.Peak)
+	}
+	return peak
+}
+
+// contextLine is the Context line, or "" when no turn it covers has a known
+// size. The notes turn is measured but left off: it is for the run log.
+func (t Timing) contextLine() string {
+	known := t.PlanContext.Peak > 0 || t.ReviewsContext.Peak > 0
+	var parts []string
+	if len(t.ImplementContext) > 0 {
+		rounds := make([]string, 0, len(t.ImplementContext))
+		for _, c := range t.ImplementContext {
+			known = known || c.Peak > 0
+			label := kTokens(c.Peak)
+			if len(t.ImplementContext) > 1 {
+				label += fmt.Sprintf(" (round %d)", c.Round)
+			}
+			rounds = append(rounds, label)
+		}
+		parts = append(parts, "implementer peak "+strings.Join(rounds, ", "))
+	}
+	if t.Reviews > 0 || t.ReviewsContext.Peak > 0 {
+		parts = append(parts, "reviews peak "+kTokens(t.ReviewsContext.Peak))
+	}
+	if t.Plan > 0 || t.PlanContext.Peak > 0 {
+		parts = append(parts, "plan "+kTokens(t.PlanContext.Peak))
+	}
+	if !known {
+		return ""
+	}
+	return "Context: " + strings.Join(parts, " · ")
+}
+
+// kTokens renders a token count as 88k, or n/a when it is not known.
+func kTokens(n int) string {
+	if n <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%dk", (n+500)/1000)
+}
+
+// contextLogLine is one turn's context size for the run log.
+func contextLogLine(c harness.Context) string {
+	if c.Peak <= 0 {
+		return "context peak n/a (not streamed)"
+	}
+	line := "context peak " + commas(c.Peak) + " tokens"
+	switch {
+	case c.Calls == 1:
+		line += " (1 model call)"
+	case c.Calls > 1:
+		line += fmt.Sprintf(" (%d model calls)", c.Calls)
+	}
+	return line
+}
+
+// commas groups n's digits in threes.
+func commas(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // minSec renders d as 3m07s.
@@ -116,11 +209,16 @@ func (t *timer) event(e Event) {
 	case EventPlanning:
 		t.planStart = t.now()
 	case EventPlanReviewed:
+		if e.Plan != nil {
+			t.timing.PlanContext = e.Plan.Context
+		}
 		if !t.planStart.IsZero() {
 			t.timing.Plan += t.now().Sub(t.planStart)
 		}
 	case EventImplemented:
 		t.timing.Implement += e.Turn.Duration
+		t.timing.ImplementContext = append(t.timing.ImplementContext,
+			RoundContext{Round: e.Round, Context: harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls}})
 		for _, c := range e.Turn.Calls {
 			t.timing.Commands += c.Took
 		}
@@ -128,6 +226,11 @@ func (t *timer) event(e Event) {
 			t.timing.SlowCalls = append(t.timing.SlowCalls, SlowCall{Round: e.Round, ToolCall: c})
 		}
 	case EventChecked:
+		for _, c := range e.Checks {
+			if c.Kind == KindReview && c.Context.Peak > t.timing.ReviewsContext.Peak {
+				t.timing.ReviewsContext = c.Context
+			}
+		}
 		if GatesOnlyFailed(e.Checks) {
 			t.timing.GateOnlyRounds = append(t.timing.GateOnlyRounds, e.Round)
 		}

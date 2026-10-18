@@ -460,6 +460,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.CostUSD = ev.Turn.CostUSD
 			impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
 			impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
+			impl.ContextPeak, impl.ModelCalls = ev.Turn.ContextPeak, ev.Turn.ModelCalls
 			impl.RateLimit = ev.Turn.RateLimit
 			r.recordRateLimit(ev.Turn.RateLimit)
 			impl.Summary = ev.Turn.Summary
@@ -559,7 +560,7 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if c.Kind != factory.KindReview {
 			continue
 		}
-		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness)}
+		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness), ContextPeak: c.Context.Peak}
 		for i, f := range c.Findings {
 			f.Prompt = c.Name
 			f.ID = fmt.Sprintf("%s-%d", c.Name, i+1)
@@ -569,6 +570,7 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if i := e.reviewIndexLocked(ridx, c.Name); i >= 0 {
 			p := &e.s.Rounds[ridx].Reviews[i]
 			p.Findings, p.Worth, p.Status = len(res.Findings), len(worthChanging(c.Findings)), string(c.Status)
+			p.ContextPeak = c.Context.Peak
 			if c.Status == factory.StatusSkipped {
 				p.State = smeltd.PromptSkipped
 			}
@@ -722,7 +724,7 @@ func wireTiming(t factory.Timing) *smeltd.FactoryTiming {
 		Line:   t.Format(),
 		PlanMS: t.Plan.Milliseconds(), ImplementMS: t.Implement.Milliseconds(), CommandsMS: t.Commands.Milliseconds(),
 		GatesMS: t.Gates.Milliseconds(), ReviewsMS: t.Reviews.Milliseconds(), NotesMS: t.Notes.Milliseconds(),
-		TotalMS: t.Total.Milliseconds(), GateOnlyRounds: t.GateOnlyRounds, SlowCalls: t.Warnings(),
+		TotalMS: t.Total.Milliseconds(), ContextPeakMax: t.PeakMax(), GateOnlyRounds: t.GateOnlyRounds, SlowCalls: t.Warnings(),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sarif"
@@ -77,6 +78,8 @@ type Check struct {
 	// Quality is the measurement of a quality check that ran, whether or not
 	// it found anything to fix.
 	Quality *quality.Summary
+	// Context is how large the prompts of a review got; zero when unknown.
+	Context harness.Context
 	// Ratchet is how many findings a SARIF gate's change added, fixed and left.
 	Ratchet *sarif.Counts
 }
@@ -91,7 +94,7 @@ const outputTail = 4000
 // round to polish style remarks. Lower findings are kept for display. A review
 // that could not run errored.
 func FromReview(r review.Result) Check {
-	c := Check{Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings, Prose: r.Parsed.Prose}
+	c := Check{Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings, Prose: r.Parsed.Prose, Context: r.Context}
 	if r.Error != "" {
 		c.Status, c.Error = StatusErrored, r.Error
 		return c

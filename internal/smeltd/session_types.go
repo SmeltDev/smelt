@@ -95,6 +95,11 @@ type RoundImplement struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	CachedTokens int `json:"cached_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
+	// ContextPeak is the largest prompt of the turn in tokens, and ModelCalls
+	// how many model calls it made; both absent when the agent does not report
+	// them.
+	ContextPeak int `json:"context_peak,omitempty"`
+	ModelCalls  int `json:"model_calls,omitempty"`
 	// RateLimit is the last rate-limit signal the agent emitted during the turn.
 	RateLimit *harness.RateLimit `json:"rate_limit,omitempty"`
 	// Summary is the implementer's own account of the turn.
@@ -119,6 +124,9 @@ type FactoryTiming struct {
 	ReviewsMS  int64 `json:"reviews_ms"`
 	NotesMS    int64 `json:"notes_ms"`
 	TotalMS    int64 `json:"total_ms"`
+	// ContextPeakMax is the largest context, in tokens, of any turn of the run;
+	// absent when none is known.
+	ContextPeakMax int `json:"context_peak_max,omitempty"`
 	// GateOnlyRounds are the rounds that failed on gates alone.
 	GateOnlyRounds []int `json:"gate_only_rounds,omitempty"`
 	// SlowCalls are warnings for implementer tool calls over two minutes.
@@ -336,6 +344,9 @@ type Notes struct {
 	Quality string `json:"quality,omitempty"`
 	// QualityNotMeasured is why quality could not be measured.
 	QualityNotMeasured string `json:"qualityNotMeasured,omitempty"`
+	// Context mirrors factory.Notes so the two convert into each other. It is
+	// never sent: the notes' context is for the run's log, not the PR.
+	Context harness.Context `json:"-"`
 }
 
 // Plan mirrors factory.Plan: what the implementer said it would do before it
@@ -416,6 +427,9 @@ type ReviewPrompt struct {
 	// passed unless it found something worth changing, failed if it did,
 	// errored if it could not run. Empty until it is known.
 	Status string `json:"status,omitempty"`
+	// ContextPeak is the review's largest prompt in tokens, absent when
+	// unknown.
+	ContextPeak int `json:"context_peak,omitempty"`
 }
 
 // PromptRunState is where one review of a round stands. The values are
@@ -506,6 +520,9 @@ type ReviewResult struct {
 	Status string `json:"status,omitempty"`
 	// Harness is the agent that ran the review.
 	Harness string `json:"harness,omitempty"`
+	// ContextPeak is the largest prompt of the review in tokens, absent when
+	// unknown.
+	ContextPeak int `json:"context_peak,omitempty"`
 }
 
 // Finding is one problem a review reported.

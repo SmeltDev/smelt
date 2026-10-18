@@ -12,7 +12,16 @@ import (
 type streamEvent struct {
 	Type      string `json:"type"`
 	SessionID string `json:"session_id"`
-	Message   struct {
+	// ParentToolUseID is set on messages a subagent sent, which have a context
+	// of their own.
+	ParentToolUseID *string `json:"parent_tool_use_id"`
+	Message         struct {
+		ID    string `json:"id"`
+		Usage struct {
+			InputTokens         int `json:"input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
 		Content []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text"`
@@ -48,6 +57,11 @@ type parser struct {
 	result     streamEvent
 	sawResult  bool
 	rateLimit  *harness.RateLimit
+	// peak and calls are the largest prompt and the number of model calls of
+	// the turn. claude can print one assistant event per content block of the
+	// same message, so a call is counted once per message ID.
+	peak, calls int
+	seenMsgs    map[string]bool
 }
 
 // NewImplementParser implements harness.Harness.
@@ -71,8 +85,30 @@ func (p *parser) line(b []byte) {
 	case "rate_limit_event":
 		p.rateLimit = rateLimit(e)
 	case "assistant":
+		p.context(e)
 		p.activity(e)
 	}
+}
+
+// context takes the size of the model call an assistant message was made by:
+// everything sent, whether read from the cache, written to it or neither.
+func (p *parser) context(e streamEvent) {
+	u := e.Message.Usage
+	size := u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens
+	if size == 0 || e.ParentToolUseID != nil {
+		return
+	}
+	p.peak = max(p.peak, size)
+	if e.Message.ID != "" {
+		if p.seenMsgs[e.Message.ID] {
+			return
+		}
+		if p.seenMsgs == nil {
+			p.seenMsgs = map[string]bool{}
+		}
+		p.seenMsgs[e.Message.ID] = true
+	}
+	p.calls++
 }
 
 func rateLimit(e streamEvent) *harness.RateLimit {
@@ -114,6 +150,8 @@ func (p *parser) Outcome() harness.Outcome {
 			InputTokens:  u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens,
 			CachedTokens: u.CacheReadTokens,
 			OutputTokens: u.OutputTokens,
+			ContextPeak:  p.peak,
+			ModelCalls:   p.calls,
 			RateLimit:    p.rateLimit,
 			SessionID:    p.sessionID,
 		},

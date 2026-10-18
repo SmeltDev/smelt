@@ -157,6 +157,10 @@ func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	return harness.ReviewPayload{Review: msg.Review, Findings: msg.Findings}, nil
 }
 
+// ReviewContext implements harness.Harness. Codex's review prints only the
+// last message, so there is nothing to measure.
+func (Harness) ReviewContext(string) harness.Context { return harness.Context{} }
+
 // Env implements harness.Harness. A turn only ever gets an API key; the
 // subscription login is a file that Prepare wrote.
 func (Harness) Env(cred harness.Credential, _ string) map[string]string {

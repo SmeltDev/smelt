@@ -13,6 +13,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -46,6 +47,18 @@ func planSidecars(run func(script string) (int, string, error)) (*Sidecars, *str
 		return code, err
 	}
 	return &Sidecars{Exec: exec, Implementer: &Implementer{Entry: entry}}, &script
+}
+
+// measured is a claude json result with the usage of a single model call.
+func measured(result string) string {
+	return strings.Replace(result, "{", `{"num_turns":1,"usage":{"input_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":3000},`, 1)
+}
+
+func TestPlanMeasuresItsContext(t *testing.T) {
+	s, _ := planSidecars(func(string) (int, string, error) { return 0, measured(planJSON), nil })
+	plan, err := s.Plan(context.Background(), PlanInput{Request: "r"})
+	assert.NilError(t, err)
+	assert.Equal(t, plan.Context, harness.Context{Peak: 3210, Calls: 1})
 }
 
 func TestPlanAsksForTheSchemaWithReadOnlyTools(t *testing.T) {

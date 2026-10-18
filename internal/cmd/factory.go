@@ -762,7 +762,9 @@ func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOu
 	}
 	printFactoryTotals(detail, status)
 	if t := f.Timing; t != nil {
-		status(iostream.LevelInfo, t.Line)
+		for _, line := range strings.Split(t.Line, "\n") {
+			status(iostream.LevelInfo, line)
+		}
 	}
 	switch detail.State {
 	case smeltd.SessionCancelled:

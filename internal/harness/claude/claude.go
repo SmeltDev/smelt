@@ -141,6 +141,25 @@ type result struct {
 	} `json:"structured_output"`
 }
 
+// ReviewContext implements harness.Harness. The json result has no per-call
+// usage, only the turn's total, which is one call's size only when the run
+// made one call.
+func (Harness) ReviewContext(stdout string) harness.Context {
+	var res struct {
+		NumTurns int `json:"num_turns"`
+		Usage    struct {
+			InputTokens         int `json:"input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal([]byte(stdout), &res) != nil || res.NumTurns != 1 {
+		return harness.Context{}
+	}
+	u := res.Usage
+	return harness.Context{Peak: u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens, Calls: 1}
+}
+
 // maxResultInError caps how much of claude's own result text an error quotes.
 const maxResultInError = 500
 

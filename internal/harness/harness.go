@@ -77,6 +77,11 @@ type Harness interface {
 	// turns never get them.
 	Prepare(cred Credential) (script string, env map[string]string)
 
+	// ReviewContext reads how large the prompt of a review's model call was
+	// from the stdout of a ReviewScript run. The zero value means unknown: the
+	// CLI did not report per-call sizes.
+	ReviewContext(stdout string) Context
+
 	// RunError explains how a run ended, or returns nil when it exited 0.
 	RunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error
 }
@@ -140,9 +145,22 @@ type Turn struct {
 	InputTokens  int
 	CachedTokens int
 	OutputTokens int
+	// ContextPeak is the largest prompt, in tokens, the agent sent to the
+	// model in the turn; 0 when the CLI does not report it.
+	ContextPeak int
+	// ModelCalls is how many model calls the turn made; 0 when unknown.
+	ModelCalls int
 	// RateLimit is the last rate-limit signal seen, if any.
 	RateLimit *RateLimit
 	SessionID string
+}
+
+// Context is how large an agent turn's prompts got. The zero value is unknown.
+type Context struct {
+	// Peak is the largest prompt of the turn, in tokens.
+	Peak int
+	// Calls is how many model calls the turn made.
+	Calls int
 }
 
 // RateLimit is a rate-limit signal an agent emitted during a turn.
