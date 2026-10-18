@@ -3,6 +3,7 @@ package smeltd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,29 @@ import (
 type SessionRefused struct {
 	Status  int
 	Message string
+	// Code and Active are set when the daemon's answer was JSON, as the
+	// draining refusal is: Code names the refusal (CodeDaemonDraining) and
+	// Active is the runs that were going.
+	Code   string
+	Active int
+}
+
+// ErrNoSessionAPI reports a daemon from a build without the session API, which
+// is also one without drain mode.
+var ErrNoSessionAPI = errors.New("daemon has no session API")
+
+// refusalOf builds a SessionRefused from a failed response's body.
+func refusalOf(status int, body string) *SessionRefused {
+	r := &SessionRefused{Status: status, Message: body}
+	var parsed struct {
+		Code    string `json:"code"`
+		Active  int    `json:"active"`
+		Message string `json:"message"`
+	}
+	if strings.HasPrefix(body, "{") && json.Unmarshal([]byte(body), &parsed) == nil && parsed.Code != "" {
+		r.Code, r.Active, r.Message = parsed.Code, parsed.Active, parsed.Message
+	}
+	return r
 }
 
 func (e *SessionRefused) Error() string { return e.Message }
@@ -60,9 +84,9 @@ func sessionCall(method, path string, in, out any) error {
 		// The router's own generic 404 means a daemon from a build without the
 		// session API; the handlers' 404s always say something more specific.
 		if resp.StatusCode == http.StatusNotFound && strings.HasPrefix(msg, "404 page not found") {
-			return fmt.Errorf("%w: daemon has no session API", ErrDaemonUnavailable)
+			return fmt.Errorf("%w: %w", ErrDaemonUnavailable, ErrNoSessionAPI)
 		}
-		return &SessionRefused{Status: resp.StatusCode, Message: msg}
+		return refusalOf(resp.StatusCode, msg)
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)

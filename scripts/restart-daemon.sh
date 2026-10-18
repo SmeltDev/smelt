@@ -1,13 +1,34 @@
 #!/usr/bin/env bash
-# Stop the smelt daemon so the next smelt command starts it from the freshly
+# Restart the smelt daemon so the next smelt command starts it from the freshly
 # built binary. A running daemon keeps the code it started with.
 #
-# It is left alone while any factory run is active (in any project): stopping
-# it would cancel that run. Pass --force to stop it anyway.
+# Without --force the daemon is drained: it takes no new factory runs, lets the
+# active ones finish, then exits (`smelt daemon restart --when-idle`). With
+# --force it is stopped at once, which cancels active runs
+# (`smelt daemon stop --force`).
+#
+# A smelt without the `daemon restart` command (an older build) falls back to the
+# logic below: stop only when no factory run is active, or always with --force.
 set -euo pipefail
 
 force=false
 [ "${1:-}" = "--force" ] && force=true
+
+# Prefer the binary just built, then the one on PATH.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+smelt=""
+if [ -x "${here}/dist/smelt" ]; then
+	smelt="${here}/dist/smelt"
+elif command -v smelt >/dev/null 2>&1; then
+	smelt="$(command -v smelt)"
+fi
+
+if [ -n "${smelt}" ] && "${smelt}" daemon restart --help 2>&1 | grep -q -- '--when-idle'; then
+	if [ "${force}" = true ]; then
+		exec "${smelt}" daemon stop --force
+	fi
+	exec "${smelt}" daemon restart --when-idle
+fi
 
 dir="${SMELT_DAEMON_DIR:-${HOME}/.smelt/daemon}"
 sock="${dir}/daemon.sock"

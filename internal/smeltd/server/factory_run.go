@@ -214,8 +214,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		HeadSHA:     headRef(ps.root),
 		Factory:     record,
 	}, cfg.Factory.ConcurrentRuns())
-	if busy != "" {
-		return smeltd.Session{}, apiErr(http.StatusConflict, "%s", busy)
+	if busy != nil {
+		return smeltd.Session{}, admissionRefusal(busy)
 	}
 	opts := factory.RunOptions{
 		Root:                    ps.root,
@@ -252,9 +252,21 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	return entry.snapshot(), nil
 }
 
+// admissionRefusal maps the session store's refusal to the API's: a draining
+// daemon is a retryable 503 carrying its code, anything else a 409.
+func admissionRefusal(err error) *apiError {
+	var drain *drainingError
+	if errors.As(err, &drain) {
+		return &apiError{status: http.StatusServiceUnavailable, msg: drain.Error(), code: smeltd.CodeDaemonDraining, active: drain.active}
+	}
+	return apiErr(http.StatusConflict, "%s", err)
+}
+
 // executeFactory runs a factory session and settles it. It always closes
 // entry.done.
 func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts factory.RunOptions) {
+	// Deferred first so it runs last, after done has closed.
+	defer d.sessions.ended()
 	defer close(entry.done)
 	defer entry.cancel()
 

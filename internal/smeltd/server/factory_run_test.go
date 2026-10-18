@@ -254,9 +254,9 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 func TestFactorySessionsTakeTurns(t *testing.T) {
 	s := newSessionStore(context.Background())
 	_, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	_, _, busy = s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Assert(t, busy != "", "two factory runs ran at once")
+	assert.Assert(t, busy != nil, "two factory runs ran at once")
 }
 
 // TestFactorySessionKeepsItsLog guards --log and --verbose on the daemon: the
@@ -435,7 +435,7 @@ func TestFactoryTargetDockerIgnoresSidecarImage(t *testing.T) {
 func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 
 	rec.finish(factory.Report{Committed: true, Notes: &factory.Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"}}, nil)
@@ -449,7 +449,7 @@ func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
 func TestFactoryRecorderFinishRecordsContinuedFromEmpty(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 
 	rec.event(factory.Event{Kind: factory.EventNoPriorWork})
@@ -519,7 +519,7 @@ func TestFactorySessionPlansAndRunsGatesFirstUnlessTurnedOff(t *testing.T) {
 func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, prompts: []review.Prompt{{Name: "requirements"}}, rounds: map[int]int{}}
 
 	plan := factory.Plan{Summary: "do it", Files: []factory.PlanFile{{Path: "a.go", Change: "add", Why: "w"}},
@@ -596,7 +596,7 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 func TestFactoryRecorderStartedRecordsFrom(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 
 	rec.started("run-1", factory.Worktree{Branch: "smelt/x/run-1", BaseBranch: "epic/x", From: &factory.FromRef{Ref: "epic/x", Commit: "abc123"}})
@@ -696,7 +696,7 @@ func TestFactorySessionThatIsNotIntegrateHasNoModeOrRoundKinds(t *testing.T) {
 func TestFactoryRecorderRecordsTheQualityMeasurement(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 
 	sum := quality.Summary{

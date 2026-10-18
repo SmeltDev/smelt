@@ -23,13 +23,13 @@ import (
 
 type updateCheckKey struct{}
 
-func NewRootCmd(version string) *cobra.Command {
+func NewRootCmd(ver string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
 
 	rootCmd := &cobra.Command{
 		Use:           brand.Command,
 		Short:         "Generate AI review context and trigger AI coding tasks",
-		Version:       version,
+		Version:       version.Describe(ver, version.Current()),
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
@@ -39,7 +39,7 @@ func NewRootCmd(version string) *cobra.Command {
 			if id := session.IDFromEnv(); id != "" && session.IDFromCtx(cmd.Context()) == "" {
 				cmd.SetContext(session.WithID(cmd.Context(), id))
 			}
-			if err := setupTelemetry(cmd, version); err != nil {
+			if err := setupTelemetry(cmd, ver); err != nil {
 				return err
 			}
 			startUpdateCheck(cmd)
@@ -116,6 +116,7 @@ Configuration:
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
 	rootCmd.AddCommand(newWatchCmd())
 	rootCmd.AddCommand(newDaemonCmd())
+	rootCmd.AddCommand(newDaemonGroupCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
 	rootCmd.InitDefaultHelpCmd()
@@ -269,6 +270,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"upgrade":                       true,
 	watchCmdName:                    true,
 	smeltd.DaemonSubcommand:         true,
+	daemonGroupName:                 true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is
@@ -305,6 +307,7 @@ var noAutoLaunchCommands = map[string]bool{
 	"receive-telemetry":             true,
 	watchCmdName:                    true,
 	smeltd.DaemonSubcommand:         true,
+	daemonGroupName:                 true,
 }
 
 // shouldAutoLaunch reports whether the smelt daemon should be auto-launched

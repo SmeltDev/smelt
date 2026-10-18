@@ -50,26 +50,44 @@ func longDaemonClient() (*http.Client, error) {
 	return longUnixClient(sockPath), nil
 }
 
-// doPing sends a /ping request with the given client and returns reachability
-// and the daemon's build identity.
-func doPing(client *http.Client) (bool, string) {
+// Headers /ping adds to its BuildID body. A daemon predating them sends none,
+// which reads as not draining and revision unknown.
+const (
+	HeaderDraining = "X-Smelt-Draining"
+	HeaderRevision = "X-Smelt-Revision"
+)
+
+// doPingInfo sends a /ping request with the given client and returns what the
+// daemon says about itself.
+func doPingInfo(client *http.Client) PingInfo {
 	resp, err := client.Get("http://smeltd/ping")
 	if err != nil {
-		return false, ""
+		return PingInfo{}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized {
 		log.Printf("smeltd: daemon rejected request — check SMELT_DAEMON_TCP_TOKEN")
-		return false, ""
+		return PingInfo{}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return false, ""
+		return PingInfo{}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if err != nil {
-		return true, ""
+	info := PingInfo{
+		Reachable: true,
+		Revision:  resp.Header.Get(HeaderRevision),
+		Draining:  resp.Header.Get(HeaderDraining) == "true",
 	}
-	return true, strings.TrimSpace(string(body))
+	if body, err := io.ReadAll(io.LimitReader(resp.Body, 512)); err == nil {
+		info.BuildID = strings.TrimSpace(string(body))
+	}
+	return info
+}
+
+// doPing sends a /ping request with the given client and returns reachability
+// and the daemon's build identity.
+func doPing(client *http.Client) (bool, string) {
+	info := doPingInfo(client)
+	return info.Reachable, info.BuildID
 }
 
 // pingDaemon pings via the configured transport (TCP when
@@ -333,6 +351,49 @@ func ping(sockPath string) (bool, string) {
 	return doPing(unixClient(sockPath))
 }
 
+// pingInfo is ping with everything the daemon reports about itself.
+func pingInfo(sockPath string) PingInfo {
+	return doPingInfo(unixClient(sockPath))
+}
+
+// Status pings the local daemon and returns what it reports.
+func Status() (PingInfo, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return PingInfo{}, err
+	}
+	return pingInfo(sockPath), nil
+}
+
+// ErrDrainUnsupported reports a daemon from a build before drain mode.
+var ErrDrainUnsupported = errors.New("this smelt daemon predates drain mode")
+
+// Drain asks the daemon to stop admitting factory runs and exit once the active
+// ones end. Repeating it is harmless.
+func Drain() (DrainResponse, error) { return drainCall(http.MethodPost) }
+
+// CancelDrain makes a draining daemon admit factory runs again.
+func CancelDrain() (DrainResponse, error) { return drainCall(http.MethodDelete) }
+
+func drainCall(method string) (DrainResponse, error) {
+	var out DrainResponse
+	err := sessionCall(method, "/drain", nil, &out)
+	if errors.Is(err, ErrNoSessionAPI) {
+		return DrainResponse{}, ErrDrainUnsupported
+	}
+	return out, err
+}
+
+// Stop terminates the daemon with the given pid and waits until it stops
+// answering. It cancels the daemon's active runs.
+func Stop(pid int) error {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return err
+	}
+	return stopDaemon(pid, sockPath)
+}
+
 // stopDaemon asks the daemon to exit and waits until it stops answering, so the
 // replacement does not race it for the socket.
 func stopDaemon(pid int, sockPath string) error {
@@ -574,9 +635,12 @@ func EnsureRunning() error {
 		return fmt.Errorf("check running: %w", err)
 	}
 	if running {
-		reachable, build := ping(sockPath)
-		if reachable {
-			if build == BuildID() {
+		info := pingInfo(sockPath)
+		if info.Reachable {
+			// A draining daemon is on its way out, finishing runs that replacing
+			// it would cancel. Leave it: once it exits the next call launches
+			// the build on disk.
+			if info.Draining || info.BuildID == BuildID() {
 				return nil
 			}
 			// A daemon from another build is replaced rather than reused: see

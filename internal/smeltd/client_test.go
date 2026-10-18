@@ -259,6 +259,12 @@ func socketDir(t *testing.T) string {
 // client attempts while it is up.
 func fakeDaemon(t *testing.T, build string) *int {
 	t.Helper()
+	return fakeDaemonWithHeaders(t, build, nil)
+}
+
+// fakeDaemonWithHeaders is fakeDaemon whose /ping also sends headers.
+func fakeDaemonWithHeaders(t *testing.T, build string, headers map[string]string) *int {
+	t.Helper()
 	dir := socketDir(t)
 	t.Setenv("SMELT_DAEMON_DIR", dir)
 	pidPath, err := PIDPath()
@@ -270,6 +276,9 @@ func fakeDaemon(t *testing.T, build string) *int {
 	assert.NilError(t, err)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			for k, v := range headers {
+				w.Header().Set(k, v)
+			}
 			_, _ = io.WriteString(w, build)
 		}),
 		ReadHeaderTimeout: time.Second,
@@ -351,4 +360,52 @@ func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
 	_, err := FetchSnapshotRelaunching(nil)
 	assert.Assert(t, err != nil)
 	assert.Equal(t, launches, 0)
+}
+
+// A draining daemon is finishing runs a replacement would cancel, so a client
+// whose build differs must neither stop it nor start another.
+func TestEnsureRunning_leavesADrainingDaemonOfAnotherBuildAlone(t *testing.T) {
+	launches := fakeDaemonWithHeaders(t, "some-other-build", map[string]string{HeaderDraining: "true"})
+	assert.NilError(t, EnsureRunning())
+	assert.Equal(t, *launches, 0)
+}
+
+func TestPingInfoReadsTheHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    PingInfo
+	}{
+		{"draining with a revision", map[string]string{HeaderDraining: "true", HeaderRevision: "dabe728"},
+			PingInfo{Reachable: true, BuildID: "b1", Revision: "dabe728", Draining: true}},
+		{"not draining", map[string]string{HeaderDraining: "false", HeaderRevision: "dabe728"},
+			PingInfo{Reachable: true, BuildID: "b1", Revision: "dabe728"}},
+		{"an old daemon sends no headers", nil, PingInfo{Reachable: true, BuildID: "b1"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeDaemonWithHeaders(t, "b1", tc.headers)
+			info, err := Status()
+			assert.NilError(t, err)
+			assert.DeepEqual(t, info, tc.want)
+		})
+	}
+}
+
+func TestPingInfoOfNoDaemon(t *testing.T) {
+	t.Setenv("SMELT_DAEMON_DIR", socketDir(t))
+	info, err := Status()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, info, PingInfo{})
+}
+
+func TestSessionRefusedParsesTheDrainingBody(t *testing.T) {
+	r := refusalOf(http.StatusServiceUnavailable, `{"code":"daemon.draining","active":2,"message":"restarting"}`)
+	assert.Equal(t, r.Code, CodeDaemonDraining)
+	assert.Equal(t, r.Active, 2)
+	assert.Equal(t, r.Message, "restarting")
+
+	plain := refusalOf(http.StatusServiceUnavailable, "daemon has no credentials")
+	assert.Equal(t, plain.Code, "")
+	assert.Equal(t, plain.Message, "daemon has no credentials")
 }

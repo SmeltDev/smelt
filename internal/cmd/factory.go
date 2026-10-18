@@ -170,7 +170,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if err := checkBuildFlags(cmd, checks); err != nil {
 				return err
 			}
-			if err := requireLocalDaemon(); err != nil {
+			if err := requireLocalDaemon("smelt factory build"); err != nil {
 				return err
 			}
 			root, err := sessionProjectRoot(ctx)
