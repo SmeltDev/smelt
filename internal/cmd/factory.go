@@ -236,7 +236,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			// starts after whatever the file holds before the run is started.
 			logFrom := logSize(logArg)
 
-			if err := smeltd.EnsureRunning(); err != nil {
+			if err := ensureRunningForCommand(cmd); err != nil {
 				return &userError{msg: "Could not start the smelt daemon.", err: err}
 			}
 			id, err := smeltd.StartFactory(smeltd.FactoryRequest{
