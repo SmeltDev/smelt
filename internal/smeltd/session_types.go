@@ -343,6 +343,8 @@ type Notes struct {
 	Fallback string `json:"fallback,omitempty"`
 	// Skipped are the tests the sandbox skipped in the run's last round.
 	Skipped []string `json:"skipped,omitempty"`
+	// Low are the findings downgraded to low in a later round.
+	Low []string `json:"low,omitempty"`
 	// Quality is the run's quality line, before → after.
 	Quality string `json:"quality,omitempty"`
 	// QualityNotMeasured is why quality could not be measured.
@@ -561,6 +563,9 @@ type ReviewResult struct {
 	// ContextPeak is the largest prompt of the review in tokens, absent when
 	// unknown.
 	ContextPeak int `json:"context_peak,omitempty"`
+	// Mode is how a factory review was run: "broad", "recheck", or "carried"
+	// when an earlier pass stood in for it.
+	Mode string `json:"mode,omitempty"`
 }
 
 // Finding is one problem a review reported.
@@ -578,6 +583,11 @@ type Finding struct {
 	Body     string `json:"body"`
 	// Patch is an optional unified diff that would fix the finding.
 	Patch string `json:"patch,omitempty"`
+	// Downgraded is set when smelt lowered the finding to low because it was
+	// new in a later round on code the fix did not touch; DowngradedReason
+	// says why.
+	Downgraded       bool   `json:"downgraded,omitempty"`
+	DowngradedReason string `json:"downgraded_reason,omitempty"`
 }
 
 // Location is where the finding is, as file:line, or the file alone when the

@@ -35,11 +35,55 @@ type priorRound struct {
 	// Reply is the implementer's summary of the turn that followed. It answers
 	// every reviewer's findings together, since they are fed back as one prompt.
 	Reply string
+	// Tree is the tree the reviewer saw, "" when it could not be recorded. A
+	// later round diffs against it to tell which lines the fix touched.
+	Tree string
 }
 
-// historyScope renders a reviewer's earlier rounds for its next review, or ""
-// for a first review.
-func historyScope(rounds []priorRound) string {
+// scopeInput is what differs between kinds of run in round scoping.
+type scopeInput struct {
+	// Broad is the preamble of a full review: the request, or an integrate
+	// run's spec, and where the change is.
+	Broad string
+	// Spec is the requested change a re-check is shown.
+	Spec string
+}
+
+// roundScope is a round's reviews: the prompts to run, the checks of the
+// reviews that are not run again, and how each prompt was scoped.
+type roundScope struct {
+	Prompts []review.Prompt
+	Carried []Check
+	Modes   map[string]Mode
+}
+
+// scopePrompts is the reviews to run in round, as each reviewer is sent them.
+// The first round runs every review broadly. Later rounds re-check only the
+// reviews that had findings worth changing; one that passed is carried forward
+// as passed, and one that never produced findings (it errored or was skipped)
+// has had no broad pass yet, so it gets one.
+func scopePrompts(in scopeInput, prompts []review.Prompt, history map[string][]priorRound, round int) roundScope {
+	rs := roundScope{Modes: map[string]Mode{}}
+	for _, p := range prompts {
+		body, mode := in.Broad, ModeBroad
+		if rounds := history[p.Name]; round > 1 && len(rounds) > 0 {
+			last := rounds[len(rounds)-1]
+			if len(last.Findings) == 0 {
+				rs.Carried = append(rs.Carried, Check{Name: p.Name, Kind: KindReview, Status: StatusPassed, Mode: ModeCarried})
+				continue
+			}
+			body, mode = recheckPreamble(in.Spec, last), ModeRecheck
+		}
+		rs.Modes[p.Name] = mode
+		rs.Prompts = append(rs.Prompts, review.Prompt{Name: p.Name, Body: body + "\n\n" + severityScope + "\n\n" + fmt.Sprintf(reviewTail, p.Body)})
+	}
+	return rs
+}
+
+// legacyHistory renders a reviewer's earlier rounds for its next review, or ""
+// for a first review. It is the prompt of a run with factory.focusedRechecks
+// off: every round is a full review that is asked to hold back.
+func legacyHistory(rounds []priorRound) string {
 	if len(rounds) == 0 {
 		return ""
 	}

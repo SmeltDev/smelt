@@ -232,6 +232,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
 		Pack:                    packOptions(req, cfg),
 		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
+		FocusedRechecks:         cfg.Factory.FocusedRechecksEnabled(),
 		Quality:                 factory.QualityConfig(cfg.Factory),
 		Client:                  d.factoryClient(req.Backend),
 		OrgID:                   orgID,
@@ -612,7 +613,7 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if c.Kind != factory.KindReview {
 			continue
 		}
-		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness), ContextPeak: c.Context.Peak}
+		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness), ContextPeak: c.Context.Peak, Mode: string(c.Mode)}
 		for i, f := range c.Findings {
 			f.Prompt = c.Name
 			f.ID = fmt.Sprintf("%s-%d", c.Name, i+1)
@@ -636,7 +637,7 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 
 // wireFinding is a review's finding as the session API carries it.
 func wireFinding(f review.Finding) smeltd.Finding {
-	return smeltd.Finding{ID: f.ID, Prompt: f.Prompt, File: f.File, Line: f.Line, Severity: f.Severity, Body: f.Body, Patch: f.Patch}
+	return smeltd.Finding{ID: f.ID, Prompt: f.Prompt, File: f.File, Line: f.Line, Severity: f.Severity, Body: f.Body, Patch: f.Patch, Downgraded: f.Downgraded != "", DowngradedReason: f.Downgraded}
 }
 
 func (r *factoryRecorder) reviewProgress(ev review.ProgressEvent) {

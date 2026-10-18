@@ -46,6 +46,19 @@ const (
 	StatusNotMeasured Status = "not_measured"
 )
 
+// Mode is how a review was run in its round.
+type Mode string
+
+// Review modes.
+const (
+	// ModeBroad is a full review of the change.
+	ModeBroad Mode = "broad"
+	// ModeRecheck is a focused re-check of the review's own earlier findings.
+	ModeRecheck Mode = "recheck"
+	// ModeCarried is a review that passed earlier and was not run again.
+	ModeCarried Mode = "carried"
+)
+
 // reasonGatesFailed is why a round's reviews are skipped.
 const reasonGatesFailed = "gates failed"
 
@@ -53,9 +66,12 @@ const reasonGatesFailed = "gates failed"
 // review is treated like any other command run on a sidecar: it passes or
 // fails, and a failure carries feedback for the implementer.
 type Check struct {
-	Name      string
-	Kind      Kind
-	Status    Status
+	Name   string
+	Kind   Kind
+	Status Status
+	// Mode is how a review was run; empty for other checks and for reviews
+	// that were skipped.
+	Mode      Mode
 	SidecarID string
 	Duration  time.Duration
 	// Feedback is what the implementer is told when the check failed.

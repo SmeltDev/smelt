@@ -449,6 +449,15 @@ smelt
   `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
   are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
   side by side. A skipped round still counts towards `--max-attempts`.
+  `factory.focusedRechecks` (default `true`) makes rounds after the first work like an integration run's
+  second pass: a review whose last round had no high or medium findings is carried forward (status `mode:
+  "carried"`) and not run again, a review that had findings re-checks only those (`mode: "recheck"`), and one
+  that errored or was skipped gets a full pass (`mode: "broad"`). A re-check's new medium finding that matches
+  none of the review's earlier findings (same file, within 5 lines) and lies on no line changed since the tree
+  that review last saw is downgraded to low (`downgraded: true` and `downgraded_reason` in status, a line in
+  the run log). High findings are never downgraded. Downgraded findings are listed under "Low findings" in
+  the PR body and commit message, across all rounds. `focusedRechecks: false` restores full reviews every
+  round that are only asked to hold back.
 - **Ratchet gates (`format: "sarif"`).** A gate whose command prints SARIF 2.1.0 fails a factory run only on
   findings the change introduced, so existing debt never blocks a run and no run adds to it, for any linter:
 

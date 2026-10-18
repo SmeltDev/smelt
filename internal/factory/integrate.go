@@ -8,7 +8,6 @@ import (
 
 	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/gitutil"
-	"github.com/smeltdev/smelt/internal/review"
 )
 
 // ModeIntegrate is the mode of a run that checks a finished branch against a
@@ -110,31 +109,6 @@ func recheckPreamble(spec string, prior priorRound) string {
 	fmt.Fprintf(&b, "\n## Requested change\n\n%s\n\n", strings.TrimSpace(spec))
 	b.WriteString(changeUnderReview)
 	return b.String()
-}
-
-// integratePrompts is the reviews to run in round, as each reviewer is sent
-// them, and the checks of the reviews that are not run again. The first round
-// runs every review broadly. Later rounds re-check only the reviews that had
-// findings worth changing; one that passed is carried forward as passed, and
-// one that never produced findings (it errored or was skipped) has had no broad
-// pass yet, so it gets one.
-func integratePrompts(spec string, prompts []review.Prompt, history map[string][]priorRound, round int) (scoped []review.Prompt, carried []Check) {
-	for _, p := range prompts {
-		body := broadPreamble(spec)
-		if round > 1 {
-			rounds := history[p.Name]
-			if len(rounds) > 0 {
-				last := rounds[len(rounds)-1]
-				if len(last.Findings) == 0 {
-					carried = append(carried, Check{Name: p.Name, Kind: KindReview, Status: StatusPassed})
-					continue
-				}
-				body = recheckPreamble(spec, last)
-			}
-		}
-		scoped = append(scoped, review.Prompt{Name: p.Name, Body: body + "\n\n" + severityScope + "\n\n" + fmt.Sprintf(reviewTail, p.Body)})
-	}
-	return scoped, carried
 }
 
 // ErrNoDefaultBranch is returned when --against is not given and the

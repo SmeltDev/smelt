@@ -73,6 +73,10 @@ type RunOptions struct {
 	// GatesFirst runs Commands before the reviews and skips the reviews of a
 	// round whose commands failed.
 	GatesFirst bool
+	// FocusedRechecks makes rounds after the first carry forward the reviews
+	// that passed, re-check the others and downgrade new findings on code the
+	// fix did not touch. Integration runs always re-check.
+	FocusedRechecks bool
 	// Integrate, when set, checks the work already on From against the spec in
 	// Prompt: no plan and no implementer turn until the checks say what is
 	// wrong, then one fix turn and a focused re-check. It needs From, and
@@ -363,13 +367,14 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			StructuredFindings: true,
 			ProgressFn:         opts.OnReviewProgress,
 		},
-		Commands:   opts.Commands,
-		GatesFirst: opts.GatesFirst,
-		Integrate:  integ != nil,
-		Quality:    opts.qualityCheck(exec, impl, status),
-		Status:     status,
-		OnCheck:    opts.OnCheck,
-		Install:    opts.Install,
+		Commands:        opts.Commands,
+		GatesFirst:      opts.GatesFirst,
+		FocusedRechecks: opts.FocusedRechecks,
+		Integrate:       integ != nil,
+		Quality:         opts.qualityCheck(exec, impl, status),
+		Status:          status,
+		OnCheck:         opts.OnCheck,
+		Install:         opts.Install,
 		OnInstallOutput: func(id, line string) {
 			status(iostream.LevelInfo, "install "+id+": "+line)
 		},
@@ -471,6 +476,7 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	status(iostream.LevelStep, "writing PR notes…")
 	notes, err := steps.WriteNotes(ctx, in)
 	notes.Skipped = rep.Outcome.Skipped()
+	notes.Low = steps.Downgraded()
 	if q := rep.Outcome.Quality(); q != nil {
 		notes.Quality = q.Line()
 	}

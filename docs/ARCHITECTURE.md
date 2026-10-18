@@ -692,6 +692,21 @@ error, never a zero report.
   `git worktree` on the sidecar, runs the provider there, and removes the worktree on every path,
   also after a failure or a cancelled context.
 
+**Round scoping (`internal/factory/scope.go`).** `scopePrompts` is the one place that decides what each
+review does in a round, for normal and integrate runs alike; they differ only in the broad preamble passed
+in (the request plus pack, or the whole spec). Round 1 is broad. Later rounds carry a review that had no
+worth-changing findings (`ModeCarried`, a passed `Check` with no run), re-check one that had
+(`recheckPreamble`, the only copy of that text) and run broad for one with no history. With
+`factory.focusedRechecks` off, normal runs use `legacyScope` instead (the "Earlier rounds" prompt). For
+normal runs `Sidecars.runReviews` records the tree each review saw (`workspace.tree`, a temporary
+`GIT_INDEX_FILE` so the intent-to-add index is untouched) in `priorRound.Tree`, and for a re-check diffs that
+tree against the current one (`workspace.changedRanges`, `git diff --unified=0 --no-renames`). The pure
+`guard` in `changed.go` downgrades a new medium finding that matches no earlier finding and lies on
+unchanged lines before `FromReview` judges it; a tree that cannot be read downgrades nothing. Downgraded
+findings keep their text (`Finding.Downgraded`), reach the status JSON and run log, and `Sidecars.Downgraded`
+feeds `Notes.Low`, rendered as "Low findings" in the PR body and commit message. Integrate runs do not use
+the guard.
+
 Factory runs add a built-in `quality` check (`KindQuality`) after the gates of every round, in
 `Sidecars.checkGatesFirst` and `checkTogether`. It runs on the **implementer's sidecar** through the
 same `review.Execer` as the gates. `Sidecars.Prepare` measures the baseline right after the baseline

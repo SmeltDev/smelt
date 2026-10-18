@@ -617,6 +617,42 @@ func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T
 	assert.Assert(t, strings.Contains(round.Note, "lint"), round.Note)
 }
 
+func TestFactoryRecorderRecordsReviewModeAndDowngradedFindings(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.NilError(t, busy)
+	rec := &factoryRecorder{entry: entry, prompts: []review.Prompt{{Name: "bugs"}, {Name: "style"}}, rounds: map[int]int{}}
+
+	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 1})
+	rec.event(factory.Event{Kind: factory.EventImplemented, Round: 1})
+	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{
+		{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusPassed, Mode: factory.ModeRecheck, Findings: []review.Finding{
+			{File: "a.go", Line: 3, Severity: review.SeverityLow, Body: "stray", Downgraded: "new in round 2 on unchanged code"},
+			{File: "b.go", Line: 1, Severity: review.SeverityLow, Body: "plain"},
+		}},
+		{Name: "style", Kind: factory.KindReview, Status: factory.StatusPassed, Mode: factory.ModeCarried},
+	}})
+
+	d := entry.detail()
+	modes := map[string]string{}
+	for _, res := range d.Details[0].Results {
+		modes[res.Prompt] = res.Mode
+	}
+	assert.DeepEqual(t, modes, map[string]string{"bugs": "recheck", "style": "carried"})
+	for _, res := range d.Details[0].Results {
+		if res.Prompt != "bugs" {
+			continue
+		}
+		assert.Equal(t, len(res.Findings), 2)
+		assert.Assert(t, res.Findings[0].Downgraded)
+		assert.Equal(t, res.Findings[0].DowngradedReason, "new in round 2 on unchanged code")
+		assert.Assert(t, !res.Findings[1].Downgraded)
+	}
+	b, err := json.Marshal(d.Details[0].Results)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"mode":"recheck"`) && strings.Contains(string(b), `"downgraded":true`) && strings.Contains(string(b), `"downgraded_reason":`), string(b))
+}
+
 func TestFactoryRunUnverifiedJSON(t *testing.T) {
 	b, err := json.Marshal(smeltd.FactoryRun{Unverified: []string{"run it in Docker"}})
 	assert.NilError(t, err)
