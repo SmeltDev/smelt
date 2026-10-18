@@ -79,7 +79,11 @@ type Sidecars struct {
 	// Request is the original change the implementer was asked to make. It is
 	// included in every review, including rounds where the implementer is sent
 	// only feedback from the preceding checks.
-	Request  string
+	Request string
+	// Scout makes the plan turn build a context pack; Plan sets Pack from it.
+	Scout ScoutOptions
+	// Pack, when set, is added to every review's prompt after the request.
+	Pack     *Pack
 	Prompts  []review.Prompt
 	Review   review.Options
 	Commands []config.Command
@@ -129,6 +133,34 @@ type Sidecars struct {
 	// gatesTook and reviewsTook are the time Check has spent on validation
 	// commands and on reviews, over all rounds.
 	gatesTook, reviewsTook time.Duration
+}
+
+// ScoutOptions is how the plan turn builds the context pack. The zero value
+// builds none.
+type ScoutOptions struct {
+	Enabled bool
+	// MaxTokens caps the pack; zero means config.DefaultPackMaxTokens.
+	MaxTokens int
+	// Files reads the files entries are checked against: the run's baseline.
+	Files FileSource
+}
+
+// reviewRequest is the request as each review is shown it: with the context
+// pack after it, when there is one.
+func (s *Sidecars) reviewRequest() string {
+	if s.Pack == nil {
+		return s.Request
+	}
+	return packedRequest(s.Request, *s.Pack)
+}
+
+// packedRequest is request followed by the pack's section for reviewers.
+func packedRequest(request string, pk Pack) string {
+	section := pk.ReviewMarkdown()
+	if section == "" {
+		return request
+	}
+	return strings.TrimRight(request, "\n") + "\n\n" + section
 }
 
 // CheckTimes are the time Check has spent on validation commands and on
@@ -383,7 +415,7 @@ func (s *Sidecars) reviewSet(round int) ([]review.Prompt, []Check) {
 	if s.Integrate {
 		return integratePrompts(s.Request, s.Prompts, s.history, round)
 	}
-	return scopePrompts(s.Request, s.Prompts, s.history), nil
+	return scopePrompts(s.reviewRequest(), s.Prompts, s.history), nil
 }
 
 // relayToReviewers relays the implementer's tree, as pulled into the

@@ -284,6 +284,18 @@ func TestFactoryConfigValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "maxConcurrent")
 }
 
+func TestFactoryConfigPack(t *testing.T) {
+	off := false
+	var unset *FactoryConfig
+	assert.Assert(t, unset.PackEnabled())
+	assert.Equal(t, unset.PackMaxTokens(), DefaultPackMaxTokens)
+	assert.Assert(t, (&FactoryConfig{Pack: &PackConfig{}}).PackEnabled())
+	assert.Assert(t, !(&FactoryConfig{Pack: &PackConfig{Enabled: &off}}).PackEnabled())
+	assert.Equal(t, (&FactoryConfig{Pack: &PackConfig{MaxTokens: 100}}).PackMaxTokens(), 100)
+	err := (&ProjectConfig{Factory: &FactoryConfig{Pack: &PackConfig{MaxTokens: -1}}}).Validate()
+	assert.ErrorContains(t, err, "factory.pack.maxTokens")
+}
+
 func TestFactoryConfigConcurrentRuns(t *testing.T) {
 	var unset *FactoryConfig
 	assert.Equal(t, unset.ConcurrentRuns(), 1)

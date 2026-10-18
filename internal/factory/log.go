@@ -44,6 +44,8 @@ type runLog struct {
 	// attempts is the most rounds the run checks, set by start: the last
 	// round's findings are not fed back, since no round follows it.
 	attempts int
+	// packOn is whether the run builds a context pack, set by start.
+	packOn bool
 }
 
 // openLog creates the log at path, LogDefault for DefaultLogPath, or returns
@@ -106,6 +108,7 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 		return
 	}
 	l.attempts = opts.Attempts
+	l.packOn = opts.Pack.Enabled
 	l.line("info", "run "+runID)
 	l.block("prompt", opts.Prompt)
 	l.line("info", fmt.Sprintf("attempts %d, %d reviewer sidecar(s)", opts.Attempts, opts.Reviewers))
@@ -134,6 +137,22 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 	}
 }
 
+// noPack is what is logged when a run has no context pack to give the agents.
+const noPack = "pack: none, continuing with the plan alone"
+
+// pack logs the context pack: its entries, what was dropped and why, and the
+// hints the planner did not follow.
+func (l *runLog) pack(p Pack) {
+	if !p.Empty() || len(p.Dropped) > 0 {
+		for _, line := range p.LogLines() {
+			l.line("info", line)
+		}
+	}
+	if p.Empty() && l.packOn {
+		l.line("info", noPack)
+	}
+}
+
 func (l *runLog) event(e Event) {
 	switch e.Kind {
 	case EventPlanning:
@@ -142,6 +161,7 @@ func (l *runLog) event(e Event) {
 		l.block("plan", e.Plan.Markdown())
 		if e.Plan != nil {
 			l.line("info", "plan: "+contextLogLine(e.Plan.Context))
+			l.pack(e.Plan.ContextPack())
 		}
 		for _, f := range e.Findings {
 			l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)

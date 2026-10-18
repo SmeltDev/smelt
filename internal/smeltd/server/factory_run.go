@@ -228,6 +228,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Prompts:                 prompts,
 		Commands:                commands,
 		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
+		Pack:                    packOptions(req, cfg),
 		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
 		Quality:                 factory.QualityConfig(cfg.Factory),
 		Client:                  d.factoryClient(req.Backend),
@@ -275,6 +276,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	}
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
+	opts.OnPack = rec.setPack
 	opts.OnReviewProgress = rec.reviewProgress
 	opts.OnCheck = rec.checked
 
@@ -533,6 +535,42 @@ func (r *factoryRecorder) planReviewed(ev factory.Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.s.Factory.Plan = wirePlan(ev.Plan)
+	if ev.Plan != nil {
+		e.s.Factory.Pack = wirePack(ev.Plan.ContextPack())
+	}
+}
+
+// setPack records the pack a continued run reuses.
+func (r *factoryRecorder) setPack(p factory.Pack) {
+	e := r.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.s.Factory.Pack = wirePack(p)
+}
+
+// packOptions is the context pack a request asks for.
+func packOptions(req smeltd.FactoryRequest, cfg *config.ProjectConfig) factory.PackOptions {
+	return factory.PackOptions{Enabled: !req.NoPack && cfg.Factory.PackEnabled(), MaxTokens: cfg.Factory.PackMaxTokens()}
+}
+
+// wirePack is a pack as the session API carries it, nil when the run has none.
+func wirePack(p factory.Pack) *smeltd.Pack {
+	if p.Empty() && len(p.Dropped) == 0 && len(p.RejectedHints) == 0 {
+		return nil
+	}
+	out := &smeltd.Pack{Entries: []smeltd.PackEntry{}, Dropped: []smeltd.PackDropped{}, RejectedHints: []smeltd.RejectedHint{}, Tokens: p.Tokens}
+	for _, e := range p.Entries {
+		out.Entries = append(out.Entries, smeltd.PackEntry{
+			Kind: string(e.Kind), Path: e.Path, Start: e.Start, End: e.End, Reason: e.Reason, Priority: e.Priority, Inlined: e.Excerpt != "",
+		})
+	}
+	for _, d := range p.Dropped {
+		out.Dropped = append(out.Dropped, smeltd.PackDropped(d))
+	}
+	for _, h := range p.RejectedHints {
+		out.RejectedHints = append(out.RejectedHints, smeltd.RejectedHint(h))
+	}
+	return out
 }
 
 // wirePlan is a plan as the session API carries it.
