@@ -134,6 +134,7 @@ func TestPickGate(t *testing.T) {
 
 func TestKitCheckTestsTheCodexCommandHost(t *testing.T) {
 	assert.Assert(t, strings.Contains(kitCheck, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
+	assert.Assert(t, strings.Contains(kitCheck, "grok --version"))
 }
 
 func TestVerifyCodexTurn(t *testing.T) {

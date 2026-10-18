@@ -15,7 +15,7 @@ USER circleci
 COPY --chown=circleci package.json pnpm-lock.yaml /tmp/smelt-deps/
 RUN cd /tmp/smelt-deps && corepack enable --install-directory ~/bin && pnpm fetch && rm -rf /tmp/smelt-deps
 
-# --- smelt agent kit (v4) -------------------------------------------------
+# --- smelt agent kit (v5) -------------------------------------------------
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git coreutils procps ca-certificates curl bash python3 python3-venv \
@@ -52,6 +52,18 @@ RUN set -e; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex-code-mode-host"
 RUN set -e; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; sum=2a46d9e4d7ebd7a9cff7f95716714b19dad5f21dd2a497822400b1fb128969aa ;; \
+      aarch64|arm64) arch=aarch64; sum=0b808a2209728788d2e37c34ea1846d460b41528a9fc7edc7698b9e7dec12fe1 ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/grok "https://x.ai/cli/grok-1.0.62-linux-${arch}"; \
+    echo "${sum}  /tmp/grok" | sha256sum -c -; \
+    mkdir -p "$HOME/.local/bin"; \
+    mv /tmp/grok "$HOME/.local/bin/grok"; \
+    chmod +x "$HOME/.local/bin/grok"; \
+    test -x "$HOME/.local/bin/grok"
+RUN set -e; \
     if ! command -v python3 >/dev/null 2>&1; then \
       echo "warning: python3 is missing, so lizard is not installed and code quality is not measured" >&2; exit 0; \
     fi; \
@@ -62,5 +74,5 @@ RUN set -e; \
     mkdir -p "$HOME/.local/bin"; \
     ln -sf "$HOME/.local/share/smelt-tools/bin/lizard" "$HOME/.local/bin/lizard"; \
     lizard --version
-LABEL smelt.harnesses=claude,codex smelt.kit=4
+LABEL smelt.harnesses=claude,codex,grok smelt.kit=5
 CMD ["sleep", "infinity"]

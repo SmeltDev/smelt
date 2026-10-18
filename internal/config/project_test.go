@@ -467,3 +467,9 @@ func TestFactoryRoundAndContextDefaultsAndValidation(t *testing.T) {
 }
 
 func ptrInt(v int) *int { return &v }
+
+func TestValidHarnessAcceptsEachCodingAgent(t *testing.T) {
+	for name, want := range map[string]bool{"": true, "claude": true, "codex": true, "grok": true, "gemini": false} {
+		assert.Equal(t, ValidHarness(name), want, name)
+	}
+}

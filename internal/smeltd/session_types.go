@@ -663,7 +663,7 @@ type FactoryRequest struct {
 	// review prompt.
 	Reviewers int    `json:"reviewers,omitempty"`
 	Model     string `json:"model,omitempty"`
-	// Harness is the coding agent for the run: "claude" or "codex"; empty
+	// Harness is the coding agent for the run: "claude", "codex" or "grok"; empty
 	// means Claude Code.
 	Harness                 string `json:"harness,omitempty"`
 	ImplementerInstructions string `json:"implementer_instructions,omitempty"`

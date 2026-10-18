@@ -122,13 +122,21 @@ var isInteractive = func() bool {
 }
 
 // agentAuthStep makes sure the user has a credential for the project's coding
-// agent: the Codex branch for codex, the Claude branch otherwise. Never fatal.
+// agent: the Codex branch for codex, a check for grok, the Claude branch otherwise. Never fatal.
 func agentAuthStep(ctx context.Context, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig, insecureStorage, skip bool, confirm confirmFunc) {
-	if cfg != nil && cfg.Factory != nil && cfg.Factory.Harness == config.HarnessCodex {
-		if !skip {
-			codexAuthStep(ctx, streams, confirm)
+	if cfg != nil && cfg.Factory != nil {
+		switch cfg.Factory.Harness {
+		case config.HarnessCodex:
+			if !skip {
+				codexAuthStep(ctx, streams, confirm)
+			}
+			return
+		case config.HarnessGrok:
+			if !skip {
+				grokAuthStep(streams)
+			}
+			return
 		}
-		return
 	}
 	claudeAuthStep(ctx, streams, rc, insecureStorage, skip, confirm)
 }

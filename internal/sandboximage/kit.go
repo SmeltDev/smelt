@@ -12,8 +12,8 @@ import (
 // older kit are told. Version 1 is a Dockerfile without a marker (Claude only);
 // 2 adds Codex and the harness label; 3 adds codex-code-mode-host, which Codex
 // runs every command through; 4 adds python3 and lizard, which measures code
-// quality in any language.
-const KitVersion = 4
+// quality in any language; 5 adds the Grok CLI.
+const KitVersion = 5
 
 // kitMarkerPrefix starts the line that opens the agent-kit section.
 const kitMarkerPrefix = "# --- smelt agent kit"
@@ -132,6 +132,6 @@ func StaleImageWarning(tag string, info ImageInfo, inspectErr error, dockerfile 
 func KitOutdatedWarning(name string, have int) string {
 	return name + " was generated with agent kit v" + strconv.Itoa(have) +
 		"; the current kit is v" + kitVersionString() + "\n" +
-		"  (adds lizard, without which code quality is not measured, and Codex's command host, " + codexHost.installAs + ", without which Codex cannot run commands). Update it with:\n" +
+		"  (adds lizard, without which code quality is not measured, and Codex's command host, " + codexHost.installAs + ", without which Codex cannot run commands, and the Grok CLI). Update it with:\n" +
 		"    smelt factory image --update-kit"
 }

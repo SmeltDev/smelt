@@ -384,61 +384,18 @@ func validPlan(p Plan) (Plan, error) {
 	return p, nil
 }
 
-// parseMessage reads the schema-checked object that is an agent's last message
-// whole, as Codex prints it; what names it in errors.
-func parseMessage[T any](msg, what string) (T, error) {
+// parseAnswer reads the schema-checked object out of the stdout of a review
+// script, whichever harness ran it; what names it in errors.
+func parseAnswer[T any](h harness.Harness, out, what string) (T, error) {
 	var v T
-	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &v); err != nil {
+	raw, err := h.ParseAnswer(out)
+	if err != nil {
+		return v, err
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
 		return v, fmt.Errorf("read the %s: %w", what, err)
 	}
 	return v, nil
-}
-
-// parseAnswer reads the schema-checked object out of the stdout of a review
-// script, whichever harness ran it.
-func parseAnswer[T any](h harness.Harness, out, what string) (T, error) {
-	if h.Name() != harness.Claude {
-		return parseMessage[T](out, what)
-	}
-	return parseStructured[T](resultLine(out), what)
-}
-
-// resultLine is the line of claude's output that is its result: the whole
-// output for --output-format json, the last "result" event for stream-json.
-func resultLine(output string) string {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		var e struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal([]byte(lines[i]), &e) == nil && e.Type == "result" {
-			return lines[i]
-		}
-	}
-	return output
-}
-
-// structuredResult is claude's JSON result for a run with --json-schema.
-type structuredResult[T any] struct {
-	IsError          bool   `json:"is_error"`
-	Subtype          string `json:"subtype"`
-	Result           string `json:"result"`
-	StructuredOutput *T     `json:"structured_output"`
-}
-
-// parseStructured reads the schema-checked object out of claude's JSON result;
-// what names it in errors.
-func parseStructured[T any](output, what string) (T, error) {
-	var zero T
-	var res structuredResult[T]
-	if err := json.Unmarshal([]byte(output), &res); err != nil {
-		return zero, fmt.Errorf("read claude's result: %w", err)
-	}
-	if res.IsError || res.StructuredOutput == nil {
-		return zero, fmt.Errorf("claude gave no structured %s (%s): %s",
-			what, res.Subtype, review.Tail(strings.TrimSpace(res.Result), 500))
-	}
-	return *res.StructuredOutput, nil
 }
 
 // planPreamble is what the implementer is told before the request: the plan it

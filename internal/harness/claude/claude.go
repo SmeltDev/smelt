@@ -183,6 +183,43 @@ func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	return harness.ReviewPayload{Review: res.StructuredOutput.Review, Findings: res.StructuredOutput.Findings}, nil
 }
 
+// ParseAnswer implements harness.Harness. stdout is the whole json result, or
+// a stream whose last "result" event is it.
+func (Harness) ParseAnswer(stdout string) (json.RawMessage, error) {
+	var res struct {
+		IsError          bool            `json:"is_error"`
+		Subtype          string          `json:"subtype"`
+		Result           string          `json:"result"`
+		StructuredOutput json.RawMessage `json:"structured_output"`
+	}
+	if err := json.Unmarshal([]byte(resultLine(stdout)), &res); err != nil {
+		return nil, fmt.Errorf("read claude's result: %w", err)
+	}
+	if res.IsError || len(res.StructuredOutput) == 0 || string(res.StructuredOutput) == "null" {
+		text := []rune(strings.TrimSpace(res.Result))
+		if len(text) > maxResultInError {
+			text = append(text[:maxResultInError], '…')
+		}
+		return nil, fmt.Errorf("claude gave no structured answer (%s): %s", res.Subtype, string(text))
+	}
+	return res.StructuredOutput, nil
+}
+
+// resultLine is the line of claude's output that is its result: the whole
+// output for --output-format json, the last "result" event for stream-json.
+func resultLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var e struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &e) == nil && e.Type == "result" {
+			return lines[i]
+		}
+	}
+	return output
+}
+
 // Env implements harness.Harness: only the credential, and the base URL when it
 // points somewhere other than Anthropic.
 func (Harness) Env(cred harness.Credential, baseURL string) map[string]string {

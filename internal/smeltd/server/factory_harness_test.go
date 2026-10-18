@@ -118,3 +118,28 @@ func TestFactoryStatusReportsTokensAndTheRateLimitSignal(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, seen.Bucket, "5h")
 }
+
+func TestFactoryRunGivesGrokItsOwnCredential(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
+	d.rcfg.Codex = codexAuth("codex-secret")
+	d.rcfg.Grok = HarnessAuth{Credential: review.Credential{EnvVar: "XAI_API_KEY", Value: "grok-secret"}}
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Harness: "grok"})
+	assert.NilError(t, err)
+	waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, got.Harness.Name(), harness.Grok)
+	assert.Equal(t, got.Credential.Value, "grok-secret")
+	assert.Equal(t, got.Credential.EnvVar, "XAI_API_KEY")
+
+	// Without a Grok credential the run is refused, whatever Codex has.
+	d.rcfg.Grok = HarnessAuth{}
+	_, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Harness: "grok"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae))
+	assert.Check(t, cmp.Contains(ae.msg, "smelt auth login grok"))
+}

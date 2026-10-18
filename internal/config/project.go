@@ -206,13 +206,14 @@ type ValidationConfig struct {
 const (
 	HarnessClaude = "claude"
 	HarnessCodex  = "codex"
+	HarnessGrok   = "grok"
 )
 
 // ValidHarness reports whether name is a coding agent. Empty is valid: it
 // means none is chosen.
 func ValidHarness(name string) bool {
 	switch name {
-	case "", HarnessClaude, HarnessCodex:
+	case "", HarnessClaude, HarnessCodex, HarnessGrok:
 		return true
 	}
 	return false
@@ -235,7 +236,7 @@ type FactoryConfig struct {
 	Rounds RoundPolicy `json:"rounds,omitempty"`
 	// ContextWindow is the implementer auto-compaction threshold in tokens; zero uses the agent default.
 	ContextWindow *int `json:"contextWindow,omitempty"`
-	// Harness is the coding agent runs use: "claude" or "codex". Empty means
+	// Harness is the coding agent runs use: "claude", "codex" or "grok". Empty means
 	// ask, or fail when there is no terminal.
 	Harness string `json:"harness,omitempty"`
 	// Models maps a harness to the model it uses when --model is not given, so
@@ -682,11 +683,11 @@ func (f *FactoryConfig) validate() error {
 		return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
 	}
 	if !ValidHarness(f.Harness) {
-		return fmt.Errorf("factory.harness %q must be %q or %q", f.Harness, HarnessClaude, HarnessCodex)
+		return fmt.Errorf("factory.harness %q must be %q, %q or %q", f.Harness, HarnessClaude, HarnessCodex, HarnessGrok)
 	}
 	for name := range f.Models {
 		if name == "" || !ValidHarness(name) {
-			return fmt.Errorf("factory.models.%s: unknown harness (want %q or %q)", name, HarnessClaude, HarnessCodex)
+			return fmt.Errorf("factory.models.%s: unknown harness (want %q, %q or %q)", name, HarnessClaude, HarnessCodex, HarnessGrok)
 		}
 	}
 	if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {

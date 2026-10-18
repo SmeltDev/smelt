@@ -15,7 +15,7 @@ const DefaultDockerfile = brand.Dockerfile
 const depsDir = "/tmp/" + brand.Command + "-deps"
 
 // agentKit is the same for every repo: the tools the factory's own scripts use
-// and the Claude Code CLI. Package installs need root, so the user is switched
+// and the agent CLIs. Package installs need root, so the user is switched
 // around them; %s is the base image's user, and the lines are dropped for root.
 const (
 	kitPackages = `RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -86,6 +86,36 @@ func (a codexAsset) install() string {
 // host to ~/.local/bin, for the architecture the image is built on.
 func KitCodex() string {
 	return codexMain.install() + codexHost.install()
+}
+
+// Grok is installed from xAI's download, a single binary per architecture with
+// no published checksum, so the SHA-256 of each is pinned here, computed on
+// 2026-10-18. The version and the checksums are pinned together: change them
+// together, and Dockerfile.smelt with them (a test keeps the two in step).
+const (
+	GrokVersion = "1.0.62"
+	grokURLBase = "https://x.ai/cli/grok-"
+	grokSumX86  = "2a46d9e4d7ebd7a9cff7f95716714b19dad5f21dd2a497822400b1fb128969aa"
+	grokSumARM  = "0b808a2209728788d2e37c34ea1846d460b41528a9fc7edc7698b9e7dec12fe1"
+)
+
+// KitGrok is the Dockerfile block that downloads the Grok CLI for the
+// architecture the image is built on, checks it and installs it to
+// ~/.local/bin.
+func KitGrok() string {
+	return `RUN set -e; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; sum=` + grokSumX86 + ` ;; \
+      aarch64|arm64) arch=aarch64; sum=` + grokSumARM + ` ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/grok "` + grokURLBase + GrokVersion + `-linux-${arch}"; \
+    echo "${sum}  /tmp/grok" | sha256sum -c -; \
+    mkdir -p "$HOME/.local/bin"; \
+    mv /tmp/grok "$HOME/.local/bin/grok"; \
+    chmod +x "$HOME/.local/bin/grok"; \
+    test -x "$HOME/.local/bin/grok"
+`
 }
 
 // lizard measures the code quality of any language (see internal/quality). It
@@ -167,7 +197,7 @@ func Render(r Recipe) string {
 // kitHarnessLabel tells `smelt harness status` which agent CLIs the image has
 // and which kit built it.
 func kitHarnessLabel() string {
-	return "LABEL " + LabelHarnesses + "=claude,codex " + LabelKit + "=" + kitVersionString() + "\n"
+	return "LABEL " + LabelHarnesses + "=claude,codex,grok " + LabelKit + "=" + kitVersionString() + "\n"
 }
 
 // kitSection is the agent kit from its marker to the end of the Dockerfile.
@@ -175,7 +205,7 @@ func kitHarnessLabel() string {
 func kitSection(user string) string {
 	return kitMarker() +
 		asUser(rootUser, user, kitPackages) +
-		kitClaude + KitCodex() + KitLizard() + kitHarnessLabel() + kitCmd
+		kitClaude + KitCodex() + KitGrok() + KitLizard() + kitHarnessLabel() + kitCmd
 }
 
 // asUser runs block as user, then restores the base image's user. A root base
