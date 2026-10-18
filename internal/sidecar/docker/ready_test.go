@@ -99,3 +99,14 @@ func TestReadyCancelledDuringWait(t *testing.T) {
 	err := p.Ready(ctx, "", (&statusLog{}).fn)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestWaitEngineHonoursReadyTimeout(t *testing.T) {
+	f := newFakeDocker()
+	f.readyAt = time.Hour
+	p := f.provider()
+	p.ReadyTimeout = time.Second
+	err := p.WaitEngine(context.Background(), (&statusLog{}).fn)
+	assert.ErrorContains(t, err, "Docker did not finish starting within 1s")
+	waited := f.clock.Sub(f.start)
+	assert.Assert(t, waited >= time.Second && waited <= 2*time.Second, "waited %s", waited)
+}

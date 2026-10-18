@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	// readyTimeout bounds how long Ready waits for a starting engine.
-	readyTimeout = 3 * time.Minute
+	// defaultReadyTimeout bounds how long Ready waits for a starting engine
+	// when the Provider sets no ReadyTimeout.
+	defaultReadyTimeout = 3 * time.Minute
 	// statusInterval is how often the wait reports that it is still going.
 	statusInterval = 5 * time.Second
 	// maxReadyBackoff caps the delay between readiness checks.
@@ -78,6 +79,22 @@ func (b *Provider) clock() time.Time {
 	return time.Now()
 }
 
+// readyTimeout is the bound WaitEngine applies.
+func (b *Provider) readyTimeout() time.Duration {
+	if b.ReadyTimeout > 0 {
+		return b.ReadyTimeout
+	}
+	return defaultReadyTimeout
+}
+
+// describeBound words a wait bound for the user: whole minutes as minutes.
+func describeBound(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute == 0 {
+		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+	}
+	return d.String()
+}
+
 func (b *Provider) pause(ctx context.Context, d time.Duration) error {
 	if b.sleep != nil {
 		return b.sleep(ctx, d)
@@ -106,7 +123,7 @@ func (b *Provider) checkEngine(ctx context.Context) (ready bool, reason string, 
 }
 
 // WaitEngine blocks until the engine is ready, reporting progress, for at most
-// readyTimeout. An engine that is ready at the first check costs one round trip
+// the Provider's ReadyTimeout. An engine that is ready at the first check costs one round trip
 // and prints nothing.
 func (b *Provider) WaitEngine(ctx context.Context, status iostream.StatusFunc) error {
 	start := b.clock()
@@ -125,8 +142,8 @@ func (b *Provider) WaitEngine(ctx context.Context, status iostream.StatusFunc) e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if elapsed >= readyTimeout {
-			return fmt.Errorf("docker: Docker did not finish starting within %d minutes (last check: %s)", int(readyTimeout.Minutes()), reason)
+		if bound := b.readyTimeout(); elapsed >= bound {
+			return fmt.Errorf("docker: Docker did not finish starting within %s (last check: %s)", describeBound(bound), reason)
 		}
 		if !waited || elapsed-lastStatus >= statusInterval {
 			status(iostream.LevelInfo, fmt.Sprintf("Waiting for Docker to finish starting (Resource Saver)… %ds", int(elapsed.Seconds())))

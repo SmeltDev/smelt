@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -40,8 +41,12 @@ func TestResolveBuildSettingsBuildsOnlyDockerfileImages(t *testing.T) {
 
 	// With the Dockerfile present it gets as far as Docker, which is unreachable here.
 	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
-	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
-	assert.Assert(t, err != nil)
+	// The wait for Docker is cut to a second so the test does not sit out the
+	// default three minutes.
+	begin := time.Now()
+	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3, ReadyTimeout: time.Second}, factoryExplicit{}, cfg)
+	assert.ErrorContains(t, err, "did not finish starting")
+	assert.Assert(t, time.Since(begin) < 10*time.Second, "took %s", time.Since(begin))
 }
 
 func TestPrepareDockerfileKeepsAnExistingFile(t *testing.T) {

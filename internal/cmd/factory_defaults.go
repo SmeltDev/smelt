@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
@@ -25,6 +26,9 @@ type factorySettings struct {
 	// KitWarning is the outdated-agent-kit warning for Dockerfile, "" when its
 	// kit is current. The run records it.
 	KitWarning string
+	// ReadyTimeout bounds the wait for Docker to start; zero is the default.
+	// Only tests set it.
+	ReadyTimeout time.Duration
 }
 
 // dockerImage is the image the run's containers use, or "" for any other
