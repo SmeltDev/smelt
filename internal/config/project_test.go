@@ -78,6 +78,31 @@ func TestSaveProjectConfigRejectsConflictingPlacement(t *testing.T) {
 	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)
 }
 
+func TestCommandFormatRoundTripAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"commands":[{"name":"lint","run":"ruff","role":"gate","format":"sarif","sarifPath":"out/r.sarif"}]}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.Commands[0].Format, FormatSARIF)
+	assert.Equal(t, cfg.Commands[0].SarifPath, "out/r.sarif")
+	assert.NilError(t, SaveProjectConfig(dir, cfg))
+
+	for name, tc := range map[string]struct {
+		cmd  Command
+		want string
+	}{
+		"unknown format":       {Command{Name: "l", Format: "junit"}, `format "junit" must be`},
+		"path without format":  {Command{Name: "l", SarifPath: "a.sarif"}, "sarifPath needs format"},
+		"absolute path":        {Command{Name: "l", Format: FormatSARIF, SarifPath: "/tmp/a"}, "relative path inside the repo"},
+		"path leaves the repo": {Command{Name: "l", Format: FormatSARIF, SarifPath: "../a"}, "relative path inside the repo"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := SaveProjectConfig(t.TempDir(), &ProjectConfig{Commands: []Command{tc.cmd}})
+			assert.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 func TestHasSidecarImage(t *testing.T) {
 	assert.Assert(t, !(*ProjectConfig)(nil).HasSidecarImage())
 

@@ -424,6 +424,37 @@ smelt
   `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
   are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
   side by side. A skipped round still counts towards `--max-attempts`.
+- **Ratchet gates (`format: "sarif"`).** A gate whose command prints SARIF 2.1.0 fails a factory run only on
+  findings the change introduced, so existing debt never blocks a run and no run adds to it, for any linter:
+
+  ```json
+  {"name": "lint", "run": "ruff check --output-format sarif .", "role": "gate",
+   "format": "sarif", "timeout": 180}
+  ```
+
+  `format` is `""` (the default: the exit code decides) or `"sarif"`. `sarifPath`, valid only with
+  `format: "sarif"`, is a repo-relative file the tool writes instead of stdout; smelt reads it after each
+  run and deletes it, so it never ends up in the change. Tools that can print SARIF: ESLint
+  (`--format @microsoft/eslint-formatter-sarif`), Ruff (`--output-format sarif`), golangci-lint
+  (`--output.sarif.path`, with `sarifPath`), Semgrep (`--sarif`), clippy (via `clippy-sarif`).
+  - *Baseline.* In `Sidecars.Prepare`, right after the baseline commit and before the implementer edits
+    anything, the command runs once in the repo (so installed dependencies are there) and its findings are
+    kept for the run. If that fails the first round makes them from a temporary worktree of the baseline
+    commit; if that fails too the gate is `errored` and blocks the round.
+  - *Each round* the command runs again on the change. The exit code is ignored (linters exit non-zero when
+    they find anything); a timeout or a failure to run is handled as for any gate. Only stdout is parsed (or
+    `sarifPath`); stderr is kept for the failure message. Output over 64 MiB fails the gate. A command that
+    prints no valid SARIF fails the gate (`failed`, fed back) with the parse error and the tail of stderr.
+    Results a tool marks as suppressed are ignored.
+  - *Matching* (`internal/sarif`, pure): findings with `partialFingerprints`/`fingerprints` match the
+    baseline finding sharing one. Otherwise a finding is identified by rule ID, file, the trimmed text of the
+    flagged line and its occurrence among findings sharing those, so a finding that only moved lines is still
+    the same. A finding with no line (or no readable file) matches by rule, file and occurrence alone.
+  - *Result.* The gate fails when the change has findings with no match in the baseline, and the feedback
+    lists only those, as `file:line rule message`. Otherwise it passes with the note
+    `lint: 0 new, 3 fixed, 214 existing`. In the status JSON each such check in a round's `checks` carries
+    `"ratchet": {"new": 0, "fixed": 3, "existing": 214}`.
+  - Only factory runs ratchet. `smelt validate` keeps the exit-code behaviour for these commands.
 - **The implementer runs quick checks; smelt runs the gates.** Its prompt asks it, after its last edit, to
   build and run the tests of the packages it changed (for Go `go build ./...` and `go test ./<changed
   packages>/...`) and not to run the full gates itself: smelt runs them right after the turn and sends back any

@@ -115,6 +115,8 @@ type Sidecars struct {
 	OnReviewerTree func(ReviewerTree)
 
 	ws workspace
+	// ratchet runs the SARIF gates; Prepare measures its baseline.
+	ratchet *Ratchet
 	// reviewersReady is set once the reviewers have their dependencies, harness
 	// setup and baseline. Loop.run calls Plan, ReviewPlan and Check one after
 	// the other, so it needs no lock.
@@ -154,10 +156,32 @@ func (s *Sidecars) Prepare(ctx context.Context) error {
 	if s.Quality != nil {
 		s.Quality.MeasureBaseline(ctx, s.ws.baseline)
 	}
+	if len(SarifCommands(s.Commands)) > 0 {
+		s.sarifRatchet().MeasureBaseline(ctx, s.ws.baseline, s.Commands)
+	}
 	if s.WaitReviewers != nil {
 		return nil
 	}
 	return s.prepareReviewers(ctx)
+}
+
+// sarifRatchet is the run's ratchet, made on first use.
+func (s *Sidecars) sarifRatchet() *Ratchet {
+	if s.ratchet == nil {
+		s.ratchet = &Ratchet{Exec: s.Exec, Entry: s.Implementer.Entry, Warn: s.Status}
+	}
+	return s.ratchet
+}
+
+// validate runs the round's validation commands on the implementer's sandbox;
+// the ones that print SARIF are judged against the baseline.
+func (s *Sidecars) validate(ctx context.Context) []Check {
+	return runEach(s.Commands, s.OnCheck, func(c config.Command) Check {
+		if c.Format == config.FormatSARIF {
+			return s.sarifRatchet().Check(ctx, c)
+		}
+		return runCommand(ctx, s.Exec, s.Implementer.Entry, c)
+	})
 }
 
 // prepareReviewers makes the reviewers ready, once per run: it waits for them
@@ -270,7 +294,7 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 // about to change.
 func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, error) {
 	start := time.Now()
-	gates := runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+	gates := s.validate(ctx)
 	s.gatesTook += time.Since(start)
 	if gatesFailed(gates) {
 		skipped := make([]Check, len(s.Prompts))
@@ -328,7 +352,7 @@ func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error
 	go func() {
 		defer wg.Done()
 		start := time.Now()
-		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+		validation = s.validate(ctx)
 		gatesTook = time.Since(start)
 	}()
 	wg.Wait()

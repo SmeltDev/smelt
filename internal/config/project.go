@@ -115,6 +115,33 @@ type Command struct {
 	// cheaply before smelt runs this command in full, such as the tests of the
 	// packages it changed. It is guidance, never run by smelt.
 	Quick string `json:"quick,omitempty"`
+	// Format, when FormatSARIF, says the command prints SARIF. A factory run
+	// then fails the gate only on findings the change adds to the baseline's,
+	// and ignores the command's exit code.
+	Format string `json:"format,omitempty"`
+	// SarifPath is where a FormatSARIF command writes its SARIF, relative to
+	// the repo, when it writes a file rather than stdout.
+	SarifPath string `json:"sarifPath,omitempty"`
+}
+
+// FormatSARIF is the Command.Format of a command that prints SARIF.
+const FormatSARIF = "sarif"
+
+// validate reports a command whose placement or format settings do not make sense.
+func (c Command) validate() error {
+	if c.Local && c.Remote {
+		return fmt.Errorf("command %q cannot be both local and remote", c.Name)
+	}
+	if c.Format != "" && c.Format != FormatSARIF {
+		return fmt.Errorf("command %q: format %q must be empty or %q", c.Name, c.Format, FormatSARIF)
+	}
+	if c.SarifPath != "" && c.Format != FormatSARIF {
+		return fmt.Errorf("command %q: sarifPath needs format %q", c.Name, FormatSARIF)
+	}
+	if err := validateRepoRelative("sarifPath", c.SarifPath); err != nil {
+		return fmt.Errorf("command %q: %w", c.Name, err)
+	}
+	return nil
 }
 
 // FastGateSeconds is the configured timeout, in seconds, up to which a gate is
@@ -521,31 +548,12 @@ func (c *ProjectConfig) validate() error {
 		return nil
 	}
 	for _, command := range c.Commands {
-		if command.Local && command.Remote {
-			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		if err := command.validate(); err != nil {
+			return err
 		}
 	}
-	if f := c.Factory; f != nil {
-		if !ValidBackend(f.Backend) {
-			return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
-		}
-		if !ValidHarness(f.Harness) {
-			return fmt.Errorf("factory.harness %q must be %q or %q", f.Harness, HarnessClaude, HarnessCodex)
-		}
-		for name := range f.Models {
-			if name == "" || !ValidHarness(name) {
-				return fmt.Errorf("factory.models.%s: unknown harness (want %q or %q)", name, HarnessClaude, HarnessCodex)
-			}
-		}
-		if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
-			return err
-		}
-		if err := f.validateLimits(); err != nil {
-			return err
-		}
-		if _, err := f.CommitAuthor(); err != nil {
-			return fmt.Errorf("factory.author must look like \"Name <email>\": %w", err)
-		}
+	if err := c.Factory.validate(); err != nil {
+		return err
 	}
 	// Trimmed before the checks below rather than after, so the entry validated
 	// and the entry stored are the one somebody meant.
@@ -564,6 +572,34 @@ func (c *ProjectConfig) validate() error {
 		if slices.Contains(c.AsyncValidateInert, entry) {
 			return fmt.Errorf("%q is in both asyncValidateInert and asyncValidateBlocking", entry)
 		}
+	}
+	return nil
+}
+
+// validate reports a factory config that is not usable. A nil config is.
+func (f *FactoryConfig) validate() error {
+	if f == nil {
+		return nil
+	}
+	if !ValidBackend(f.Backend) {
+		return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
+	}
+	if !ValidHarness(f.Harness) {
+		return fmt.Errorf("factory.harness %q must be %q or %q", f.Harness, HarnessClaude, HarnessCodex)
+	}
+	for name := range f.Models {
+		if name == "" || !ValidHarness(name) {
+			return fmt.Errorf("factory.models.%s: unknown harness (want %q or %q)", name, HarnessClaude, HarnessCodex)
+		}
+	}
+	if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
+		return err
+	}
+	if err := f.validateLimits(); err != nil {
+		return err
+	}
+	if _, err := f.CommitAuthor(); err != nil {
+		return fmt.Errorf("factory.author must look like \"Name <email>\": %w", err)
 	}
 	return nil
 }
