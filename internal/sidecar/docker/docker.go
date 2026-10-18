@@ -81,6 +81,9 @@ type Provider struct {
 	// StopGrace is how long a cancelled command gets to exit on SIGTERM before
 	// its process group is killed. Zero means defaultStopGrace.
 	StopGrace time.Duration
+	// ReadyTimeout bounds how long WaitEngine waits for a starting engine.
+	// Zero means defaultReadyTimeout.
+	ReadyTimeout time.Duration
 
 	// now and sleep are test seams for the readiness wait; nil means real time.
 	now   func() time.Time

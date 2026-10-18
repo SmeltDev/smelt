@@ -22,7 +22,9 @@ tasks:
     vars:
       ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go tool gotestsum -- -race {{.ARGS}}
+      - defer: go tool gotestsum tool slowest --jsonfile dist/test-report.json --threshold 1ms 2>/dev/null | head -n 10 | sed '1i Ten slowest tests:'
+      - mkdir -p dist
+      - go tool gotestsum --jsonfile dist/test-report.json -- -race {{.ARGS}}
 
   test:stress:
     desc: Stress the sidecar pool tests (run after changing internal/sidecar/pool.go)
@@ -71,7 +73,9 @@ tasks:
     vars:
       ARGS: '{{default "./acceptance/..." .CLI_ARGS}}'
     cmds:
-      - go tool gotestsum -- -race {{.ARGS}}
+      - defer: go tool gotestsum tool slowest --jsonfile dist/test-report.json --threshold 1ms 2>/dev/null | head -n 10 | sed '1i Ten slowest tests:'
+      - mkdir -p dist
+      - go tool gotestsum --jsonfile dist/test-report.json -- -race {{.ARGS}}
 
   env-harness:
     desc: |
