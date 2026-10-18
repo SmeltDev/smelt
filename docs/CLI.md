@@ -52,7 +52,7 @@ smelt
 │   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
 │   --skip-auth                     # Skip the coding agent login check
-│   --harness <name>                 # Default coding agent for factory runs: claude or codex; skips the "Coding agent" prompt
+│   --harness <name>                 # Default coding agent for factory runs: claude, codex or grok; skips the "Coding agent" prompt
 │   --skip-factory                  # Skip the factory backend step
 │   --factory-backend <name>        # docker (default) or circleci; skips the prompt. Asked first: the circleci path alone detects the org ID, installs the smelt-sidecar skills and offers test-suites.yml
 │   --factory-image <image>         # Docker image for factory runs (user-managed, never auto-built); skips the prompt
@@ -203,7 +203,7 @@ smelt
 │       --draft                    # Open the PR as a draft
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
-│       --harness <name>            # Coding agent for the implementer and reviewers: claude or codex (default: factory.harness, else ask in a terminal; fails without one)
+│       --harness <name>            # Coding agent for the implementer and reviewers: claude, codex or grok (default: factory.harness, else ask in a terminal; fails without one)
 │       --model <name>              # Model for the chosen agent (default: factory.models.<harness>, else the agent's own default)
 │       --implement-timeout <duration> # Max time for each implementer turn
 │       --review-timeout <duration> # Max time for each review
@@ -556,7 +556,7 @@ smelt
   more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
-- **`factory build` needs a coding agent.** `--harness claude|codex`, then `factory.harness`, then (in a
+- **`factory build` needs a coding agent.** `--harness claude|codex|grok`, then `factory.harness`, then (in a
   terminal) a question that marks the agents that are logged in and in the image and offers to save the
   answer as `factory.harness`. With none of them and no terminal it fails with a `userError` listing the
   options and the config key; there is no silent default. `factory.models.<harness>` fills `--model`
@@ -577,6 +577,20 @@ smelt
   overrides the keychain: `SMELT_CODEX_AUTH_JSON` (base64 of `auth.json`), then `CODEX_API_KEY`.
   Unverified: the host renewal path could not be exercised with fresh tokens, so it is defensive until a
   stored token first gets within 24 hours of expiry.
+- **Grok uses the host's `grok login`, or `XAI_API_KEY`.** There is no `auth login grok`: run `grok login`
+  on this machine. A run sends the sidecars a copy of `~/.grok/auth.json` with every `refresh_token`
+  set to `""`, base64 in the setup-only variable `SMELT_GROK_AUTH_JSON`; setup writes it to
+  `$HOME/.grok/auth.json` (directory 700, file 600). The access token lasts 6 hours; with under 2 hours
+  left a run first runs `grok models` on the host to renew it, and stops with "run `grok login`" if the
+  login is still short. `XAI_API_KEY` (from the environment only) wins over the login and is passed to
+  each turn. A turn runs `grok --output-format streaming-messages-json --always-approve --max-turns 200`
+  with the prompt in `--prompt-file`; the system prompt goes under `## Rules` in that prompt, and the
+  same git guard as Codex refuses `git commit`, `stash`, `reset`, `checkout`, `switch` and `rebase`. A
+  review runs `grok --json-schema … --tools read_file,grep,list_dir` (the reviewer's tool list is fixed)
+  and its answer is read from `structuredOutput`, never from `text`; like Codex, a review that changed
+  the working tree fails. Kit v5 installs the pinned `grok` (`sandboximage.GrokVersion`, SHA-256 per
+  architecture) into `~/.local/bin`. Unverified: grok itself, `grok models` renewing the token, and a
+  token expiring mid-run could not be exercised in the sandbox.
 - **`harness status` reports, it does not choose.** Codex: `account/read` and `account/rateLimits/read`
   over `codex app-server`, with the stored login's refresh token blanked in a temp `CODEX_HOME`; windows
   are named from `windowDurationMins` (300 → `5h`, 10080 → `7d`, 43200 → `30d`, else `<n>m`). Claude:
@@ -626,7 +640,8 @@ smelt
   versioned by `sandboximage.CodexVersion`); a v2 image has Codex but it cannot run anything. Kit v4
   adds `python3`/`python3-venv` and lizard (`sandboximage.LizardVersion`), installed into a venv at
   `~/.local/share/smelt-tools` from pinned wheels with `pip --require-hashes` and linked into
-  `~/.local/bin`; without it, or without `python3`, code quality is `not measured` and nothing fails.
+  `~/.local/bin`; without it, or without `python3`, code quality is `not measured` and nothing fails. Kit v5 adds the
+  Grok CLI.
 - **A Codex turn that cannot start its command host fails the run.** Output saying
   `codex-code-mode-host is missing` or `command host failed to start` (agent message, failed command or
   error event) becomes `codex.ErrHostMissing`; the run ends `failed`, not `no_change`, with "Codex can't
@@ -1105,7 +1120,7 @@ A prompts directory named `patterns` must be passed to `smelt review` as `./patt
 | Key | Scope | Description |
 |-----|-------|-------------|
 | `harness.claude.usage_probe` | user config (`~/.config/smelt/config.json`) | Whether `harness status` may call Claude's usage endpoint (`true`/`false`, default: `true`) |
-| `factory.harness` | `.smelt/config.json` | The coding agent runs use: `claude` or `codex` |
+| `factory.harness` | `.smelt/config.json` | The coding agent runs use: `claude`, `codex` or `grok` |
 | `factory.models.<harness>` | `.smelt/config.json` | The model that agent uses when `--model` is not given |
 | `factory.quality` | `.smelt/config.json` | The quality check of factory runs and `smelt quality`: `{"enabled": true, "maxFunctionComplexity": 15, "maxErosionRise": 1.0, "minCloneLines": 15, "command": "", "exclude": [], "include": [], "defaultExcludes": true}`; `enabled: false` turns the check off, `command` replaces lizard, `minCloneLines` counts lines |
 | `model` | user config (`~/.config/smelt/config.json`) | Claude model override |

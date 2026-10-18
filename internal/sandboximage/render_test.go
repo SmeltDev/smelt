@@ -56,7 +56,7 @@ func TestRenderGolden(t *testing.T) {
 func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
 	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
 	assert.Check(t, cmp.Contains(got, KitCodex()))
-	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex"))
+	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex,grok"))
 	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
 }
 
@@ -72,13 +72,27 @@ func readDockerfileSmelt(t *testing.T) string {
 func TestDockerfileSmeltCarriesTheKitsCodexBlock(t *testing.T) {
 	local := readDockerfileSmelt(t)
 	assert.Check(t, cmp.Contains(local, KitCodex()))
-	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex"))
+	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex,grok"))
+}
+
+func TestKitInstallsAPinnedGrokForBothArchitectures(t *testing.T) {
+	kit := KitGrok()
+	assert.Check(t, cmp.Contains(kit, "https://x.ai/cli/grok-"+GrokVersion+"-linux-${arch}"))
+	assert.Check(t, cmp.Contains(kit, "x86_64) arch=x86_64; sum=2a46d9e4d7ebd7a9cff7f95716714b19dad5f21dd2a497822400b1fb128969aa"))
+	assert.Check(t, cmp.Contains(kit, "aarch64|arm64) arch=aarch64; sum=0b808a2209728788d2e37c34ea1846d460b41528a9fc7edc7698b9e7dec12fe1"))
+	assert.Check(t, cmp.Contains(kit, "sha256sum -c -"))
+	assert.Check(t, cmp.Contains(kit, `test -x "$HOME/.local/bin/grok"`))
+	assert.Check(t, cmp.Contains(Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil)), kit))
+}
+
+func TestDockerfileSmeltCarriesTheKitsGrokBlock(t *testing.T) {
+	assert.Check(t, cmp.Contains(readDockerfileSmelt(t), KitGrok()))
 }
 
 func TestDockerfileSmeltCarriesTheKitsLizardBlock(t *testing.T) {
 	local := readDockerfileSmelt(t)
 	assert.Check(t, cmp.Contains(local, KitLizard()))
-	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex "+LabelKit+"="+kitVersionString()))
+	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex,grok "+LabelKit+"="+kitVersionString()))
 	assert.Check(t, cmp.Contains(local, "python3-venv"))
 }
 
@@ -104,10 +118,10 @@ func TestKitInstallsAPinnedLizard(t *testing.T) {
 
 func TestKitInstallsTheCodexCommandHost(t *testing.T) {
 	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, "(v4)"))
+	assert.Check(t, cmp.Contains(got, "(v5)"))
 	assert.Check(t, cmp.Contains(got, `name="codex-code-mode-host-${arch}-unknown-linux-musl"`))
 	assert.Check(t, cmp.Contains(got, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
-	assert.Check(t, cmp.Equal(strings.Count(got, "sha256sum -c -"), 2))
+	assert.Check(t, cmp.Equal(strings.Count(got, "sha256sum -c -"), 3))
 }
 
 // The version lives in CodexVersion alone, and each asset has a full SHA-256

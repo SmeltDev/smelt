@@ -1,0 +1,1 @@
+{"text":"{\"review\":\"fine\",\"findings\":[]}","stopReason":"max_tokens","sessionId":"01a150aa-8614-7162-9e1f-ce860b00dcdf","usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5},"num_turns":1,"modelUsage":{"grok-4.7-build":{"modelCalls":1}}}
