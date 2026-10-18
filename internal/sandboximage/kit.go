@@ -102,6 +102,32 @@ func kitUser(section string) string {
 	return users[1]
 }
 
+// localDockerfile is the Dockerfile the rebuild hint names when the project
+// does not set one.
+const localDockerfile = "Dockerfile.local"
+
+// StaleImageWarning is the text shown when a user-managed image tag carries an
+// older agent kit than this smelt expects, "" when the image is absent, could
+// not be inspected or is current. dockerfile is the file to rebuild it from;
+// empty means Dockerfile.local.
+func StaleImageWarning(tag string, info ImageInfo, inspectErr error, dockerfile string) string {
+	if inspectErr != nil || info.Status == ImageMissing {
+		return ""
+	}
+	have := "none"
+	if info.KitLabeled {
+		if info.Kit >= KitVersion {
+			return ""
+		}
+		have = strconv.Itoa(info.Kit)
+	}
+	if dockerfile == "" {
+		dockerfile = localDockerfile
+	}
+	return tag + " has agent kit " + have + "; this smelt expects " + kitVersionString() +
+		": rebuild it (docker build -t " + tag + " -f " + dockerfile + " .)"
+}
+
 // KitOutdatedWarning is the text shown when a Dockerfile's kit is older.
 func KitOutdatedWarning(name string, have int) string {
 	return name + " was generated with agent kit v" + strconv.Itoa(have) +

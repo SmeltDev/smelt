@@ -259,8 +259,8 @@ func TestQualityFailsOnOutputThatIsNotTheContract(t *testing.T) {
 			q.MeasureBaseline(context.Background(), "base")
 			f.edit()
 			c := q.Check(context.Background())
-			assert.Equal(t, c.Status, StatusErrored)
-			assert.Assert(t, contains(c.Error, tt.want), c.Error)
+			assert.Equal(t, c.Status, StatusNotMeasured)
+			assert.Assert(t, contains(c.Reason, tt.want), c.Reason)
 			assert.Assert(t, c.Quality == nil, "no summary, never a silent zero")
 			assert.Equal(t, Feedback([]Check{c}), "", "an errored check is not fed back")
 			assert.Assert(t, len(warned) >= 2, "%v", warned)
@@ -362,7 +362,7 @@ func TestQualityRemovesTheWorktreeWhenTheRetryFails(t *testing.T) {
 				cancel()
 			}
 			c := q.Check(ctx)
-			assert.Equal(t, c.Status, StatusErrored)
+			assert.Equal(t, c.Status, StatusNotMeasured)
 			assert.Assert(t, strings.Contains(f.log[len(f.log)-1], "worktree remove"), "the worktree is removed on this path: %v", f.log)
 			assert.Equal(t, f.cleanupCtx[len(f.cleanupCtx)-1], nil, "the cleanup runs although the run was cancelled")
 		})
@@ -391,13 +391,13 @@ func TestQualityMeasurementFailureIsErroredAndWarned(t *testing.T) {
 	var warned []string
 	q.Warn = func(msg string) { warned = append(warned, msg) }
 	c := q.Check(context.Background())
-	assert.Equal(t, c.Status, StatusErrored)
-	assert.Assert(t, c.Error != "")
+	assert.Equal(t, c.Status, StatusNotMeasured)
+	assert.Assert(t, c.Reason != "")
 	assert.Equal(t, Feedback([]Check{c}), "", "an errored check is not fed back")
 	assert.Assert(t, len(warned) >= 1)
 
 	q = &Quality{Exec: f.exec, Entry: &sidecar.PoolEntry{RepoPath: "/r"}}
-	assert.Equal(t, q.Check(context.Background()).Status, StatusErrored, "no baseline commit")
+	assert.Equal(t, q.Check(context.Background()).Status, StatusNotMeasured, "no baseline commit")
 }
 
 func TestQualityLeavesOutFilesWithoutASource(t *testing.T) {
@@ -666,4 +666,10 @@ func TestSourcesScriptSkipsWhatPassesTheSizeCap(t *testing.T) {
 		names = append(names, f.Path)
 	}
 	assert.DeepEqual(t, names, []string{"a.go", "c.go"})
+}
+
+func TestOutcomeQualityNotMeasured(t *testing.T) {
+	nm := FromQuality(quality.Summary{}, 0, errors.New("lizard is not installed"))
+	assert.Equal(t, (Outcome{Checks: []Check{pass, nm}}).QualityNotMeasured(), "lizard is not installed")
+	assert.Equal(t, (Outcome{Checks: []Check{pass}}).QualityNotMeasured(), "")
 }

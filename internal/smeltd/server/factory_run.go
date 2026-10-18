@@ -479,7 +479,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		passed, skipped := 0, 0
 		for _, c := range ev.Checks {
 			switch c.Status {
-			case factory.StatusPassed:
+			case factory.StatusPassed, factory.StatusNotMeasured:
 				passed++
 			case factory.StatusSkipped:
 				skipped++
@@ -505,9 +505,19 @@ func (r *factoryRecorder) event(ev factory.Event) {
 func recordChecksLocked(f *smeltd.FactoryRun, checks []factory.Check) {
 	out := factory.Outcome{Checks: checks}
 	f.SkippedTests = out.Skipped()
+	f.Quality = wireQualityOutcome(out, f.Quality)
+}
+
+// wireQualityOutcome is the status JSON's quality for out's checks: the
+// measurement, or why there is none. It keeps prev when the checks say nothing.
+func wireQualityOutcome(out factory.Outcome, prev *smeltd.FactoryQuality) *smeltd.FactoryQuality {
 	if q := out.Quality(); q != nil {
-		f.Quality = wireQuality(q)
+		return wireQuality(q)
 	}
+	if reason := out.QualityNotMeasured(); reason != "" {
+		return &smeltd.FactoryQuality{Measured: false, Reason: reason}
+	}
+	return prev
 }
 
 // planReviewed records the settled plan. It reads as a line of the run's
@@ -621,6 +631,9 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		Output:     c.Output,
 		Skipped:    c.Skipped,
 	}
+	if c.Status == factory.StatusNotMeasured {
+		rc.Error = c.Reason
+	}
 	if c.Kind == factory.KindQuality {
 		rc.Output = c.Feedback
 		if c.Quality != nil {
@@ -633,6 +646,7 @@ func (r *factoryRecorder) checked(c factory.Check) {
 // wireQuality is a quality measurement as the status JSON carries it.
 func wireQuality(q *quality.Summary) *smeltd.FactoryQuality {
 	out := &smeltd.FactoryQuality{
+		Measured:      true,
 		Line:          q.Line(),
 		ErosionBefore: q.ErosionBefore, ErosionAfter: q.ErosionAfter,
 		OverThresholdBefore: q.OverThresholdBefore, OverThresholdAfter: q.OverThresholdAfter,
@@ -671,9 +685,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Unverified = rep.Outcome.Unverified
 		f.ContinuedFromEmpty = rep.Outcome.FromEmpty
 		f.SkippedTests = rep.Outcome.Skipped()
-		if q := rep.Outcome.Quality(); q != nil {
-			f.Quality = wireQuality(q)
-		}
+		f.Quality = wireQualityOutcome(rep.Outcome, f.Quality)
 		for _, fd := range rep.Outcome.Incomplete() {
 			f.Incomplete = append(f.Incomplete, factory.FindingTitle(fd))
 		}

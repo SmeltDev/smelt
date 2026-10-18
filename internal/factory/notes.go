@@ -59,6 +59,9 @@ type Notes struct {
 	// Quality is the run's quality line, before → after. Like Skipped it is set
 	// from the checks, not written by the model.
 	Quality string `json:"quality,omitempty"`
+	// QualityNotMeasured is why quality could not be measured, set from the
+	// checks. It is rendered as "quality not measured: <reason>".
+	QualityNotMeasured string `json:"qualityNotMeasured,omitempty"`
 }
 
 // NotesInput is what the notes writer is told about a run.
@@ -250,6 +253,9 @@ func (n Notes) sections(label func(string) string) string {
 	}
 	if n.Quality != "" {
 		parts = append(parts, "Quality: "+n.Quality)
+	}
+	if n.QualityNotMeasured != "" {
+		parts = append(parts, "quality not measured: "+n.QualityNotMeasured)
 	}
 	return strings.Join(parts, "\n\n")
 }

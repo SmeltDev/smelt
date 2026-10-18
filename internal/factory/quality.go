@@ -88,7 +88,8 @@ func (q *Quality) warn(msg string) {
 }
 
 // Check measures the sandbox and compares it with the baseline. A measurement
-// that fails is an errored check, which is not fed back, and a warning.
+// that cannot be made is a not_measured check, which never blocks a round, and
+// a warning.
 func (q *Quality) Check(ctx context.Context) Check {
 	start := time.Now()
 	sum, err := q.measure(ctx)

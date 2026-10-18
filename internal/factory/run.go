@@ -452,6 +452,7 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	if q := rep.Outcome.Quality(); q != nil {
 		notes.Quality = q.Line()
 	}
+	notes.QualityNotMeasured = rep.Outcome.QualityNotMeasured()
 	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("PR notes were not generated: %v", err))
 	} else {

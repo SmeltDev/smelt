@@ -249,6 +249,11 @@ func TestLogRecordsTheQualityLineAndFindings(t *testing.T) {
 	got := readLog(t, path)
 	assert.Assert(t, strings.Contains(got, "quality: erosion 27.3% → 27.1% · functions over 15: 14 → 14 · clone lines 120 → 120"), got)
 	assert.Assert(t, strings.Contains(got, "quality [medium] a.go:3 f has complexity 16 (fails the check)"), got)
-	assert.Assert(t, strings.Contains(got, "quality could not be measured: git failed"), got)
+	assert.Assert(t, strings.Contains(got, "quality not measured: git failed"), got)
 	assert.Assert(t, !strings.Contains(got, "validate quality"), got)
+}
+
+func TestCheckTallyCountsNotMeasuredAsPassed(t *testing.T) {
+	nm := FromQuality(quality.Summary{}, 0, errors.New("x"))
+	assert.Equal(t, checkTally([]Check{pass, nm}), "2 of 2 checks passed; not measured: quality")
 }

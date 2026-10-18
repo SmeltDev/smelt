@@ -196,6 +196,11 @@ type RoundCheck struct {
 // change. Erosion is a percentage; the over-threshold counts are of functions
 // above the configured complexity limit.
 type FactoryQuality struct {
+	// Measured is false when quality could not be measured; Reason says why.
+	// Readers of stored status from older runs see false here, so key off the
+	// presence of this object, not Measured alone.
+	Measured bool   `json:"measured"`
+	Reason   string `json:"reason,omitempty"`
 	// Line is the same account as one line of text.
 	Line                string  `json:"line,omitempty"`
 	ErosionBefore       float64 `json:"erosion_before"`
@@ -319,6 +324,8 @@ type Notes struct {
 	Skipped []string `json:"skipped,omitempty"`
 	// Quality is the run's quality line, before → after.
 	Quality string `json:"quality,omitempty"`
+	// QualityNotMeasured is why quality could not be measured.
+	QualityNotMeasured string `json:"qualityNotMeasured,omitempty"`
 }
 
 // Plan mirrors factory.Plan: what the implementer said it would do before it
@@ -373,6 +380,9 @@ const (
 	// CheckSkipped means the check was not started because the round's gates
 	// failed.
 	CheckSkipped = "skipped"
+	// CheckNotMeasured means a quality measurement could not be made. It never
+	// blocks a round; RoundCheck.Error says why.
+	CheckNotMeasured = "not_measured"
 )
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:

@@ -240,6 +240,18 @@ func TestLoopCheckFirstThenNoChangeIsStuck(t *testing.T) {
 	assert.Equal(t, out.Rounds, 1)
 }
 
+func TestLoopPassesWhenQualityCannotBeMeasured(t *testing.T) {
+	nm := FromQuality(quality.Summary{}, 0, errors.New("run the metrics provider: exited 127: lizard is not installed in this image"))
+	steps := &fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{pass, nm}}}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "add a flag")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, out.Rounds, 1)
+	assert.Equal(t, steps.checked, 1)
+	assert.Assert(t, out.Quality() == nil)
+	assert.Assert(t, strings.Contains(out.QualityNotMeasured(), "lizard is not installed in this image"))
+}
+
 func TestLoopSendsAQualityFindingBackAndPassesTheNextRound(t *testing.T) {
 	busy := FromQuality(quality.Summary{Measured: true, Findings: []quality.Finding{{
 		Severity: quality.SeverityMedium, File: "a.go", Line: 12, Func: "busy",

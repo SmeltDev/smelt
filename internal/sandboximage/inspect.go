@@ -35,6 +35,9 @@ type ImageInfo struct {
 	Harnesses []string
 	// Kit is the kit version from LabelKit, 1 when the image has none.
 	Kit int
+	// KitLabeled is whether the image carries LabelKit, to tell an image from
+	// before kit labels (Kit 1) from one built with kit 1.
+	KitLabeled bool
 }
 
 // InspectImage looks tag up on the host and reads its agent labels.
@@ -51,7 +54,7 @@ func (b *Builder) InspectImage(ctx context.Context, tag string) (ImageInfo, erro
 		return out, nil
 	}
 	if v, err := strconv.Atoi(info.Config.Labels[LabelKit]); err == nil && v > 0 {
-		out.Kit = v
+		out.Kit, out.KitLabeled = v, true
 	}
 	if l := info.Config.Labels[LabelHarnesses]; l != "" {
 		out.Status, out.Harnesses = ImageLabeled, strings.Split(l, ",")

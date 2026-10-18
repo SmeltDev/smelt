@@ -910,6 +910,12 @@ synced into the container, so uncommitted work is measured.
   `smelt factory image --update-kit`. `factory.quality.command` replaces it
   with a command that prints the metrics contract as JSON (see
   `internal/quality/contract.go`); output that is not the contract is an error.
+- A measurement that cannot be made (provider missing, exit 127, output that is
+  not the contract) is a `not_measured` check: it counts as passed, is shown as
+  `⚠ quality not measured: <reason>`, appears in the PR notes, and the status
+  JSON carries `quality: {"measured": false, "reason": "..."}`. Only quality
+  findings (medium) can fail a round; `blocksRound` in `internal/factory/check.go` decides what blocks
+  (gates, reviews and quality findings, never a measurement error).
 - Left out: what git ignores, `vendor/`, `node_modules/`, `third_party/`,
   `testdata/`, test files and directories (`*_test.go`, `test_*.py`,
   `*.test.ts`, `*.spec.ts`, `tests/`, `spec/`, ...) and generated files (a

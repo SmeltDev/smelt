@@ -93,12 +93,37 @@ func logPathHint(path string) string {
 // the resulting tag.
 func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root string, flags factorySettings, set factoryExplicit, cfg *config.ProjectConfig) (factorySettings, error) {
 	s, err := resolveFactorySettings(flags, set, cfg)
+	if err == nil && s.ImageSource == imageFromConfig && s.Backend == config.BackendDocker {
+		s.KitWarning = noteStaleImage(ctx, streams, s.Image, cfg)
+	}
 	if err != nil || s.ImageSource != imageFromDockerfile {
 		return s, err
 	}
 	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile, Now: time.Now()})
 	s.Image, err = buildSandboxImage(ctx, streams, root, s.Dockerfile, s.Dockerfile+" changed", false)
 	return s, err
+}
+
+// inspectUserImage reads a user-managed image from the local Docker daemon. It
+// is a variable so tests can fake the daemon.
+var inspectUserImage = func(ctx context.Context, tag string) (sandboximage.ImageInfo, error) {
+	return dockerImages{}.InspectImage(ctx, tag)
+}
+
+// noteStaleImage warns once when the user-managed image carries an older agent
+// kit than this smelt expects, and returns the warning for the run to record.
+// It never fails a run: an image that cannot be inspected is left alone.
+func noteStaleImage(ctx context.Context, streams iostream.Streams, tag string, cfg *config.ProjectConfig) string {
+	info, err := inspectUserImage(ctx, tag)
+	dockerfile := ""
+	if cfg != nil && cfg.Factory != nil {
+		dockerfile = cfg.Factory.Dockerfile
+	}
+	warning := sandboximage.StaleImageWarning(tag, info, err, dockerfile)
+	if warning != "" {
+		streams.ErrPrintln(ui.ErrWarning(warning))
+	}
+	return warning
 }
 
 func newFactoryImageCmd() *cobra.Command {

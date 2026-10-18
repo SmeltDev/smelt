@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 )
 
 func cfgWith(t *testing.T, body string) *config.ProjectConfig {
@@ -63,4 +65,36 @@ func TestPrepareDockerfileRegenerateNeedsDocker(t *testing.T) {
 	got, readErr := os.ReadFile(path)
 	assert.NilError(t, readErr)
 	assert.Equal(t, string(got), "FROM mine\n") // never overwritten on failure
+}
+
+func TestResolveBuildSettingsWarnsAboutAStaleUserImage(t *testing.T) {
+	for name, tt := range map[string]struct {
+		info sandboximage.ImageInfo
+		err  error
+		cfg  string
+		want string
+	}{
+		"label missing": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1},
+			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
+			"smelt-sandbox:local has agent kit none; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.local .)"},
+		"lower": {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: 3, KitLabeled: true},
+			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
+			"smelt-sandbox:local has agent kit 3; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.local .)"},
+		"equal":   {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: sandboximage.KitVersion, KitLabeled: true}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
+		"missing": {sandboximage.ImageInfo{Status: sandboximage.ImageMissing}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
+		"error":   {sandboximage.ImageInfo{}, errors.New("no daemon"), `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
+		"custom dockerfile hint": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1},
+			nil, `{"factory":{"backend":"docker","image":"x:1","dockerfile":"ci/Dockerfile.dev"}}`,
+			"x:1 has agent kit none; this smelt expects 4: rebuild it (docker build -t x:1 -f ci/Dockerfile.dev .)"},
+		"not docker": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1}, nil, `{"factory":{"backend":"circleci","image":"x:1"}}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			old := inspectUserImage
+			t.Cleanup(func() { inspectUserImage = old })
+			inspectUserImage = func(context.Context, string) (sandboximage.ImageInfo, error) { return tt.info, tt.err }
+			got, err := resolveBuildSettings(context.Background(), discardStreams(), t.TempDir(), factorySettings{Attempts: 3}, factoryExplicit{}, cfgWith(t, tt.cfg))
+			assert.NilError(t, err)
+			assert.Equal(t, got.KitWarning, tt.want)
+		})
+	}
 }

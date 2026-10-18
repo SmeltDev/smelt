@@ -8,6 +8,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -69,10 +70,35 @@ func TestFeedbackLeavesOutPassedAndErrored(t *testing.T) {
 	assert.Assert(t, !strings.Contains(fb, "lint"))
 }
 
+func TestBlocksRound(t *testing.T) {
+	for name, tt := range map[string]struct {
+		c    Check
+		want bool
+	}{
+		"passed":                  {Check{Kind: KindValidate, Status: StatusPassed}, false},
+		"failed gate":             {Check{Kind: KindValidate, Status: StatusFailed}, true},
+		"errored review":          {Check{Kind: KindReview, Status: StatusErrored}, true},
+		"skipped review":          {Check{Kind: KindReview, Status: StatusSkipped}, true},
+		"quality finding":         {Check{Kind: KindQuality, Status: StatusFailed}, true},
+		"quality not measured":    {Check{Kind: KindQuality, Status: StatusNotMeasured}, false},
+		"gate that is unmeasured": {Check{Kind: KindValidate, Status: StatusNotMeasured}, true},
+	} {
+		t.Run(name, func(t *testing.T) { assert.Equal(t, blocksRound(tt.c), tt.want) })
+	}
+}
+
 func TestPassedTreatsErroredAsNotPassed(t *testing.T) {
 	assert.Assert(t, Passed([]Check{pass}))
 	assert.Assert(t, !Passed([]Check{pass, errored}))
 	assert.Assert(t, !Passed([]Check{fail}))
+	assert.Assert(t, Passed([]Check{pass, FromQuality(quality.Summary{}, 0, errors.New("lizard is not installed"))}))
+}
+
+func TestFromQualityMapsErrorsToNotMeasured(t *testing.T) {
+	c := FromQuality(quality.Summary{}, 0, errors.New("exited 127: lizard is not installed in this image"))
+	assert.Equal(t, c.Status, StatusNotMeasured)
+	assert.Equal(t, c.Reason, "exited 127: lizard is not installed in this image")
+	assert.Equal(t, FromQuality(quality.Summary{Measured: true}, 0, nil).Status, StatusPassed)
 }
 
 func TestValidationCommands(t *testing.T) {

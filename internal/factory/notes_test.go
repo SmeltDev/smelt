@@ -144,3 +144,12 @@ func TestNotesShowTheQualityLineInThePRBodyAndTheCommit(t *testing.T) {
 	assert.Assert(t, strings.Contains(fallback.PRBody("run-1", testOutcome, ""), "Quality: not measured (no supported code found)"))
 	assert.Assert(t, !strings.Contains(Notes{Title: "t", What: "w"}.PRBody("run-1", testOutcome, ""), "Quality:"))
 }
+
+func TestNotesSayWhenQualityWasNotMeasured(t *testing.T) {
+	const line = "quality not measured: lizard is not installed in this image"
+	n := Notes{Title: "Add a flag", What: "- a flag", Why: "- why", How: "- how", QualityNotMeasured: "lizard is not installed in this image"}
+	assert.Assert(t, strings.Contains(n.PRBody("run-1", testOutcome, ""), line))
+	assert.Assert(t, strings.Contains(n.CommitMessage("run-1", testOutcome, ""), line))
+	n.QualityNotMeasured = ""
+	assert.Assert(t, !strings.Contains(n.PRBody("run-1", testOutcome, ""), "not measured"))
+}
