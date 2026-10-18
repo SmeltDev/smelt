@@ -131,9 +131,6 @@ func ListSessions(root string) ([]Session, error) {
 	return list.Sessions, nil
 }
 
-// DrainDaemon asks the daemon to exit after active sessions finish.
-func DrainDaemon() error { return sessionCall(http.MethodPost, "/drain", nil, nil) }
-
 // CancelSession stops a session. It is the only thing that does: a viewer that
 // quits merely detaches.
 func CancelSession(id string) error {

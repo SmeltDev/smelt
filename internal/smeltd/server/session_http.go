@@ -26,15 +26,6 @@ func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("GET /factory", d.handleSessionList)
 	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
-	mux.HandleFunc("POST /drain", d.handleDrain)
-}
-
-func (d *daemon) handleDrain(w http.ResponseWriter, _ *http.Request) {
-	d.drainMu.Lock()
-	d.draining = true
-	d.drainMu.Unlock()
-	w.WriteHeader(http.StatusAccepted)
-	d.stopIfDrained()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

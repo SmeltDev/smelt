@@ -91,9 +91,6 @@ type daemon struct {
 	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
 	sessions *sessionStore
 	rcfg     ReviewConfig
-	drainMu  sync.Mutex
-	draining bool
-	shutdown func()
 }
 
 // RunDaemon is the smelt daemon entry point, called by the hidden _daemon subcommand.
@@ -216,7 +213,6 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	go d.checkConflictsLoop(ctx)
 
 	srv := newServer(d)
-	d.shutdown = func() { _ = srv.Close() }
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
@@ -262,34 +258,6 @@ func (d *daemon) pollLoop(ctx context.Context) {
 			return
 		}
 	}
-}
-
-func (d *daemon) stopIfDrained() {
-	d.drainMu.Lock()
-	defer d.drainMu.Unlock()
-	if !d.draining || d.shutdown == nil {
-		return
-	}
-	for _, sessions := range d.allSessions() {
-		if sessions.State == smeltd.SessionRunning {
-			return
-		}
-	}
-	d.shutdown()
-}
-
-func (d *daemon) allSessions() []smeltd.Session {
-	d.sessions.mu.Lock()
-	entries := make([]*sessionEntry, 0, len(d.sessions.sessions))
-	for _, e := range d.sessions.sessions {
-		entries = append(entries, e)
-	}
-	d.sessions.mu.Unlock()
-	out := make([]smeltd.Session, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, e.snapshot())
-	}
-	return out
 }
 
 // poll refreshes state for all registered projects, discovering any new ones

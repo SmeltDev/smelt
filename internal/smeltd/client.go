@@ -614,21 +614,36 @@ func launchArgs() []string { return []string{DaemonSubcommand} }
 // launch starts the daemon process. A variable so tests can see whether
 // EnsureRunning and EnsureLaunched decided to start one, without starting one.
 var launch = launchDaemon
-var staleWarning sync.Once
 var replaceDaemon = stopDaemon
 
 // EnsureRunning checks whether the smelt daemon is running and serving, and
 // launches it if not.
 func EnsureRunning() error {
-	return ensureRunning(nil, false)
+	return (&DaemonClient{}).EnsureRunning()
 }
 
-// EnsureRunningWithWarning also reports stale daemons to interactive callers.
+// DaemonClient ensures the daemon is running and tells an interactive user when
+// the one it found is from an older build. The zero value is silent. It owns the
+// once-only state of that warning, so one client warns once however often it is
+// asked.
+type DaemonClient struct {
+	// Stderr receives the stale-daemon warning when Interactive is set.
+	Stderr      io.Writer
+	Interactive bool
+
+	warnOnce sync.Once
+}
+
+// EnsureRunningWithWarning is EnsureRunning for a command that reports a stale
+// daemon on stderr when interactive.
 func EnsureRunningWithWarning(stderr io.Writer, interactive bool) error {
-	return ensureRunning(stderr, interactive)
+	return (&DaemonClient{Stderr: stderr, Interactive: interactive}).EnsureRunning()
 }
 
-func ensureRunning(stderr io.Writer, interactive bool) error {
+// EnsureRunning checks whether the daemon is running and serving, and launches
+// it if not. A daemon from another build that still has runs is kept and
+// drained rather than replaced.
+func (c *DaemonClient) EnsureRunning() error {
 	// Remote daemons are managed externally; local pid/socket operations are
 	// irrelevant and would start a stray local daemon.
 	if TCPRemoteAddr() != "" {
@@ -664,17 +679,15 @@ func ensureRunning(stderr io.Writer, interactive bool) error {
 					active++
 				}
 			}
+			// A daemon without the session API has no runs to protect.
+			if errors.Is(listErr, ErrNoSessionAPI) {
+				listErr = nil
+			}
 			if listErr != nil || active > 0 {
-				_ = DrainDaemon()
-				if interactive && stderr != nil {
-					staleWarning.Do(func() {
-						if listErr != nil {
-							_, _ = fmt.Fprintln(stderr, "smelt daemon is from an older build and its active run count is unavailable; it will be replaced when they finish")
-							return
-						}
-						_, _ = fmt.Fprintf(stderr, "smelt daemon is from an older build and has %d active run(s); it will be replaced when they finish\n", active)
-					})
-				}
+				// A daemon too old to drain still serves its runs; it is
+				// replaced by the next command after it ends.
+				_, _ = Drain()
+				c.warnStale(active, listErr)
 				return nil
 			}
 			// A daemon from another build is replaced rather than reused: see
@@ -685,6 +698,20 @@ func ensureRunning(stderr io.Writer, interactive bool) error {
 		}
 	}
 	return launch()
+}
+
+// warnStale tells an interactive user, once, that the daemon is an older build.
+func (c *DaemonClient) warnStale(active int, listErr error) {
+	if !c.Interactive || c.Stderr == nil {
+		return
+	}
+	c.warnOnce.Do(func() {
+		if listErr != nil {
+			_, _ = fmt.Fprintln(c.Stderr, "smelt daemon is from an older build and its active run count is unavailable; it will be replaced when they finish")
+			return
+		}
+		_, _ = fmt.Fprintf(c.Stderr, "smelt daemon is from an older build and has %d active run(s); it will be replaced when they finish\n", active)
+	})
 }
 
 // EnsureLaunched starts the daemon when nothing is answering and otherwise

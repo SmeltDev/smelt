@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,18 +16,6 @@ import (
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
-
-func TestDrainWaitsForActiveSessionsThenShutsDown(t *testing.T) {
-	d := &daemon{sessions: newSessionStore(context.Background())}
-	stopped := 0
-	d.shutdown = func() { stopped++ }
-	entry, _, _ := d.sessions.add(smeltd.Session{ProjectRoot: "/repo"}, 1)
-	rec := httptest.NewRecorder()
-	d.handleDrain(rec, httptest.NewRequest("POST", "/drain", nil))
-	assert.Equal(t, stopped, 0)
-	d.settleSession(entry, nil)
-	assert.Equal(t, stopped, 1)
-}
 
 // newTestDaemon builds a daemon the way RunDaemon does, minus the socket and
 // the poll loop, for tests that drive poll and snapshot by hand.
