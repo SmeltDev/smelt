@@ -63,6 +63,9 @@ func (p *parser) line(b []byte) {
 	case "item.completed":
 		p.item(e)
 	case "turn.completed":
+		// The usage is the whole turn's total, summed over its model calls, so
+		// it says nothing of the largest prompt: ContextPeak and ModelCalls
+		// stay 0 (n/a) until the events carry a per-request count.
 		p.done = true
 		p.turn.InputTokens = e.Usage.InputTokens
 		p.turn.CachedTokens = e.Usage.CachedTokens

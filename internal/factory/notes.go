@@ -62,6 +62,9 @@ type Notes struct {
 	// QualityNotMeasured is why quality could not be measured, set from the
 	// checks. It is rendered as "quality not measured: <reason>".
 	QualityNotMeasured string `json:"qualityNotMeasured,omitempty"`
+	// Context is how large the prompt of the turn that wrote the notes got. It
+	// is for the run log and never reaches the PR.
+	Context harness.Context `json:"-"`
 }
 
 // NotesInput is what the notes writer is told about a run.
@@ -118,10 +121,13 @@ func (s *Sidecars) writeNotes(ctx context.Context, in NotesInput) (Notes, error)
 	if in.Log != nil {
 		in.Log("notes response", out)
 	}
+	parse := ParseNotes
 	if h.Name() != harness.Claude {
-		return parseNotesMessage(out)
+		parse = parseNotesMessage
 	}
-	return ParseNotes(out)
+	n, err := parse(out)
+	n.Context = h.ReviewContext(out)
+	return n, err
 }
 
 // notesPrompt tells the writer what the run was for and how it ended.

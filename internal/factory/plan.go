@@ -82,6 +82,9 @@ type Plan struct {
 	Risks            []string   `json:"risks"`
 	Questions        []string   `json:"questions"`
 	CannotVerifyHere []string   `json:"cannot_verify_here"`
+	// Context is how large the prompt of the turn that wrote the plan got. It
+	// is measured, never read from the agent's answer.
+	Context harness.Context `json:"-"`
 }
 
 // PlanFile is one file a plan touches.
@@ -240,6 +243,7 @@ func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	p.Context = h.ReviewContext(out)
 	return validPlan(p)
 }
 

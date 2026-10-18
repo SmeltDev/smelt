@@ -19,7 +19,8 @@ func claudeJSON(t *testing.T, structured any) string {
 	assert.NilError(t, err)
 	raw, err := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false,
-		"result": string(text), "structured_output": structured,
+		"result": string(text), "structured_output": structured, "num_turns": 1,
+		"usage": map[string]any{"input_tokens": 10, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 3000},
 	})
 	assert.NilError(t, err)
 	return string(raw)

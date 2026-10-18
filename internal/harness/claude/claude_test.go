@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -75,4 +76,19 @@ func TestReviewScriptStream(t *testing.T) {
 	assert.Assert(t, strings.Contains(streamed, "'--verbose'"), "stream-json needs --verbose: %s", streamed)
 	assert.Assert(t, strings.Contains(streamed, "'--json-schema'"), "the schema still applies: %s", streamed)
 	assert.Assert(t, strings.Contains(streamed, "'--allowedTools' 'Read'"), streamed)
+}
+
+func TestReviewContext(t *testing.T) {
+	b, err := os.ReadFile("../testdata/real/claude-stream.jsonl")
+	assert.NilError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	result := lines[len(lines)-1]
+	assert.Assert(t, strings.Contains(result, `"num_turns":1`))
+
+	// One turn is one model call, so the turn's usage is that call's size.
+	assert.Equal(t, Harness{}.ReviewContext(result), harness.Context{Peak: 2796 + 2074 + 15333, Calls: 1})
+	// Several turns only have a total, which says nothing of the peak.
+	several := strings.Replace(result, `"num_turns":1`, `"num_turns":4`, 1)
+	assert.Equal(t, Harness{}.ReviewContext(several), harness.Context{})
+	assert.Equal(t, Harness{}.ReviewContext("not json"), harness.Context{})
 }

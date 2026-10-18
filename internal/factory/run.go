@@ -434,6 +434,9 @@ func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report,
 		start := time.Now()
 		rep.Notes = describeWork(ctx, steps, wt, *rep, in, status)
 		rep.Timing.Notes = time.Since(start)
+		if rep.Notes != nil {
+			rep.Timing.NotesContext = rep.Notes.Context
+		}
 	}
 }
 

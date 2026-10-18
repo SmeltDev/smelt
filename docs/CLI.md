@@ -461,6 +461,16 @@ smelt
   call and the next activity, so a slight overestimate). Any single tool call over 2 minutes is logged as a
   warning with its command. `timing.gate_only_rounds`, and `gates_only_failed` on a round, name the rounds that
   failed on gates alone.
+- **Peak context per turn.** When any turn's size is known, a second line follows the `Time:` line, e.g.
+  `Context: implementer peak 88k (round 1), 52k (round 2) · reviews peak 41k · plan 31k` (`(round N)` only with
+  more than one round; `n/a` for a phase that ran with no known size). The peak is the largest prompt
+  (`input + cache read + cache creation` tokens) the agent sent in one model call of the turn. Status JSON has
+  `implementer.context_peak` and `model_calls` per round, `context_peak` per review, and `timing.context_peak_max`
+  (the largest of any turn, notes included); the run log has one line per turn, such as
+  `context peak 88,412 tokens (24 model calls)`. Nothing goes in the PR notes. The implementer is streamed, so
+  its peak is exact. Plan, review and notes turns are not streamed and only report their total usage, so they
+  show a peak only when they made a single model call and `n/a (not streamed)` otherwise. Codex reports only a
+  turn's total usage, not per request, so all its turns are `n/a`. Plan reviews are not measured.
 - **Blocked is not unverified.** `blocked` means part of the request was not done (a credential it needs, a
   manual step, an open decision): the implementer ends its summary with `BLOCKED: <what and why>`, the run
   ends `blocked` and is never published. `UNVERIFIED: <what to check and how>` lines mean the work is done

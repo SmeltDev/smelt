@@ -2,12 +2,14 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -106,6 +108,13 @@ func TestWriteNotes(t *testing.T) {
 	assert.DeepEqual(t, logged, []string{"notes prompt", "notes response"})
 }
 
+func TestWriteNotesMeasuresItsContext(t *testing.T) {
+	s, _ := notesSidecars(func(string, map[string]string) (int, string, error) { return 0, measured(notesJSON), nil })
+	n, err := s.WriteNotes(context.Background(), NotesInput{Request: "r"})
+	assert.NilError(t, err)
+	assert.Equal(t, n.Context, harness.Context{Peak: 3210, Calls: 1})
+}
+
 func TestWriteNotesFallsBack(t *testing.T) {
 	for name, run := range map[string]func(string, map[string]string) (int, string, error){
 		"exit":     func(string, map[string]string) (int, string, error) { return 1, "", nil },
@@ -152,4 +161,15 @@ func TestNotesSayWhenQualityWasNotMeasured(t *testing.T) {
 	assert.Assert(t, strings.Contains(n.CommitMessage("run-1", testOutcome, ""), line))
 	n.QualityNotMeasured = ""
 	assert.Assert(t, !strings.Contains(n.PRBody("run-1", testOutcome, ""), "not measured"))
+}
+
+func TestNotesContextStaysOutOfThePR(t *testing.T) {
+	n := Notes{Title: "Add a flag", What: "- a flag", Why: "- why", How: "- how", Context: harness.Context{Peak: 30700, Calls: 1}}
+	for _, text := range []string{n.PRBody("run-1", testOutcome, ""), n.CommitMessage("run-1", testOutcome, "")} {
+		assert.Assert(t, !strings.Contains(strings.ToLower(text), "context"), text)
+		assert.Assert(t, !strings.Contains(text, "30"), text)
+	}
+	b, err := json.Marshal(n)
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(string(b), "Context"), string(b))
 }

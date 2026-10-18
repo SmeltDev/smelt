@@ -18,6 +18,7 @@ import (
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
@@ -747,4 +748,32 @@ func TestFactoryRecorderOmitsQualityWhenTheCheckIsOff(t *testing.T) {
 	b, err := json.Marshal(entry.snapshot().Factory)
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(b), "quality"), string(b))
+}
+
+func TestStatusCarriesContextPeaks(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	rec := &factoryRecorder{entry: entry, prompts: []review.Prompt{{Name: "bugs"}}, rounds: map[int]int{}}
+	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 1})
+	rec.event(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{ContextPeak: 88412, ModelCalls: 24}})
+	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{
+		{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusPassed, Context: harness.Context{Peak: 41000, Calls: 1}},
+	}})
+
+	round := entry.snapshot().Rounds[0]
+	assert.Equal(t, round.Implement.ContextPeak, 88412)
+	assert.Equal(t, round.Implement.ModelCalls, 24)
+	assert.Equal(t, round.Reviews[0].ContextPeak, 41000)
+	b, err := json.Marshal(round)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"context_peak":88412`), string(b))
+	assert.Assert(t, strings.Contains(string(b), `"context_peak":41000`), string(b))
+
+	tm := factory.Timing{ImplementContext: []factory.RoundContext{{Round: 1, Context: harness.Context{Peak: 88412, Calls: 24}}}}
+	wire := wireTiming(tm)
+	assert.Equal(t, wire.ContextPeakMax, 88412)
+	b, err = json.Marshal(wire)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"context_peak_max":88412`), string(b))
+	assert.Assert(t, strings.Contains(wire.Line, "\nContext: implementer peak 88k"), wire.Line)
 }

@@ -131,6 +131,9 @@ type Result struct {
 	// Parsed holds the structured findings when Options.StructuredFindings is
 	// set.
 	Parsed Parsed
+	// Context is how large the review's prompt got, when it was run with
+	// structured findings and the harness reports it; zero otherwise.
+	Context harness.Context
 }
 
 // Execer runs a shell script on a sidecar and streams its output. onSubmitted,
@@ -301,6 +304,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 			return r.fail(err)
 		}
 		r.Parsed = parsed
+		r.Context = h.ReviewContext(stdout.String())
 		r.Output = parsed.Prose
 	}
 	return r

@@ -388,6 +388,7 @@ func TestRunPassStructuredFindings(t *testing.T) {
 	assert.Equal(t, results[0].Output, "One issue.", "the prose replaces the JSON result")
 	assert.Equal(t, len(results[0].Parsed.Findings), 1)
 	assert.Equal(t, results[0].Parsed.Findings[0].File, "a.go")
+	assert.Equal(t, results[0].Context, harness.Context{Peak: 3210, Calls: 1})
 	assert.Assert(t, strings.Contains(results[1].Error, "read claude's result"), results[1].Error)
 }
 

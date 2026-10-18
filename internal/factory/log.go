@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
@@ -139,6 +140,9 @@ func (l *runLog) event(e Event) {
 		l.line("step", "planning")
 	case EventPlanReviewed:
 		l.block("plan", e.Plan.Markdown())
+		if e.Plan != nil {
+			l.line("info", "plan: "+contextLogLine(e.Plan.Context))
+		}
 		for _, f := range e.Findings {
 			l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)
 		}
@@ -148,14 +152,7 @@ func (l *runLog) event(e Event) {
 	case EventImplementing:
 		l.block(fmt.Sprintf("round %d: prompt sent to the implementer", e.Round), e.Prompt)
 	case EventImplemented:
-		l.line("info", fmt.Sprintf("round %d: implementer finished in %s ($%.2f)", e.Round, e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
-		l.block(fmt.Sprintf("round %d: implementer's summary", e.Round), e.Turn.Summary)
-		for _, item := range UnverifiedItems(e.Turn.Summary) {
-			l.line("info", "unverified: "+item)
-		}
-		if len(e.Turn.Unproven) > 0 {
-			l.line("warn", fmt.Sprintf("round %d: the summary claims gates that were not run after the last edit: %s", e.Round, strings.Join(e.Turn.Unproven, ", ")))
-		}
+		l.implemented(e)
 	case EventCollected:
 		if e.Change.Empty() {
 			l.line("info", fmt.Sprintf("round %d: no changes", e.Round))
@@ -171,6 +168,20 @@ func (l *runLog) event(e Event) {
 			}
 		}
 		l.line("info", fmt.Sprintf("round %d: %s", e.Round, checkTally(e.Checks)))
+	}
+}
+
+// implemented records the implementer's turn: how long it took and what it
+// cost, how large its context got, and what it said.
+func (l *runLog) implemented(e Event) {
+	l.line("info", fmt.Sprintf("round %d: implementer finished in %s ($%.2f)", e.Round, e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
+	l.line("info", fmt.Sprintf("round %d: implementer %s", e.Round, contextLogLine(harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls})))
+	l.block(fmt.Sprintf("round %d: implementer's summary", e.Round), e.Turn.Summary)
+	for _, item := range UnverifiedItems(e.Turn.Summary) {
+		l.line("info", "unverified: "+item)
+	}
+	if len(e.Turn.Unproven) > 0 {
+		l.line("warn", fmt.Sprintf("round %d: the summary claims gates that were not run after the last edit: %s", e.Round, strings.Join(e.Turn.Unproven, ", ")))
 	}
 }
 
@@ -209,6 +220,7 @@ func (l *runLog) review(round int, c Check) {
 	case StatusPassed, StatusFailed, StatusNotMeasured:
 	}
 	l.line(statusLevel(c.Status), fmt.Sprintf("%s with %d finding(s)", head, len(c.Findings)))
+	l.line("info", fmt.Sprintf("round %d: review %s %s", round, c.Name, contextLogLine(c.Context)))
 	for _, f := range c.Findings {
 		// Only a finding worth changing is fed back, and only when a round
 		// follows this one.
@@ -284,7 +296,12 @@ func (l *runLog) close(rep Report, err error) {
 		return
 	}
 	if rep.Started {
-		l.line("end", rep.Timing.Format())
+		if rep.Notes != nil {
+			l.line("end", "notes: "+contextLogLine(rep.Notes.Context))
+		}
+		for _, line := range strings.Split(rep.Timing.Format(), "\n") {
+			l.line("end", line)
+		}
 		if len(rep.Timing.GateOnlyRounds) > 0 {
 			l.line("end", fmt.Sprintf("rounds that failed on gates alone: %v", rep.Timing.GateOnlyRounds))
 		}
