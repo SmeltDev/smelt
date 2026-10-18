@@ -70,6 +70,8 @@ func (p *parser) line(b []byte) {
 		p.turn.InputTokens = e.Usage.InputTokens
 		p.turn.CachedTokens = e.Usage.CachedTokens
 		p.turn.OutputTokens = e.Usage.OutputTokens
+	case "context.compacted", "context_compacted":
+		p.turn.Compactions++
 	case "error":
 		p.fail(e.Message)
 	case "turn.failed":

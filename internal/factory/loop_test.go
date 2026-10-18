@@ -64,6 +64,28 @@ func TestLoopPassesFirstRound(t *testing.T) {
 	assert.DeepEqual(t, steps.prompts, []string{"add a flag"})
 }
 
+type freshFakeSteps struct {
+	fakeSteps
+	fresh      int
+	gotHandoff bool
+}
+
+func (f *freshFakeSteps) FreshSession() { f.fresh++ }
+func (f *freshFakeSteps) Handoff(_ context.Context, ticket, feedback string, _ *Plan, prior Turn, change Change, checks []Check) (string, error) {
+	f.gotHandoff = ticket == "ticket" && feedback != "" && prior.Summary != "" && change.Stat != "" && len(checks) > 0
+	return "handoff prompt", nil
+}
+
+func TestFreshRoundStartsSessionAndUsesHandoff(t *testing.T) {
+	steps := &freshFakeSteps{fakeSteps: fakeSteps{changes: []Change{change(1), change(2)}, checks: [][]Check{{fail}, {pass}}}}
+	out, err := (Loop{Attempts: 2, FreshRounds: true}).Run(context.Background(), steps, "ticket")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, steps.fresh, 1)
+	assert.Assert(t, steps.gotHandoff)
+	assert.DeepEqual(t, steps.prompts, []string{"ticket", "handoff prompt"})
+}
+
 func TestLoopFeedsFailuresBackUntilPass(t *testing.T) {
 	steps := &fakeSteps{changes: []Change{change(1), change(2)}, checks: [][]Check{{pass, fail}, {pass, pass}}}
 	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "add a flag")

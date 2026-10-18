@@ -46,6 +46,20 @@ func TestImplementScriptExportsTheBashTimeouts(t *testing.T) {
 	assert.Assert(t, !strings.Contains(script, "BASH_"), script)
 }
 
+func TestImplementScriptAutoCompaction(t *testing.T) {
+	for _, tc := range []struct {
+		window int
+		want   string
+	}{{150000, "--autocompact 150000"}, {250000, "--autocompact 250000"}, {0, ""}} {
+		script := Harness{}.ImplementScript(harness.ImplementInput{RepoPath: "/repo", Prompt: "go", ContextWindow: tc.window})
+		if tc.want == "" {
+			assert.Assert(t, !strings.Contains(script, "--autocompact"), script)
+		} else {
+			assert.Assert(t, strings.Contains(script, strings.ReplaceAll(tc.want, " ", "' '")), script)
+		}
+	}
+}
+
 func TestRunErrorDeadline(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -93,6 +94,12 @@ func (p Pack) Empty() bool { return len(p.Entries) == 0 }
 // error wrapping os.ErrNotExist.
 type FileSource interface {
 	ReadFile(ctx context.Context, path string) ([]byte, error)
+}
+
+type workingFiles struct{ root string }
+
+func (w workingFiles) ReadFile(_ context.Context, p string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(w.root, filepath.FromSlash(p)))
 }
 
 // GitFiles reads files from the commit Rev of the repository Git runs in.

@@ -121,6 +121,8 @@ type Event struct {
 
 // Loop drives the implementer through rounds of review and validation.
 type Loop struct {
+	// FreshRounds starts each fix round in a new session and gives it a compact handoff.
+	FreshRounds bool
 	// Attempts is the most rounds to check. Each round after the first starts
 	// with an implementer turn fixing the previous round's failures.
 	Attempts int
@@ -171,87 +173,132 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 	if emit == nil {
 		emit = func(Event) {}
 	}
-
 	var out Outcome
-	if l.Planner != nil && !l.CheckFirst {
-		plan, preamble, err := l.plan(ctx, emit, prompt)
-		if err != nil {
-			return out, fmt.Errorf("plan: %w", err)
-		}
-		out.Plan, prompt = &plan, preamble+prompt
+	state, err := l.prepare(ctx, steps, emit, prompt, &out)
+	if err != nil || state.done {
+		return out, err
 	}
-	// lead is held back from the implementer until there is feedback to send
-	// with it, when the loop checks first.
-	var lead string
-	if l.CheckFirst || l.EmptyPrompt != "" {
-		change, err := steps.Collect(ctx)
-		if err != nil {
-			return out, fmt.Errorf("round 1: %w", err)
-		}
-		emit(Event{Kind: EventCollected, Round: 1, Change: change})
-		switch {
-		case change.Empty() && l.EmptyPrompt != "":
-			emit(Event{Kind: EventNoPriorWork})
-			out.FromEmpty, prompt = true, l.EmptyPrompt
-		case change.Empty():
-			out.Result, out.Change = ResultNoChange, change
-			return out, nil
-		case l.CheckFirst:
-			out.Change = change
-			lead, prompt = prompt, ""
-		}
-	}
+	prompt, lead := state.prompt, state.lead
+	var previous Turn
 	for round := 1; ; round++ {
 		// An empty prompt means the last round failed only on checks that could
 		// not run: there is nothing to fix, so the same code is checked again.
 		if prompt != "" {
-			emit(Event{Kind: EventImplementing, Round: round, Prompt: prompt})
-			turn, err := steps.Implement(ctx, prompt)
-			if err != nil {
-				return out, fmt.Errorf("round %d: implement: %w", round, err)
+			var done bool
+			previous, done, err = l.implementRound(ctx, steps, emit, round, prompt, state.request, previous, &out)
+			if err != nil || done {
+				return out, err
 			}
-			emit(Event{Kind: EventImplemented, Round: round, Turn: turn})
-			out.Blocked = BlockedReason(turn.Summary)
-			out.Unverified = UnverifiedItems(turn.Summary)
-
-			change, err := steps.Collect(ctx)
-			if err != nil {
-				return out, fmt.Errorf("round %d: %w", round, err)
-			}
-			emit(Event{Kind: EventCollected, Round: round, Change: change})
-			switch {
-			case change.Empty():
-				out.Result, out.Change = ResultNoChange, change
-				return out, nil
-			case round > 1 && change.Fingerprint == out.Change.Fingerprint:
-				// The last round's checks still describe this code.
-				out.Result = ResultStuck
-				return out, nil
-			}
-			out.Change = change
 		}
+		done, err := l.checkRound(ctx, steps, emit, round, &out)
+		if err != nil || done {
+			return out, err
+		}
+		prompt = Feedback(out.Checks)
+		prompt, lead = combineLead(lead, prompt)
+	}
+}
 
-		emit(Event{Kind: EventChecking, Round: round})
-		checks, err := steps.Check(ctx, round)
+type loopState struct {
+	request, prompt, lead string
+	done                  bool
+}
+
+func (l Loop) prepare(ctx context.Context, steps Steps, emit func(Event), prompt string, out *Outcome) (loopState, error) {
+	state := loopState{request: prompt, prompt: prompt}
+	if l.Planner != nil && !l.CheckFirst {
+		plan, preamble, err := l.plan(ctx, emit, prompt)
 		if err != nil {
-			return out, fmt.Errorf("round %d: check: %w", round, err)
+			return state, fmt.Errorf("plan: %w", err)
 		}
-		out.Rounds, out.Checks = round, checks
-		emit(Event{Kind: EventChecked, Round: round, Checks: checks})
+		out.Plan, state.prompt = &plan, preamble+prompt
+	}
+	if !l.CheckFirst && l.EmptyPrompt == "" {
+		return state, nil
+	}
+	change, err := steps.Collect(ctx)
+	if err != nil {
+		return state, fmt.Errorf("round 1: %w", err)
+	}
+	emit(Event{Kind: EventCollected, Round: 1, Change: change})
+	if change.Empty() && l.EmptyPrompt != "" {
+		emit(Event{Kind: EventNoPriorWork})
+		out.FromEmpty, state.prompt = true, l.EmptyPrompt
+		return state, nil
+	}
+	if change.Empty() {
+		out.Result, out.Change, state.done = ResultNoChange, change, true
+		return state, nil
+	}
+	if l.CheckFirst {
+		out.Change, state.lead, state.prompt = change, state.prompt, ""
+	}
+	return state, nil
+}
 
-		if Passed(checks) {
-			out.Result = ResultPassed
-			return out, nil
+func (l Loop) implementRound(ctx context.Context, steps Steps, emit func(Event), round int, prompt, request string, previous Turn, out *Outcome) (Turn, bool, error) {
+	if round > 1 && l.FreshRounds {
+		if fresh, ok := steps.(interface{ FreshSession() }); ok {
+			fresh.FreshSession()
 		}
-		if round == l.Attempts {
-			out.Result = ResultExhausted
-			return out, nil
-		}
-		prompt = Feedback(checks)
-		if lead != "" && prompt != "" {
-			prompt, lead = lead+"\n\n"+prompt, ""
+		if handoff, ok := steps.(interface {
+			Handoff(context.Context, string, string, *Plan, Turn, Change, []Check) (string, error)
+		}); ok {
+			var err error
+			prompt, err = handoff.Handoff(ctx, request, prompt, out.Plan, previous, out.Change, out.Checks)
+			if err != nil {
+				return previous, false, fmt.Errorf("round %d handoff: %w", round, err)
+			}
 		}
 	}
+	emit(Event{Kind: EventImplementing, Round: round, Prompt: prompt})
+	turn, err := steps.Implement(ctx, prompt)
+	if err != nil {
+		return previous, false, fmt.Errorf("round %d: implement: %w", round, err)
+	}
+	emit(Event{Kind: EventImplemented, Round: round, Turn: turn})
+	out.Blocked, out.Unverified = BlockedReason(turn.Summary), UnverifiedItems(turn.Summary)
+	change, err := steps.Collect(ctx)
+	if err != nil {
+		return turn, false, fmt.Errorf("round %d: %w", round, err)
+	}
+	emit(Event{Kind: EventCollected, Round: round, Change: change})
+	if change.Empty() {
+		out.Result, out.Change = ResultNoChange, change
+		return turn, true, nil
+	}
+	if round > 1 && change.Fingerprint == out.Change.Fingerprint {
+		out.Result = ResultStuck
+		return turn, true, nil
+	}
+	out.Change = change
+	return turn, false, nil
+}
+
+func (l Loop) checkRound(ctx context.Context, steps Steps, emit func(Event), round int, out *Outcome) (bool, error) {
+	emit(Event{Kind: EventChecking, Round: round})
+	checks, err := steps.Check(ctx, round)
+	if err != nil {
+		return false, fmt.Errorf("round %d: check: %w", round, err)
+	}
+	out.Rounds, out.Checks = round, checks
+	emit(Event{Kind: EventChecked, Round: round, Checks: checks})
+	if Passed(checks) {
+		out.Result = ResultPassed
+		return true, nil
+	}
+	if round == l.Attempts {
+		out.Result = ResultExhausted
+		return true, nil
+	}
+	return false, nil
+}
+
+func combineLead(lead, prompt string) (string, string) {
+	if lead == "" || prompt == "" {
+		return prompt, lead
+	}
+	return lead + "\n\n" + prompt, ""
 }
 
 // plan has the implementer write a plan and has it reviewed. A plan whose

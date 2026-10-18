@@ -36,6 +36,10 @@ type PackOptions struct {
 // RunOptions is one factory run. Everything that needs a person, such as
 // picking an org or finding a credential, is settled before it.
 type RunOptions struct {
+	// Rounds selects fresh sessions or the legacy resumed session; empty defaults to fresh.
+	Rounds string
+	// ContextWindow is the implementer auto-compaction threshold; zero requests agent default.
+	ContextWindow int
 	// Root is the developer's repository root. The run's worktree is made from
 	// it, and the pool's state is kept in it, where the dashboard finds it.
 	Root string
@@ -344,7 +348,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Exec: exec,
 		Implementer: &Implementer{
 			Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
-			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
+			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions, ContextWindow: opts.ContextWindow,
 			OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
 		},
 		Acquire:       pool.Acquire,
@@ -715,7 +719,7 @@ func (o *RunOptions) checkIntegrate() error {
 // hears every event, and the status function hears of a continued run that
 // found no work.
 func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string) {
-	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps), CheckHints: o.Pack.Enabled}
+	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps), CheckHints: o.Pack.Enabled, FreshRounds: o.Rounds != "resume"}
 	if o.Status != nil {
 		loop.OnEvent = func(e Event) {
 			if e.Kind == EventNoPriorWork {

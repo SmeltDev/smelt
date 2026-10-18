@@ -224,6 +224,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		From:                    req.From,
 		Integrate:               integrate,
 		Attempts:                attempts,
+		Rounds:                  cfg.Factory.RoundPolicy(),
+		ContextWindow:           cfg.Factory.ImplementContextWindow(),
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
 		Commands:                commands,
