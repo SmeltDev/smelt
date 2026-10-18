@@ -9,6 +9,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // Continuation is a run that picks up the work an earlier run left on its
@@ -22,6 +23,8 @@ type Continuation struct {
 	// Without it the run checks the work as it is before the implementer's
 	// first turn, so that turn is sent what failed.
 	Guidance string
+	// pack is the re-validated context pack as a prompt section, "" for none.
+	pack string
 }
 
 // checkFirst reports whether the run checks the work before the implementer's
@@ -43,6 +46,7 @@ func (c *Continuation) prompt() string {
 		b.WriteString("\n\nThe developer adds:\n\n")
 		b.WriteString(g)
 	}
+	b.WriteString(c.packSection())
 	if len(c.From.Conflicts) > 0 {
 		base := ChooseBase("", c.From.BaseBranch, c.From.DefaultBranch)
 		fmt.Fprintf(&b, "\n\nThe branch was merged with `%s`; these files contain conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`): %s. "+
@@ -62,7 +66,54 @@ func (c *Continuation) emptyPrompt() string {
 		b.WriteString(g)
 	}
 	b.WriteString("\n\nAn earlier run on this branch produced no work; start from the request.")
+	b.WriteString(c.packSection())
 	return b.String()
+}
+
+// packSection is the context pack as the end of a prompt, "" without one.
+func (c *Continuation) packSection() string {
+	if c.pack == "" {
+		return ""
+	}
+	return "\n\n" + c.pack
+}
+
+// continueRun gives a continued run, and so opts.Continue and its prompt, the
+// pack of the run it continues; a run that is not continued is left alone.
+func (s *Sidecars) continueRun(ctx context.Context, opts *RunOptions, wt Worktree, rec *Record, status iostream.StatusFunc) {
+	if opts.Continue == nil {
+		return
+	}
+	opts.Continue = s.continuePack(ctx, *opts, wt, rec, status)
+	opts.Prompt = opts.Continue.prompt()
+	if s.Pack != nil && opts.OnPack != nil {
+		opts.OnPack(*s.Pack)
+	}
+}
+
+// continuePack gives the continued run the pack of the run it continues,
+// re-validated against the branch's current tree. It returns the continuation
+// to run with, which carries the pack in its prompts, and gives the pack to
+// the reviewers and the run's record. With the pack off the recorded pack is
+// ignored, and kept in the record for later runs. A pack that cannot be
+// reused never fails the run.
+func (s *Sidecars) continuePack(ctx context.Context, opts RunOptions, wt Worktree, rec *Record, status iostream.StatusFunc) *Continuation {
+	c := *opts.Continue
+	rec.Pack = c.From.Pack
+	if !opts.Pack.Enabled || c.From.Pack == nil {
+		return &c
+	}
+	git := gitexec.Runner{Dir: wt.Path}
+	pk := Reanchor(ctx, *c.From.Pack, GitFiles{Git: git, Rev: c.From.Baseline}, GitFiles{Git: git, Rev: "HEAD"}, opts.Pack.MaxTokens)
+	for _, line := range pk.LogLines() {
+		status(iostream.LevelInfo, line)
+	}
+	if pk.Empty() {
+		status(iostream.LevelInfo, noPack)
+		return &c
+	}
+	s.Pack, rec.Pack, c.pack = &pk, &pk, pk.Markdown()
+	return &c
 }
 
 // request is what the reviewers check the work against: the original request

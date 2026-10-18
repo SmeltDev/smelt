@@ -68,9 +68,39 @@ const PlanSchema = `{
     },
     "risks": {"type": "array", "items": {"type": "string"}},
     "questions": {"type": "array", "items": {"type": "string"}, "description": "Decisions the request leaves open. Answer each with the most reasonable choice and say so."},
-    "cannot_verify_here": {"type": "array", "items": {"type": "string"}, "description": "What cannot be verified in the sandbox, such as needing Docker on the host."}
+    "cannot_verify_here": {"type": "array", "items": {"type": "string"}, "description": "What cannot be verified in the sandbox, such as needing Docker on the host."},
+    "pack": {
+      "type": "array",
+      "description": "The context pack: the exact code the implementer and reviewers need. Empty when not asked for.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {"type": "string", "enum": ["edit", "reference", "test_pattern", "rule", "new_file"]},
+          "path": {"type": "string", "description": "Repository-relative path; for a rule, the document it comes from."},
+          "start": {"type": "integer", "description": "First line, 1-based; 0 for a whole file, a rule or a new file."},
+          "end": {"type": "integer", "description": "Last line; 0 for a whole file, a rule or a new file."},
+          "reason": {"type": "string", "description": "Why it is needed; for a rule, the quote; for a new file, the existing file it follows."},
+          "priority": {"type": "integer", "description": "1 (must have) to 3 (nice to have)."}
+        },
+        "required": ["kind", "path", "start", "end", "reason", "priority"],
+        "additionalProperties": false
+      }
+    },
+    "rejected_hints": {
+      "type": "array",
+      "description": "Hints from the request's Context section that the pack does not follow.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "hint": {"type": "string"},
+          "reason": {"type": "string"}
+        },
+        "required": ["hint", "reason"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["summary", "files", "acceptance", "risks", "questions", "cannot_verify_here"],
+  "required": ["summary", "files", "acceptance", "risks", "questions", "cannot_verify_here", "pack", "rejected_hints"],
   "additionalProperties": false
 }`
 
@@ -82,9 +112,27 @@ type Plan struct {
 	Risks            []string   `json:"risks"`
 	Questions        []string   `json:"questions"`
 	CannotVerifyHere []string   `json:"cannot_verify_here"`
+	// Pack and RejectedHints are the scout's answer. Once Sidecars.Plan has
+	// validated them, Pack holds only entries that hold against the baseline
+	// (with their excerpts in memory), and PackDropped the ones that did not.
+	Pack          []PackEntry    `json:"pack,omitempty"`
+	RejectedHints []RejectedHint `json:"rejected_hints,omitempty"`
+	PackDropped   []DroppedEntry `json:"pack_dropped,omitempty"`
+	PackTokens    int            `json:"pack_tokens,omitempty"`
 	// Context is how large the prompt of the turn that wrote the plan got. It
 	// is measured, never read from the agent's answer.
 	Context harness.Context `json:"-"`
+}
+
+// ContextPack is the plan's pack as validated.
+func (p Plan) ContextPack() Pack {
+	return Pack{Entries: p.Pack, Dropped: p.PackDropped, RejectedHints: p.RejectedHints, Tokens: p.PackTokens}
+}
+
+// withPack is the plan carrying pk as its pack.
+func (p Plan) withPack(pk Pack) Plan {
+	p.Pack, p.PackDropped, p.RejectedHints, p.PackTokens = pk.Entries, pk.Dropped, pk.RejectedHints, pk.Tokens
+	return p
 }
 
 // PlanFile is one file a plan touches.
@@ -107,6 +155,8 @@ type PlanInput struct {
 	Request  string
 	Previous *Plan
 	Findings []review.Finding
+	// Scout asks the plan turn for a context pack too.
+	Scout bool
 }
 
 // Planner writes the plan a run implements and has it reviewed. Sidecars
@@ -163,6 +213,9 @@ func planPrompt(in PlanInput) string {
 	b.WriteString("(one acceptance entry per item, quoting it), the risks, and what you cannot verify in a sandbox. ")
 	b.WriteString("Where the request leaves a decision open, answer it with the most reasonable choice and say so in questions. ")
 	b.WriteString("Base the plan on what the code does, not on what you expect it to do.\n\n")
+	if in.Scout {
+		b.WriteString(scoutInstructions)
+	}
 	b.WriteString("## Requested change\n\n")
 	b.WriteString(strings.TrimSpace(in.Request))
 	b.WriteString("\n")
@@ -175,6 +228,16 @@ func planPrompt(in PlanInput) string {
 	}
 	return b.String()
 }
+
+// scoutInstructions asks the plan turn for the context pack.
+const scoutInstructions = `Also act as a scout and fill pack with the exact code the implementer and the reviewers need, so they do not have to search for it. ` +
+	`Trace each acceptance item to the code it touches, find the helpers and types to reuse, the nearest existing test to copy, the rules of AGENTS.md or the docs that apply, and the traps. ` +
+	`Entry kinds: edit (code the change modifies; it is shown as a pointer, so give path and line range only), reference (code to reuse or follow; smelt puts its lines in the prompt), ` +
+	`test_pattern (the nearest test to copy; a reference), rule (path is the document, reason is a short quote), ` +
+	`new_file (a file the change creates; reason names the existing file it follows, which you also list as a reference). ` +
+	`start and end are 1-based lines, 0 for a whole file, a rule or a new file. priority is 1 (must have) to 3 (nice to have). ` +
+	`Keep the pack small: only what the work needs. ` +
+	`If the request has a "## Context" section, every hint in it must appear in the pack or in rejected_hints with the reason you did not follow it.` + "\n\n"
 
 // findingList renders findings as a markdown list.
 func findingList(findings []review.Finding) string {
@@ -198,14 +261,14 @@ const planReviewBody = `Review the plan below against the requested change. No c
 
 %s
 
-## Review instructions
+%s## Review instructions
 
 Answer only these questions:
 
 1. Does the plan cover every requirement and acceptance item the request states?
 2. Does any file choice contradict the request?
 3. Is anything in the plan out of scope?
-
+%s
 Report a high or medium finding only for a requirement or acceptance item the plan leaves out, or a choice that contradicts the request. Use ` + "`" + planFile + "`" + ` as the file for a finding about the plan as a whole, or the file the finding is about. Anything else is low.
 Do not judge how the code will be written; judge only what the plan commits to.`
 
@@ -215,16 +278,33 @@ func planReviews(request string, plan Plan, prompts []review.Prompt) []review.Pr
 	var out []review.Prompt
 	for _, p := range prompts {
 		if slices.Contains(completenessReviews, p.Name) {
-			out = append(out, review.Prompt{Name: p.Name, Body: fmt.Sprintf(planReviewBody, strings.TrimSpace(request), plan.Markdown())})
+			out = append(out, review.Prompt{Name: p.Name, Body: planReviewPrompt(request, plan)})
 		}
 	}
 	return out
+}
+
+// packReviewQuestions are the questions a plan review adds when the plan has a
+// context pack.
+const packReviewQuestions = `4. Does every acceptance item have the code it needs in the context pack?
+5. Is any pack entry out of scope?
+A pack that leaves an acceptance item without its code, or an entry that is out of scope, is a medium finding.
+`
+
+// planReviewPrompt is the instructions of one plan review.
+func planReviewPrompt(request string, plan Plan) string {
+	pack, questions := "", ""
+	if section := plan.ContextPack().ReviewMarkdown(); section != "" {
+		pack, questions = section+"\n\n", packReviewQuestions
+	}
+	return fmt.Sprintf(planReviewBody, strings.TrimSpace(request), plan.Markdown(), pack, questions)
 }
 
 // Plan asks the implementer's agent, which has the repository on its sidecar,
 // for a plan. The agent may read the repository but not change it.
 func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 	im := s.Implementer
+	in.Scout = s.scouting()
 	prompt := planPrompt(in)
 	h := im.agent()
 	script := h.ReviewScript(harness.ReviewInput{
@@ -244,7 +324,28 @@ func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 		return Plan{}, err
 	}
 	p.Context = h.ReviewContext(out)
-	return validPlan(p)
+	p, err = validPlan(p)
+	if err != nil {
+		return Plan{}, err
+	}
+	return s.scoutPack(ctx, p), nil
+}
+
+// scouting reports whether the plan turn builds a context pack.
+func (s *Sidecars) scouting() bool {
+	return s.Scout.Enabled && s.Scout.Files != nil
+}
+
+// scoutPack replaces the pack the plan came with by the validated one, and
+// gives it to the reviewers. A plan without a usable pack is still a plan.
+func (s *Sidecars) scoutPack(ctx context.Context, p Plan) Plan {
+	if !s.scouting() {
+		return p.withPack(Pack{})
+	}
+	pk := ValidatePack(ctx, p.Pack, s.Scout.Files, s.Scout.MaxTokens)
+	pk.RejectedHints = p.RejectedHints
+	s.Pack = &pk
+	return p.withPack(pk)
 }
 
 // ReviewPlan runs the plan reviews once, each on a reviewer sidecar. A review
@@ -347,6 +448,9 @@ func planPreamble(plan Plan, unresolved []review.Finding) string {
 	var b strings.Builder
 	b.WriteString("Your plan, reviewed and approved:\n\n")
 	b.WriteString(plan.Markdown())
+	if pack := plan.ContextPack().Markdown(); pack != "" {
+		b.WriteString("\n\n" + pack)
+	}
 	b.WriteString("\n\nImplement it. If you must deviate, say where and why in your summary.\n")
 	if len(unresolved) > 0 {
 		b.WriteString("\nThe plan's reviewers still disagreed with it after one revision. Weigh these as you build:\n\n")

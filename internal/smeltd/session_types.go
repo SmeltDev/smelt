@@ -291,6 +291,9 @@ type FactoryRun struct {
 	// Plan is the plan the implementer was sent with, absent when the run did
 	// not plan.
 	Plan *Plan `json:"plan,omitempty"`
+	// Pack is the context pack the agents were given, absent when the run has
+	// none.
+	Pack *Pack `json:"pack,omitempty"`
 	// Timing is where the run's time went, once the implementer has started.
 	Timing *FactoryTiming `json:"timing,omitempty"`
 	// Quality is the last round's quality measurement; absent when the run does
@@ -358,6 +361,41 @@ type Plan struct {
 	Risks            []string   `json:"risks,omitempty"`
 	Questions        []string   `json:"questions,omitempty"`
 	CannotVerifyHere []string   `json:"cannot_verify_here,omitempty"`
+}
+
+// Pack mirrors factory.Pack: the exact code the agents were pointed to.
+type Pack struct {
+	Entries       []PackEntry    `json:"entries"`
+	Dropped       []PackDropped  `json:"dropped"`
+	RejectedHints []RejectedHint `json:"rejected_hints"`
+	// Tokens is the estimated size of the pack as the agents see it.
+	Tokens int `json:"tokens"`
+}
+
+// PackEntry mirrors factory.PackEntry.
+type PackEntry struct {
+	Kind     string `json:"kind"`
+	Path     string `json:"path"`
+	Start    int    `json:"start"`
+	End      int    `json:"end"`
+	Reason   string `json:"reason"`
+	Priority int    `json:"priority"`
+	// Inlined is whether the entry's code is in the agents' prompts.
+	Inlined bool `json:"inlined"`
+}
+
+// PackDropped mirrors factory.DroppedEntry.
+type PackDropped struct {
+	Path   string `json:"path"`
+	Start  int    `json:"start"`
+	End    int    `json:"end"`
+	Reason string `json:"reason"`
+}
+
+// RejectedHint mirrors factory.RejectedHint.
+type RejectedHint struct {
+	Hint   string `json:"hint"`
+	Reason string `json:"reason"`
 }
 
 // PlanFile mirrors factory.PlanFile.
@@ -604,6 +642,8 @@ type FactoryRequest struct {
 	NoValidate bool   `json:"no_validate,omitempty"`
 	// NoPlan skips the plan turn that otherwise precedes the implementation.
 	NoPlan bool `json:"no_plan,omitempty"`
+	// NoPack skips the context pack the plan turn otherwise builds.
+	NoPack bool `json:"no_pack,omitempty"`
 	// Attempts is the most rounds to check; zero means DefaultAttempts.
 	Attempts int `json:"attempts,omitempty"`
 	// Reviewers is how many reviewer sidecars to run; zero means one per

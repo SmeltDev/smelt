@@ -332,3 +332,66 @@ func TestPlanForSkipsContinuedRuns(t *testing.T) {
 	assert.Assert(t, planFor(true, &Continuation{From: Record{RunID: "run-1"}}, nil, p) == nil)
 	assert.Assert(t, planFor(true, nil, &IntegrateOptions{Against: "main"}, p) == nil, "an integrate run never plans")
 }
+
+const packedPlanJSON = `{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{
+  "summary":"Add the flag in cmd.",
+  "files":[],"acceptance":[],"risks":[],"questions":[],"cannot_verify_here":[],
+  "pack":[
+    {"kind":"edit","path":"cmd/flag.go","start":1,"end":2,"reason":"add it here","priority":1},
+    {"kind":"reference","path":"cmd/util.go","start":2,"end":3,"reason":"reuse","priority":1},
+    {"kind":"edit","path":"cmd/gone.go","start":1,"end":2,"reason":"r","priority":1}],
+  "rejected_hints":[{"hint":"use x","reason":"y"}]}}`
+
+func TestPlanScoutsAndValidatesThePack(t *testing.T) {
+	s, script := planSidecars(func(string) (int, string, error) { return 0, packedPlanJSON, nil })
+	s.Scout = ScoutOptions{Enabled: true, MaxTokens: 1000, Files: fakeFiles{"cmd/flag.go": numbered(5), "cmd/util.go": numbered(5)}}
+	plan, err := s.Plan(context.Background(), PlanInput{Request: "r"})
+	assert.NilError(t, err)
+	assert.Assert(t, contains(promptOf(t, *script), "fill pack with the exact code"), "the scout is asked for")
+
+	assert.Equal(t, len(plan.Pack), 2)
+	assert.Equal(t, plan.Pack[1].Excerpt, "line 2\nline 3", "the excerpt is read from the commit")
+	assert.Equal(t, len(plan.PackDropped), 1)
+	assert.Equal(t, plan.PackDropped[0].String(), "cmd/gone.go:1-2 — no such file at the baseline commit")
+	assert.DeepEqual(t, plan.RejectedHints, []RejectedHint{{Hint: "use x", Reason: "y"}})
+	assert.Assert(t, plan.PackTokens > 0)
+	assert.Assert(t, s.Pack != nil && len(s.Pack.Entries) == 2, "the reviewers get the validated pack")
+	assert.Assert(t, !contains(plan.Markdown(), "Context pack"), "the plan itself is unchanged")
+}
+
+func TestPlanWithoutScoutingHasNoPack(t *testing.T) {
+	for name, scout := range map[string]ScoutOptions{
+		"disabled":      {Files: fakeFiles{"cmd/flag.go": numbered(5)}},
+		"no commit set": {Enabled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, script := planSidecars(func(string) (int, string, error) { return 0, packedPlanJSON, nil })
+			s.Scout = scout
+			plan, err := s.Plan(context.Background(), PlanInput{Request: "r"})
+			assert.NilError(t, err)
+			assert.Assert(t, !contains(promptOf(t, *script), "fill pack"))
+			assert.Assert(t, plan.ContextPack().Empty() && len(plan.RejectedHints) == 0)
+			assert.Assert(t, s.Pack == nil)
+		})
+	}
+}
+
+func TestPlanWithAnEmptyPackStillSucceeds(t *testing.T) {
+	s, _ := planSidecars(func(string) (int, string, error) { return 0, planJSON, nil })
+	s.Scout = ScoutOptions{Enabled: true, Files: fakeFiles{}}
+	plan, err := s.Plan(context.Background(), PlanInput{Request: "r"})
+	assert.NilError(t, err)
+	assert.Assert(t, plan.ContextPack().Empty())
+	assert.Equal(t, plan.Summary, "Add the flag in cmd.")
+}
+
+func TestPlanReviewAsksAboutThePack(t *testing.T) {
+	plan := Plan{Summary: "Add the flag."}
+	without := planReviewPrompt("Add a flag.", plan)
+	assert.Assert(t, !contains(without, "Context pack") && !contains(without, "4."), without)
+
+	plan = plan.withPack(Pack{Entries: []PackEntry{{Kind: PackEdit, Path: "cmd/flag.go", Start: 1, End: 2, Reason: "here", Priority: 1}}})
+	with := planReviewPrompt("Add a flag.", plan)
+	assert.Assert(t, contains(with, "Add the flag.\n\n## Context pack\n\n"+reviewPackIntro), with)
+	assert.Assert(t, contains(with, "4. Does every acceptance item have the code it needs in the context pack?\n5. Is any pack entry out of scope?"), with)
+}

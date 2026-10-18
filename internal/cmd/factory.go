@@ -40,7 +40,7 @@ func newFactoryCmd() *cobra.Command {
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, noPlan, jsonOut, logOn, verbose, detach, integrate bool
+	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
@@ -125,7 +125,17 @@ Before it writes code the implementer writes a plan: the files it will touch,
 the approach, how each acceptance item will be met, and what it cannot verify
 in the sandbox. The requirements review checks the plan against the request,
 and only a reviewed plan is implemented. --no-plan (or factory.plan: false)
-skips it, and a continued run never plans. Each round then runs the validation
+skips it, and a continued run never plans.
+
+The plan turn also scouts: it builds a context pack of the exact code the
+implementer and the reviewers need (edit targets as pointers, code to reuse
+inlined, rules), pinned to the commit the run starts from and capped at
+factory.pack.maxTokens (default 25000). A "## Context" section in the request
+gives hints that the pack must follow or reject with a reason. A continued run
+reuses its predecessor's pack, re-validated against the branch. --no-pack (or
+factory.pack.enabled: false) skips it.
+
+Each round then runs the validation
 commands first (factory.gatesFirst: false runs them alongside the reviews): if
 any fails, the reviews are skipped and the implementer is sent the failures. The
 implementer must end its turn with the gates' output, and smelt checks that it
@@ -239,6 +249,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
 				NoPlan:                  noPlan,
+				NoPack:                  noPack,
 				Attempts:                settings.Attempts,
 				Reviewers:               reviewers,
 				Model:                   model,
@@ -283,6 +294,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
+	cmd.Flags().BoolVar(&noPack, "no-pack", false, "skip the context pack the plan turn builds for the implementer and the reviewers (default: factory.pack from config, else on)")
 	cmd.Flags().BoolVar(&noPlan, "no-plan", false, "skip the plan the implementer writes, and the review of it, before it implements (default: factory.plan from config, else on)")
 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")

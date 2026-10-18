@@ -192,6 +192,7 @@ smelt
 │       --reviews <dir>             # Directory of review prompts (default: .smelt/reviews)
 │       --no-validate               # Skip the project's validation commands
 │       --no-plan                   # Skip the reviewed plan the implementer writes before it implements (default: factory.plan, else on)
+│       --no-pack                   # Skip the context pack built by the plan turn (default: factory.pack.enabled, else on)
 │       --keep-sidecars             # Leave the sidecars running when the run ends
 │       --push                     # Push the run's branch when it ends, without asking
 │       --pr                       # Push and open a PR (or update the branch's PR), without asking
@@ -421,6 +422,22 @@ smelt
   prepended to the implementation prompt and the PR-notes prompt, and is in `factory status --json` as
   `factory.plan`, in the run log and in the run's record. `cannot_verify_here` items seed the implementer's
   `UNVERIFIED:` lines. `--no-plan` or `factory.plan: false` skips it; `--continue` never plans.
+- **The plan turn also scouts: the context pack.** The plan carries `pack` entries (`edit`, `reference`,
+  `test_pattern`, `rule`, `new_file`; path, 1-based range, reason, priority 1–3) and `rejected_hints`. smelt
+  validates each against the run's baseline commit (`git cat-file blob <baseline>:<path>`): entries whose file or
+  range does not exist are dropped and logged (`pack: dropped internal/x.go:900-950 — beyond end of file (612
+  lines)`), and `reference`/`test_pattern` excerpts are read from the commit, never from the model's answer.
+  `edit` entries and `new_file` entries stay pointers; excerpts are inlined in the implementer's prompt (after
+  the plan, as `## Context pack`) and the reviewers' prompts (after the request). Size is estimated at 4
+  characters per token; over `factory.pack.maxTokens` (default 25000) excerpts become pointers, priority 3
+  first. The request may have a `## Context` section of author hints (bullets or lines until the next
+  heading); each must appear in the pack or in `rejected_hints`, and a miss is a medium plan-review finding
+  (one revision, as for any plan finding). The plan review also asks whether every acceptance item has its
+  code in the pack. An empty or failed pack never fails the run (`pack: none, continuing with the plan
+  alone`). `factory status --json` has `factory.pack: {entries, dropped, rejected_hints, tokens}`;
+  `--continue` reuses the recorded pack, re-anchoring ranges that moved by their first line, else pointing
+  to the whole file. `--no-pack` or `factory.pack: {"enabled": false}` skips it; `factory.pack.maxTokens`
+  sets the cap.
   `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
   are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
   side by side. A skipped round still counts towards `--max-attempts`.

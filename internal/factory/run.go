@@ -26,6 +26,13 @@ const (
 	pullTimeout      = 2 * time.Minute
 )
 
+// PackOptions is the context pack of a run; the zero value is off.
+type PackOptions struct {
+	Enabled bool
+	// MaxTokens caps the pack; zero means config.DefaultPackMaxTokens.
+	MaxTokens int
+}
+
 // RunOptions is one factory run. Everything that needs a person, such as
 // picking an org or finding a credential, is settled before it.
 type RunOptions struct {
@@ -53,6 +60,12 @@ type RunOptions struct {
 	// Plan has the implementer write a plan, and the plan reviewed, before it
 	// writes code. A continued run never plans: its plan is in the record.
 	Plan bool
+	// Pack makes the plan turn also build a context pack for the implementer
+	// and the reviewers, and a continued run re-validate the recorded one.
+	Pack PackOptions
+	// OnPack, when set, hears the pack a continued run reuses; a new run's
+	// pack comes with its plan, in EventPlanReviewed.
+	OnPack func(Pack)
 	// GatesFirst runs Commands before the reviews and skips the reviews of a
 	// round whose commands failed.
 	GatesFirst bool
@@ -339,6 +352,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		WaitReviewers: reviewersOf(pool, impl),
 		Relay:         NewRelay(backend, wt.Path, status),
 		Request:       request,
+		Scout:         ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}},
 		Prompts:       opts.Prompts,
 		Review: review.Options{
 			Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
@@ -362,6 +376,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
 	}
+	steps.continueRun(ctx, &opts, wt, &rec, status)
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
 	tm := timer{now: time.Now}
@@ -491,6 +506,11 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
 	rec.Result, rec.Rounds, rec.Notes, rec.Plan = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes, rep.Outcome.Plan
 	rec.ContinuedFromEmpty = rep.Outcome.FromEmpty
+	if p := rep.Outcome.Plan; p != nil {
+		if pk := p.ContextPack(); !pk.Empty() {
+			rec.Pack = &pk
+		}
+	}
 	keepRecord(dataDir, rec, status)
 }
 
@@ -695,7 +715,7 @@ func (o *RunOptions) checkIntegrate() error {
 // hears every event, and the status function hears of a continued run that
 // found no work.
 func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string) {
-	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps)}
+	loop := Loop{Attempts: o.Attempts, OnEvent: onEvent, Planner: planFor(o.Plan, o.Continue, o.Integrate, steps), CheckHints: o.Pack.Enabled}
 	if o.Status != nil {
 		loop.OnEvent = func(e Event) {
 			if e.Kind == EventNoPriorWork {

@@ -59,6 +59,9 @@ type Record struct {
 	// Plan is the plan the implementer was sent with, nil when the run did
 	// not plan.
 	Plan *Plan `json:"plan,omitempty"`
+	// Pack is the run's context pack, which a continued run reuses; a continued
+	// run has no plan of its own to carry it.
+	Pack *Pack `json:"pack,omitempty"`
 }
 
 // newRecord is the record of a run working in wt.

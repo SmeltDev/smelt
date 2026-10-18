@@ -251,6 +251,9 @@ type FactoryConfig struct {
 	// Quality tunes the built-in quality check of a run. Unset means the check
 	// is on with its default limits.
 	Quality *QualityConfig `json:"quality,omitempty"`
+	// Pack is the context pack the plan turn builds for the implementer and
+	// the reviewers. Unset means on, with DefaultPackMaxTokens.
+	Pack *PackConfig `json:"pack,omitempty"`
 }
 
 // QualityConfig is factory.quality: the limits of the built-in quality check.
@@ -287,7 +290,35 @@ func (f *FactoryConfig) validateLimits() error {
 	if f.MaxConcurrent < 0 {
 		return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
 	}
+	if f.Pack != nil && f.Pack.MaxTokens < 0 {
+		return fmt.Errorf("factory.pack.maxTokens must not be negative, got %d", f.Pack.MaxTokens)
+	}
 	return f.Quality.validate()
+}
+
+// DefaultPackMaxTokens is the size cap of a context pack when factory.pack
+// sets none.
+const DefaultPackMaxTokens = 25000
+
+// PackConfig is factory.pack.
+type PackConfig struct {
+	// Enabled turns the pack off when false. Unset means true.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxTokens caps the pack's estimated size; 0 means DefaultPackMaxTokens.
+	MaxTokens int `json:"maxTokens,omitempty"`
+}
+
+// PackEnabled reports whether runs build a context pack; the default is yes.
+func (f *FactoryConfig) PackEnabled() bool {
+	return f == nil || f.Pack == nil || f.Pack.Enabled == nil || *f.Pack.Enabled
+}
+
+// PackMaxTokens is the cap on a context pack's size in tokens.
+func (f *FactoryConfig) PackMaxTokens() int {
+	if f == nil || f.Pack == nil || f.Pack.MaxTokens == 0 {
+		return DefaultPackMaxTokens
+	}
+	return f.Pack.MaxTokens
 }
 
 func (q *QualityConfig) validate() error {

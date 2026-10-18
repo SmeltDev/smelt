@@ -517,6 +517,66 @@ func TestFactorySessionPlansAndRunsGatesFirstUnlessTurnedOff(t *testing.T) {
 	}
 }
 
+func TestFactorySessionBuildsThePackUnlessTurnedOff(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  string
+		req  smeltd.FactoryRequest
+		want factory.PackOptions
+	}{
+		{"defaults", `{"orgID":"org-1"}`, smeltd.FactoryRequest{}, factory.PackOptions{Enabled: true, MaxTokens: 25000}},
+		{"--no-pack", `{"orgID":"org-1"}`, smeltd.FactoryRequest{NoPack: true}, factory.PackOptions{MaxTokens: 25000}},
+		{"factory.pack.enabled false", `{"orgID":"org-1","factory":{"pack":{"enabled":false}}}`, smeltd.FactoryRequest{}, factory.PackOptions{MaxTokens: 25000}},
+		{"factory.pack.maxTokens", `{"orgID":"org-1","factory":{"pack":{"maxTokens":900}}}`, smeltd.FactoryRequest{}, factory.PackOptions{Enabled: true, MaxTokens: 900}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got factory.RunOptions
+			run := scriptedRun(factory.ResultPassed)
+			d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				got = opts
+				return run(ctx, opts)
+			})
+			cfg := strings.Replace(tt.cfg, `{`, `{"commands":[{"name":"test","run":"go test ./..."}],`, 1)
+			assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
+			req := tt.req
+			req.Backend, req.ProjectRoot, req.Prompt = smeltd.BackendCircleCI, root, "add a flag"
+			sess, err := d.startFactory(req)
+			assert.NilError(t, err)
+			waitForSessionEnd(t, d, sess.ID)
+			assert.Equal(t, got.Pack, tt.want)
+		})
+	}
+}
+
+func TestFactoryRecorderCarriesThePackInTheStatus(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	plan := factory.Plan{Summary: "do it",
+		Pack: []factory.PackEntry{
+			{Kind: factory.PackEdit, Path: "a.go", Start: 3, End: 9, Reason: "edit here", Priority: 1},
+			{Kind: factory.PackReference, Path: "b.go", Reason: "reuse", Priority: 2, Excerpt: "code"},
+		},
+		PackDropped:   []factory.DroppedEntry{{Path: "c.go", Start: 900, End: 950, Reason: "beyond end of file (612 lines)"}},
+		RejectedHints: []factory.RejectedHint{{Hint: "use x", Reason: "y is better"}},
+		PackTokens:    42,
+	}
+	rec.event(factory.Event{Kind: factory.EventPlanReviewed, Plan: &plan})
+
+	b, err := json.Marshal(entry.snapshot().Factory.Pack)
+	assert.NilError(t, err)
+	assert.Equal(t, string(b), `{"entries":[`+
+		`{"kind":"edit","path":"a.go","start":3,"end":9,"reason":"edit here","priority":1,"inlined":false},`+
+		`{"kind":"reference","path":"b.go","start":0,"end":0,"reason":"reuse","priority":2,"inlined":true}],`+
+		`"dropped":[{"path":"c.go","start":900,"end":950,"reason":"beyond end of file (612 lines)"}],`+
+		`"rejected_hints":[{"hint":"use x","reason":"y is better"}],"tokens":42}`)
+
+	rec.setPack(factory.Pack{})
+	assert.Assert(t, entry.snapshot().Factory.Pack == nil, "a continued run with no pack has none")
+}
+
 func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)

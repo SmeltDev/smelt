@@ -133,6 +133,10 @@ type Loop struct {
 	// before its first turn. A loop that checks first does not plan: there is
 	// work to describe already.
 	Planner Planner
+	// CheckHints makes a plan whose context pack leaves out a hint of the
+	// request's `## Context` section a finding, which sends the plan back
+	// like any other. It is for runs whose plan turn builds a pack.
+	CheckHints bool
 	// EmptyPrompt, when set, makes the loop collect the work already there
 	// before the first turn. If it is empty, there is nothing to check or build
 	// on, so the loop sends EmptyPrompt instead of the prompt it was given and
@@ -268,6 +272,9 @@ func (l Loop) plan(ctx context.Context, emit func(Event), request string) (plan 
 		if found, err = l.Planner.ReviewPlan(ctx, request, plan); err != nil {
 			return Plan{}, "", err
 		}
+		if l.CheckHints {
+			found = append(found, hintFindings(request, plan)...)
+		}
 		if worth = worthChanging(found); len(worth) == 0 {
 			break
 		}
@@ -276,6 +283,20 @@ func (l Loop) plan(ctx context.Context, emit func(Event), request string) (plan 
 	}
 	emit(Event{Kind: EventPlanReviewed, Plan: &plan, Findings: worth})
 	return plan, planPreamble(plan, worth), nil
+}
+
+// hintFindings are the hints of the request's `## Context` section that the
+// plan's pack neither follows nor rejects, as findings about the plan.
+func hintFindings(request string, plan Plan) []review.Finding {
+	missing := MissingHints(ContextHints(request), plan.ContextPack())
+	out := make([]review.Finding, 0, len(missing))
+	for _, h := range missing {
+		out = append(out, review.Finding{
+			Prompt: "context-pack", File: planFile, Severity: review.SeverityMedium,
+			Body: fmt.Sprintf("the request's Context hint %q is neither in the pack nor in rejected_hints; add it to the pack, or reject it with a reason", h),
+		})
+	}
+	return out
 }
 
 // worthChanging is the findings that send work back.
