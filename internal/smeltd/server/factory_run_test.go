@@ -22,6 +22,7 @@ import (
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sarif"
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/smeltd"
@@ -750,6 +751,7 @@ func TestFactoryRecorderOmitsQualityWhenTheCheckIsOff(t *testing.T) {
 	assert.Assert(t, !strings.Contains(string(b), "quality"), string(b))
 }
 
+<<<<<<< HEAD
 func TestStatusCarriesContextPeaks(t *testing.T) {
 	s := newSessionStore(context.Background())
 	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
@@ -776,4 +778,20 @@ func TestStatusCarriesContextPeaks(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"context_peak_max":88412`), string(b))
 	assert.Assert(t, strings.Contains(wire.Line, "\nContext: implementer peak 88k"), wire.Line)
+=======
+// A SARIF gate's counts reach the status JSON as {new, fixed, existing}.
+func TestFactoryRecorderRecordsRatchetCounts(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, _ := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	rec.event(factory.Event{Kind: factory.EventChecking, Round: 1})
+	rec.checked(factory.Check{Name: "lint", Kind: factory.KindValidate, Status: factory.StatusFailed,
+		Ratchet: &sarif.Counts{New: 1, Fixed: 2, Existing: 3}})
+
+	got := entry.snapshot().Rounds[0].Checks[0]
+	assert.DeepEqual(t, got.Ratchet, &smeltd.RatchetCounts{New: 1, Fixed: 2, Existing: 3})
+	b, err := json.Marshal(got)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"ratchet":{"new":1,"fixed":2,"existing":3}`), string(b))
+>>>>>>> origin/main
 }

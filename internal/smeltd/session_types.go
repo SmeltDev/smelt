@@ -198,6 +198,16 @@ type RoundCheck struct {
 	Skipped []string `json:"skipped,omitempty"`
 	// Summary is the quality check's before → after line.
 	Summary string `json:"summary,omitempty"`
+	// Ratchet is what a SARIF gate found: findings the change added, fixed and
+	// left untouched.
+	Ratchet *RatchetCounts `json:"ratchet,omitempty"`
+}
+
+// RatchetCounts is the result of a SARIF gate's comparison with the baseline.
+type RatchetCounts struct {
+	New      int `json:"new"`
+	Fixed    int `json:"fixed"`
+	Existing int `json:"existing"`
 }
 
 // FactoryQuality is a factory run's quality measurement, before and after its

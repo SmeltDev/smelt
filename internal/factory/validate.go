@@ -77,9 +77,15 @@ const conflictMarkerPattern = `^(<<<<<<<|=======|>>>>>>>)( |$)`
 // the code under review already is, and returns one check per command. They
 // run one after another because they share one checkout and one machine.
 func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onDone func(Check)) []Check {
+	return runEach(cmds, onDone, func(c config.Command) Check { return runCommand(ctx, exec, entry, c) })
+}
+
+// runEach runs each command with run, in order, reporting each check as it
+// finishes.
+func runEach(cmds []config.Command, onDone func(Check), run func(config.Command) Check) []Check {
 	checks := make([]Check, 0, len(cmds))
 	for _, c := range cmds {
-		check := runCommand(ctx, exec, entry, c)
+		check := run(c)
 		if onDone != nil {
 			onDone(check)
 		}
@@ -89,10 +95,7 @@ func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolE
 }
 
 func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, c config.Command) Check {
-	timeout := defaultCommandTimeout
-	if c.Timeout > 0 {
-		timeout = time.Duration(c.Timeout) * time.Second
-	}
+	timeout := commandTimeout(c)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

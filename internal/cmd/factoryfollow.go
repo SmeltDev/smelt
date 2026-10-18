@@ -327,6 +327,9 @@ func (r *sessionReporter) reportCheck(c smeltd.RoundCheck) {
 	case smeltd.CheckSkipped:
 		r.status(iostream.LevelInfo, fmt.Sprintf("  %s skipped", c.Name))
 	}
+	if rc := c.Ratchet; rc != nil {
+		r.status(iostream.LevelInfo, fmt.Sprintf("  %s: %d new, %d fixed, %d existing", c.Name, rc.New, rc.Fixed, rc.Existing))
+	}
 	if len(c.Skipped) > 0 {
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s skipped %d test(s): %s", c.Name, len(c.Skipped), strings.Join(c.Skipped, ", ")))
 	}

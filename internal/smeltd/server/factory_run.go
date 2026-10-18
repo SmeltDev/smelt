@@ -633,6 +633,9 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		Output:     c.Output,
 		Skipped:    c.Skipped,
 	}
+	if c.Ratchet != nil {
+		rc.Ratchet = &smeltd.RatchetCounts{New: c.Ratchet.New, Fixed: c.Ratchet.Fixed, Existing: c.Ratchet.Existing}
+	}
 	if c.Status == factory.StatusNotMeasured {
 		rc.Error = c.Reason
 	}

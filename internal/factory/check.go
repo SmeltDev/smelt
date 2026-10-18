@@ -9,6 +9,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sarif"
 )
 
 // Kind is what produced a check: a review prompt, a validation command or the
@@ -77,8 +78,13 @@ type Check struct {
 	// Quality is the measurement of a quality check that ran, whether or not
 	// it found anything to fix.
 	Quality *quality.Summary
+<<<<<<< HEAD
 	// Context is how large the prompts of a review got; zero when unknown.
 	Context harness.Context
+=======
+	// Ratchet is how many findings a SARIF gate's change added, fixed and left.
+	Ratchet *sarif.Counts
+>>>>>>> origin/main
 }
 
 // outputTail bounds how much of a failed command's output is fed back. The end
@@ -166,6 +172,36 @@ func FromCommand(name, sidecarID string, exitCode int, output string, d time.Dur
 	default:
 		c.Status = StatusFailed
 		c.Feedback = fmt.Sprintf("Exited %d.\n```\n%s\n```", exitCode, c.Output)
+	}
+	return c
+}
+
+// FromSarif converts a SARIF gate's comparison into a check. It fails only on
+// findings the baseline did not have, and lists just those; otherwise it
+// passes with the counts as its note.
+func FromSarif(name, sidecarID string, diff sarif.Diff, d time.Duration) Check {
+	counts := diff.Counts()
+	c := Check{Name: name, Kind: KindValidate, SidecarID: sidecarID, Duration: d, Ratchet: &counts}
+	if counts.New == 0 {
+		c.Status, c.Output = StatusPassed, diff.Summary(name)
+		return c
+	}
+	list := diff.Feedback()
+	c.Status, c.Output = StatusFailed, review.Tail(list, outputTail)
+	c.Feedback = fmt.Sprintf("%s\nThe gate fails on the findings your change added; the %d that were already there are not held against it.\n```\n%s\n```",
+		diff.Summary(name), counts.Existing, c.Output)
+	return c
+}
+
+// FromSarifError is the failed check of a SARIF gate whose command printed no
+// usable SARIF. It is fed back, not errored: a tool that crashed on the
+// change, such as on a syntax error, is something the implementer can fix.
+func FromSarifError(name, sidecarID string, err error, stderr string, d time.Duration) Check {
+	c := Check{Name: name, Kind: KindValidate, SidecarID: sidecarID, Duration: d, Status: StatusFailed}
+	c.Output = review.Tail(strings.TrimSpace(stderr), outputTail)
+	c.Feedback = fmt.Sprintf("The command did not produce valid SARIF: %v", err)
+	if c.Output != "" {
+		c.Feedback += "\nIt printed on stderr:\n```\n" + c.Output + "\n```"
 	}
 	return c
 }
