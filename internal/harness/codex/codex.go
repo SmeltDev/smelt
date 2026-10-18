@@ -221,21 +221,43 @@ exec git "$@"
 
 // RunError implements harness.Harness.
 func (Harness) RunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {
+	p := &parser{}
+	p.Handle = p.line
+	p.Write([]byte(stdout + "\n" + stderr))
+	p.Flush()
+	if code != 0 && p.Outcome().Err == nil && usageLimitRe.MatchString(stdout+"\n"+stderr) {
+		p.fail(stdout + "\n" + stderr)
+	}
+	if ctx.Err() == nil && p.Outcome().Err != nil {
+		return p.Outcome().Err
+	}
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
 		return harness.TimeoutError(timeout, ctx.Err())
+	case ctx.Err() == context.Canceled:
+		return ctx.Err()
 	case execErr != nil:
-		return fmt.Errorf("exec: %w", execErr)
+		return harness.Classified(harness.Unavailable, fmt.Errorf("exec: %w", execErr), nil)
 	case code == harness.MissingExitCode:
-		return ErrMissing
+		return harness.Classified(harness.Unavailable, ErrMissing, nil)
 	case code != 0 && (credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)):
-		return ErrCredentialRejected
+		return harness.Classified(harness.Auth, ErrCredentialRejected, nil)
+	}
+	return resultError(code, p.Outcome().Done, p.Outcome().Message, stderr)
+}
+
+func resultError(code int, done bool, message, stderr string) error {
+	switch {
+	case code != 0 && strings.Contains(stderr, reviewChangedTree):
+		return fmt.Errorf("codex exited %d: %s", code, harness.Tail(stderr, stderrTail))
+	case code != 0 && done:
+		return fmt.Errorf("codex exited %d: %s", code, harness.Tail(message+"\n"+stderr, stderrTail))
 	case code != 0:
 		stderr = strings.TrimSpace(stderr)
 		if stderr == "" {
-			return fmt.Errorf("codex exited %d", code)
+			return harness.Classified(harness.Unavailable, fmt.Errorf("codex exited %d", code), nil)
 		}
-		return fmt.Errorf("codex exited %d: %s", code, harness.Tail(stderr, stderrTail))
+		return harness.Classified(harness.Unavailable, fmt.Errorf("codex exited %d: %s", code, harness.Tail(stderr, stderrTail)), nil)
 	}
 	return nil
 }

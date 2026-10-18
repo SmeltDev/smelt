@@ -231,6 +231,10 @@ const (
 
 // FactoryConfig holds project defaults for `smelt factory build`.
 type FactoryConfig struct {
+	// Fallback is the caller's ordered list of alternate harnesses.
+	Fallback []string `json:"fallback,omitempty"`
+	// SwapAtUtilization is a fraction; unset defaults to 0.95.
+	SwapAtUtilization *float64 `json:"swapAtUtilization,omitempty"`
 	// Rounds selects whether implementer rounds reuse a session or start fresh.
 	Rounds RoundPolicy `json:"rounds,omitempty"`
 	// ContextWindow is the implementer auto-compaction threshold in tokens; zero uses the agent default.
@@ -684,6 +688,9 @@ func (f *FactoryConfig) validate() error {
 	if !ValidHarness(f.Harness) {
 		return fmt.Errorf("factory.harness %q must be %q or %q", f.Harness, HarnessClaude, HarnessCodex)
 	}
+	if err := f.validateFailover(); err != nil {
+		return err
+	}
 	for name := range f.Models {
 		if name == "" || !ValidHarness(name) {
 			return fmt.Errorf("factory.models.%s: unknown harness (want %q or %q)", name, HarnessClaude, HarnessCodex)
@@ -829,4 +836,24 @@ func (f *FactoryConfig) ModelFor(harness string) string {
 		return ""
 	}
 	return f.Models[harness]
+}
+
+// SwapThreshold is the utilization at which a run switches harnesses.
+func (f *FactoryConfig) SwapThreshold() float64 {
+	if f != nil && f.SwapAtUtilization != nil {
+		return *f.SwapAtUtilization
+	}
+	return 0.95
+}
+
+func (f *FactoryConfig) validateFailover() error {
+	for _, name := range f.Fallback {
+		if name == "" || !ValidHarness(name) {
+			return fmt.Errorf("factory.fallback: unknown harness %q", name)
+		}
+	}
+	if f.SwapAtUtilization != nil && !(*f.SwapAtUtilization > 0 && *f.SwapAtUtilization <= 1) {
+		return fmt.Errorf("factory.swapAtUtilization must be greater than 0 and at most 1")
+	}
+	return nil
 }

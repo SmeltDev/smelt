@@ -441,3 +441,49 @@ func TestRunPassOmitsTheDefaultBaseURL(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, len(gotEnv), 1)
 }
+
+func TestIndividualRetryRunsBeforeFatalPassCancellation(t *testing.T) {
+	pool := newSafePool("one")
+	calls := map[string]int{}
+	exec := func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, output circleci.OutputFn, _ func(string)) (int, error) {
+		name := promptOf(t, script)
+		calls[name]++
+		if name == "retry" && calls[name] == 1 {
+			output(circleci.StreamStderr, []byte("Failed to authenticate: 401"))
+			return 1, nil
+		}
+		output(circleci.StreamStdout, []byte("reviewed"))
+		return 0, nil
+	}
+	retried := 0
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "retry"}, {Name: "b", Body: "once"}}, Options{
+		Retry: func(ctx context.Context, entry *sidecar.PoolEntry, p Prompt, opts Options, run func(Options) (Result, error)) (Result, error) {
+			result, err := run(opts)
+			if errors.Is(err, ErrCredentialRejected) {
+				retried++
+				opts.Credential = Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "alternate"}
+				return run(opts)
+			}
+			return result, err
+		},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, retried, 1)
+	assert.Equal(t, calls["retry"], 2)
+	assert.Equal(t, calls["once"], 1)
+	assert.Equal(t, len(results), 2)
+	assert.Equal(t, results[0].Harness, harness.Claude)
+}
+
+func TestRunOnePreservesTypedStreamFailureOnZeroExit(t *testing.T) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, output circleci.OutputFn, _ func(string)) (int, error) {
+		output(circleci.StreamStdout, []byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792365600}}`+"\n"+`{"type":"result","is_error":true,"result":"usage exhausted"}`+"\n"))
+		return 0, nil
+	}
+	result := runOne(context.Background(), exec, &sidecar.PoolEntry{ID: "review", RepoPath: "/repo"}, Prompt{Name: "bugs", Body: "review"}, Options{Timeout: time.Minute, StructuredFindings: true})
+	var failure *harness.Failure
+	assert.Assert(t, errors.As(result.err, &failure))
+	assert.Equal(t, failure.Kind, harness.RateLimited)
+	assert.Assert(t, failure.ResetAt.Equal(time.Unix(1792365600, 0)))
+	assert.Equal(t, result.Harness, harness.Claude)
+}

@@ -1229,3 +1229,37 @@ Usage errors (an unknown command, the wrong number of arguments) exit with
 - Dates use `YYYY-MM-DD` format, parsed with `time.Parse("2006-01-02", s)`
 - Boolean toggles default to `false`
 - Model flags fall back to config file values, then built-in defaults
+
+Factory harness failover accepts `--fallback claude,codex`: these are tried in
+caller order after `--harness`, without ranking. `factory.fallback` supplies the
+default; an explicitly supplied flag replaces it (including `--fallback=` to
+clear it). Duplicate names, including the primary harness, are removed. Only
+registered harnesses are accepted; Grok is not registered in this checkout.
+
+Each candidate uses its own daemon credential and `factory.models.<harness>`
+model, or that CLI's default. An explicit `--model` applies to the primary agent.
+Candidates need their binary installed in the execution image and a valid login.
+Rate limits, rejected authentication, missing or crashed agents trigger a retry
+of the same turn on the next eligible harness. A first turn deadline retries the
+same harness; two consecutive deadlines in that logical turn permit failover.
+Caller cancellation, gate failures, review findings and `BLOCKED:` never swap.
+Reviews retry individually before any fatal cancellation of the pass.
+
+Before a turn, the highest reported window utilization is compared as a fraction
+against `factory.swapAtUtilization` (default `0.95`, valid range greater than zero
+and at most one). At or above the threshold, the run swaps before executing.
+Failed harnesses are skipped for the rest of that run. Implementer swaps start a
+fresh session with the ticket, approved plan, re-anchored context pack, current
+partial work and findings; retries do not consume another round.
+
+If no harness remains, the result is `failed`, with reason `no harness available`
+and `reset_at` set to the earliest known rate-limit reset. This also applies to
+planning and notes; generated fallback notes do not hide exhaustion. Status JSON
+and the durable run record retain `harness_swaps` (`round`, `turn`, `from`, `to`,
+`kind`, `reset_at`) and per-attempt `turns` with actual harness/model attribution.
+Planning, plan reviews and notes use round zero. Logs and the `Time:` line include
+phrases such as `swapped codex → claude (rate_limited) in round 2`.
+
+`--continue <run> --harness <name>` uses the requested harness and its credentials
+and model. Its fresh session receives the original request, approved plan and
+re-anchored pack with the branch's existing work and any new guidance.

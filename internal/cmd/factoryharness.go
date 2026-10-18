@@ -106,6 +106,8 @@ type harnessChoice struct {
 	// Image is the Docker image the run will use, "" when not known.
 	Image     string
 	CanPrompt bool
+	// Fallback permits runtime eligibility checks when the primary is absent.
+	Fallback []string
 }
 
 // resolveHarness picks the coding agent for a run. An image that carries
@@ -135,7 +137,7 @@ func resolveHarness(ctx context.Context, streams iostream.Streams, c harnessChoi
 		}
 		offerSaveHarness(streams, c.Root, c.Cfg, name)
 	}
-	if len(inImage) > 0 && !slices.Contains(inImage, name) {
+	if len(inImage) > 0 && !slices.Contains(inImage, name) && len(c.Fallback) == 0 {
 		return "", newUserError(fmt.Sprintf("The sandbox image does not have %s.", name)).
 			withCode("factory.harness_not_in_image").
 			withSuggestion("Update the Dockerfile's agent kit: smelt factory image --update-kit").
@@ -217,4 +219,21 @@ func imageHarnesses(ctx context.Context, image string) []string {
 	defer func() { _ = b.Close() }()
 	names, _ := b.Harnesses(ctx, image)
 	return names
+}
+
+func resolveBuildHarness(ctx context.Context, streams iostream.Streams, choice harnessChoice, fallback fallbackChoice) (string, []string, error) {
+	var cfg *config.FactoryConfig
+	if choice.Cfg != nil {
+		cfg = choice.Cfg.Factory
+	}
+	choice.Fallback = fallback.Names
+	if !fallback.Explicit && cfg != nil {
+		choice.Fallback = cfg.Fallback
+	}
+	name, err := resolveHarness(ctx, streams, choice)
+	if err != nil {
+		return "", nil, err
+	}
+	names, err := resolveFallback(name, fallback, cfg)
+	return name, names, err
 }

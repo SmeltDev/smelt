@@ -124,15 +124,6 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
-	if msg := d.factoryAuthError(req.Backend, agent.Name()); msg != "" {
-		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
-	}
-	auth := d.harnessAuth(agent.Name())
-	if auth.Refresh != nil {
-		if auth.Credential, err = auth.Refresh(context.Background()); err != nil {
-			return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
-		}
-	}
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" && req.Continue == "" {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "prompt required")
@@ -174,6 +165,11 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
+	agents, err := d.resolveFactoryHarnesses(req, cfg, agent)
+	if err != nil {
+		return smeltd.Session{}, err
+	}
+	auth := agents.Auth
 	dir, err := sessionPromptsDir(ps.root, req.ReviewsDir)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
@@ -242,6 +238,9 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,
 		Harness:                 agent,
+		Fallback:                agents.Fallback,
+		InitialFailure:          agents.InitialFailure,
+		SwapAtUtilization:       cfg.Factory.SwapThreshold(),
 		Credential:              auth.Credential,
 		BaseURL:                 auth.BaseURL,
 		Model:                   model,
@@ -365,6 +364,8 @@ func integrateRoundKind(n int) smeltd.RoundKind {
 // factoryResultNote says how a factory loop ended, for its stage.
 func factoryResultNote(o factory.Outcome) string {
 	switch o.Result {
+	case factory.ResultFailed:
+		return o.Reason
 	case factory.ResultPassed:
 		return fmt.Sprintf("all checks passed after %d round(s)", o.Rounds)
 	case factory.ResultNoChange:
@@ -440,20 +441,10 @@ func (r *factoryRecorder) round(n int) int {
 }
 
 func (r *factoryRecorder) event(ev factory.Event) {
-	// The plan comes before the first round.
-	if ev.Kind == factory.EventPlanning {
-		r.progress(iostream.LevelStep, "planning")
+	if r.beforeRound(ev) {
 		return
 	}
-	if ev.Kind == factory.EventPlanReviewed {
-		r.planReviewed(ev)
-		return
-	}
-	if ev.Kind == factory.EventNoPriorWork {
-		// Shown through the factory's status function, which feeds the progress
-		// lines; it belongs to no round.
-		return
-	}
+
 	if ev.Kind == factory.EventImplemented {
 		for _, item := range factory.UnverifiedItems(ev.Turn.Summary) {
 			r.progress(iostream.LevelInfo, "unverified: "+item)
@@ -465,7 +456,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork:
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt:
 		// Recorded above.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
@@ -476,10 +467,11 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.DurationMS = ev.Turn.Duration.Milliseconds()
 			impl.CostUSD = ev.Turn.CostUSD
 			impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
+			round.Harness = string(ev.Turn.Harness)
 			impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
 			impl.ContextPeak, impl.ModelCalls = ev.Turn.ContextPeak, ev.Turn.ModelCalls
 			impl.RateLimit = ev.Turn.RateLimit
-			r.recordRateLimit(ev.Turn.RateLimit)
+			r.recordHarnessRateLimit(ev.Turn.Harness, ev.Turn.RateLimit)
 			impl.Summary = ev.Turn.Summary
 			impl.Unproven = ev.Turn.Unproven
 		}
@@ -493,28 +485,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	case factory.EventChecking:
 		round.State = smeltd.RoundChecking
 	case factory.EventChecked:
-		r.recordReviewsLocked(ridx, ev.Checks)
-		passed, skipped := 0, 0
-		for _, c := range ev.Checks {
-			switch c.Status {
-			case factory.StatusPassed, factory.StatusNotMeasured:
-				passed++
-			case factory.StatusSkipped:
-				skipped++
-			case factory.StatusFailed, factory.StatusErrored:
-			}
-		}
-		now := time.Now()
-		round.GatesOnlyFailed = factory.GatesOnlyFailed(ev.Checks)
-		round.State, round.EndedAt = smeltd.RoundDone, &now
-		round.Note = fmt.Sprintf("%d of %d checks passed", passed, len(ev.Checks))
-		if skipped > 0 {
-			round.Note += fmt.Sprintf("; %d review(s) skipped (gates failed)", skipped)
-		}
-		if impl := round.Implement; impl != nil && len(impl.Unproven) > 0 {
-			round.Note += "; the implementer claimed gates it did not run after its last edit: " + strings.Join(impl.Unproven, ", ")
-		}
-		recordChecksLocked(e.s.Factory, ev.Checks)
+		r.checkedLocked(ridx, ev)
 	}
 }
 
@@ -613,7 +584,11 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if c.Kind != factory.KindReview {
 			continue
 		}
-		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness), ContextPeak: c.Context.Peak, Mode: string(c.Mode)}
+		name := c.Harness
+		if name == "" {
+			name = r.harness
+		}
+		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(name), Model: c.Model, ContextPeak: c.Context.Peak, Mode: string(c.Mode)}
 		for i, f := range c.Findings {
 			f.Prompt = c.Name
 			f.ID = fmt.Sprintf("%s-%d", c.Name, i+1)
@@ -624,6 +599,8 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 			p := &e.s.Rounds[ridx].Reviews[i]
 			p.Findings, p.Worth, p.Status = len(res.Findings), len(worthChanging(c.Findings)), string(c.Status)
 			p.ContextPeak = c.Context.Peak
+			p.Harness, p.Model = string(c.Harness), c.Model
+			r.recordHarnessRateLimit(c.Harness, c.RateLimit)
 			if c.Status == factory.StatusSkipped {
 				p.State = smeltd.PromptSkipped
 			}
@@ -739,6 +716,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Timing = wireTiming(rep.Timing)
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
+		f.Reason, f.ResetAt = rep.Outcome.Reason, rep.Outcome.ResetAt
 		f.Blocked = rep.Outcome.Blocked
 		f.Unverified = rep.Outcome.Unverified
 		f.ContinuedFromEmpty = rep.Outcome.FromEmpty
@@ -791,14 +769,15 @@ func imageInstallCommand(backend string, cfg *config.ProjectConfig) string {
 	return cfg.InstallCommand()
 }
 
-// recordRateLimit keeps the run's last rate-limit signal where `smelt harness
-// status` finds it. The status is best effort, so a failure is not the run's.
-func (r *factoryRecorder) recordRateLimit(rl *harness.RateLimit) {
+func (r *factoryRecorder) recordHarnessRateLimit(name harness.Name, rl *harness.RateLimit) {
 	if rl == nil {
 		return
 	}
+	if name == "" {
+		name = r.harness
+	}
 	if dir, err := status.Dir(); err == nil {
-		status.RecordSignal(dir, r.harness, *rl, time.Now())
+		status.RecordSignal(dir, name, *rl, time.Now())
 	}
 }
 
@@ -808,4 +787,145 @@ func warnings(req smeltd.FactoryRequest) []string {
 		return nil
 	}
 	return []string{req.KitWarning}
+}
+
+type factoryHarnesses struct {
+	Auth           HarnessAuth
+	Fallback       []factory.Candidate
+	InitialFailure error
+}
+
+// resolveFactoryHarnesses snapshots each agent's own credential and model.
+func (d *daemon) resolveFactoryHarnesses(req smeltd.FactoryRequest, cfg *config.ProjectConfig, agent harness.Harness) (factoryHarnesses, error) {
+	names := req.Fallback
+	if !req.FallbackSet && names == nil && cfg.Factory != nil {
+		names = cfg.Factory.Fallback
+	}
+	fallback := make([]factory.Candidate, 0, len(names))
+	seen := map[string]bool{req.Harness: true}
+	for _, name := range names {
+		h, err := all.ByName(harness.Name(name))
+		if err != nil || name == "" {
+			return factoryHarnesses{}, apiErr(http.StatusBadRequest, "unknown fallback harness %q", name)
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		fallback = append(fallback, d.fallbackCandidate(h, cfg))
+	}
+	auth := d.harnessAuth(agent.Name())
+	var initialFailure error
+	if msg := d.factoryAuthError(req.Backend, agent.Name()); msg != "" {
+		initialFailure = errors.New(msg)
+	}
+	if auth.Refresh != nil {
+		if cred, err := auth.Refresh(context.Background()); err != nil {
+			initialFailure = err
+		} else {
+			auth.Credential = cred
+			initialFailure = nil
+		}
+	}
+	if initialFailure != nil {
+		if len(fallback) == 0 {
+			return factoryHarnesses{}, apiErr(http.StatusServiceUnavailable, "%v", initialFailure)
+		}
+		initialFailure = harness.Classified(harness.Auth, initialFailure, nil)
+	}
+
+	return factoryHarnesses{Auth: auth, Fallback: fallback, InitialFailure: initialFailure}, nil
+}
+
+func (r *factoryRecorder) turnAttempt(a factory.TurnAttempt) {
+	ridx := -1
+	if a.Turn == "implementer" && a.Round > 0 {
+		ridx = r.round(a.Round)
+	}
+	r.entry.mu.Lock()
+	defer r.entry.mu.Unlock()
+	f := r.entry.s.Factory
+	f.Turns = append(f.Turns, smeltd.HarnessTurn(a))
+	if a.Turn == "implementer" || a.Turn == "plan" || a.Turn == "notes" {
+		f.Harness, f.Model = string(a.Harness), a.Model
+	}
+	if ridx >= 0 {
+		round := &r.entry.s.Rounds[ridx]
+		round.Harness = string(a.Harness)
+		if round.Implement != nil {
+			round.Implement.Harness, round.Implement.Model = string(a.Harness), a.Model
+		}
+	}
+	r.recordHarnessRateLimit(a.Harness, a.RateLimit)
+}
+
+func (r *factoryRecorder) checkedLocked(ridx int, ev factory.Event) {
+	e := r.entry
+	round := &e.s.Rounds[ridx]
+	r.recordReviewsLocked(ridx, ev.Checks)
+	passed, skipped := 0, 0
+	for _, c := range ev.Checks {
+		switch c.Status {
+		case factory.StatusPassed, factory.StatusNotMeasured:
+			passed++
+		case factory.StatusSkipped:
+			skipped++
+		case factory.StatusFailed, factory.StatusErrored:
+		}
+	}
+	now := time.Now()
+	round.GatesOnlyFailed = factory.GatesOnlyFailed(ev.Checks)
+	round.State, round.EndedAt = smeltd.RoundDone, &now
+	round.Note = fmt.Sprintf("%d of %d checks passed", passed, len(ev.Checks))
+	if skipped > 0 {
+		round.Note += fmt.Sprintf("; %d review(s) skipped (gates failed)", skipped)
+	}
+	if impl := round.Implement; impl != nil && len(impl.Unproven) > 0 {
+		round.Note += "; the implementer claimed gates it did not run after its last edit: " + strings.Join(impl.Unproven, ", ")
+	}
+	recordChecksLocked(e.s.Factory, ev.Checks)
+}
+
+func (d *daemon) fallbackCandidate(h harness.Harness, cfg *config.ProjectConfig) factory.Candidate {
+	a := d.harnessAuth(h.Name())
+	var authErr error
+	if a.Refresh != nil {
+		a.Credential, authErr = a.Refresh(context.Background())
+	}
+	if authErr == nil && a.Credential.Value == "" {
+		authErr = fmt.Errorf("no %s credential configured", string(h.Name()))
+	}
+	if authErr != nil {
+		authErr = harness.Classified(harness.Auth, authErr, nil)
+	}
+	return factory.Candidate{Harness: h, Credential: a.Credential, BaseURL: a.BaseURL, Model: cfg.Factory.ModelFor(string(h.Name())), Failure: authErr}
+}
+
+func (r *factoryRecorder) beforeRound(ev factory.Event) bool {
+	if ev.Kind == factory.EventHarnessSwap && ev.Swap != nil {
+		r.entry.mu.Lock()
+		defer r.entry.mu.Unlock()
+		r.entry.s.Factory.HarnessSwaps = append(r.entry.s.Factory.HarnessSwaps, smeltd.HarnessSwap(*ev.Swap))
+		return true
+	}
+	if ev.Kind == factory.EventTurnAttempt && ev.Attempt != nil {
+		r.turnAttempt(*ev.Attempt)
+		return true
+	}
+
+	// The plan comes before the first round.
+	if ev.Kind == factory.EventPlanning {
+		r.progress(iostream.LevelStep, "planning")
+		return true
+	}
+	if ev.Kind == factory.EventPlanReviewed {
+		r.planReviewed(ev)
+		return true
+	}
+	if ev.Kind == factory.EventNoPriorWork {
+		// Shown through the factory's status function, which feeds the progress
+		// lines; it belongs to no round.
+		return true
+	}
+	return false
 }

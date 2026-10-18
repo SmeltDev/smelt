@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
@@ -27,6 +28,8 @@ type Result string
 const (
 	// ResultPassed means every check passed.
 	ResultPassed Result = "passed"
+	// ResultFailed means no eligible harness remains.
+	ResultFailed Result = "failed"
 	// ResultExhausted means checks still failed when attempts ran out.
 	ResultExhausted Result = "exhausted"
 	// ResultStuck means the implementer changed nothing in response to
@@ -42,7 +45,11 @@ const (
 
 // Outcome is the end state of a loop.
 type Outcome struct {
-	Result Result
+	Reason       string
+	ResetAt      *time.Time
+	HarnessSwaps []HarnessSwap
+	Turns        []TurnAttempt
+	Result       Result
 	// Rounds is how many rounds were checked.
 	Rounds int
 	Change Change
@@ -102,17 +109,21 @@ const (
 	EventCollected                     // the work was collected; Round, Change
 	EventChecking                      // checks started; Round
 	EventChecked                       // checks ended; Round, Checks
-	EventNoPriorWork                   // the work already there is empty; the request is implemented
+	EventHarnessSwap
+	EventTurnAttempt
+	EventNoPriorWork // the work already there is empty; the request is implemented
 )
 
 // Event reports progress through the loop.
 type Event struct {
-	Kind   EventKind
-	Round  int
-	Prompt string
-	Turn   Turn
-	Change Change
-	Checks []Check
+	Swap    *HarnessSwap
+	Attempt *TurnAttempt
+	Kind    EventKind
+	Round   int
+	Prompt  string
+	Turn    Turn
+	Change  Change
+	Checks  []Check
 	// Plan and Findings are the settled plan and what its review still found
 	// wrong with it.
 	Plan     *Plan
@@ -154,6 +165,11 @@ type Loop struct {
 // that failed; the outcome so far is returned with it.
 func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, error) {
 	out, err := l.run(ctx, steps, prompt)
+	var exhausted *Exhaustion
+	if errors.As(err, &exhausted) {
+		out.Result, out.Reason, out.ResetAt = ResultFailed, noHarnessAvailable, exhausted.ResetAt
+		return out, err
+	}
 	// A block outranks why the loop stopped: the implementer said what it
 	// cannot do, which no further round changes.
 	if out.Blocked != "" && out.Result != "" && out.Result != ResultNoChange {
@@ -252,6 +268,12 @@ func (l Loop) implementRound(ctx context.Context, steps Steps, emit func(Event),
 		}
 	}
 	emit(Event{Kind: EventImplementing, Round: round, Prompt: prompt})
+	if s, ok := steps.(*Sidecars); ok {
+		s.round, s.prior, s.checks = round, previous, out.Checks
+		if out.Plan != nil {
+			s.plan = out.Plan
+		}
+	}
 	turn, err := steps.Implement(ctx, prompt)
 	if err != nil {
 		return previous, false, fmt.Errorf("round %d: implement: %w", round, err)

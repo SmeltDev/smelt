@@ -244,6 +244,10 @@ type QualityFunction struct {
 
 // FactoryRun is what a factory session works on and where its work is.
 type FactoryRun struct {
+	HarnessSwaps []HarnessSwap `json:"harness_swaps,omitempty"`
+	Turns        []HarnessTurn `json:"turns,omitempty"`
+	Reason       string        `json:"reason,omitempty"`
+	ResetAt      *time.Time    `json:"reset_at,omitempty"`
 	// Prompt is the request. A continued run's is the earlier run's, and
 	// Guidance is what the user added to it, if anything.
 	Prompt   string `json:"prompt"`
@@ -418,6 +422,8 @@ type PlanItem struct {
 const (
 	// ResultPassed means every check passed.
 	ResultPassed = "passed"
+	// ResultFailed means no eligible harness remained.
+	ResultFailed = "failed"
 	// ResultExhausted means checks still failed when attempts ran out.
 	ResultExhausted = "exhausted"
 	// ResultStuck means the implementer stopped changing the code with checks
@@ -451,6 +457,8 @@ const (
 // command output is fetched through /output, so a snapshot stays small however
 // much Claude wrote.
 type ReviewPrompt struct {
+	Harness   string         `json:"harness,omitempty"`
+	Model     string         `json:"model,omitempty"`
 	Name      string         `json:"name"`
 	State     PromptRunState `json:"state"`
 	SidecarID string         `json:"sidecar_id,omitempty"`
@@ -501,8 +509,9 @@ const (
 
 // Round is one pass of implementing the work and checking it.
 type Round struct {
-	Number int        `json:"number"`
-	State  RoundState `json:"state"`
+	Harness string     `json:"harness,omitempty"`
+	Number  int        `json:"number"`
+	State   RoundState `json:"state"`
 	// Kind is "broad" or "recheck" for a round of an integrate run, "" for any
 	// other.
 	Kind    RoundKind      `json:"kind,omitempty"`
@@ -563,6 +572,7 @@ type ReviewResult struct {
 	Status string `json:"status,omitempty"`
 	// Harness is the agent that ran the review.
 	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
 	// ContextPeak is the largest prompt of the review in tokens, absent when
 	// unknown.
 	ContextPeak int `json:"context_peak,omitempty"`
@@ -629,6 +639,9 @@ type FromRef struct {
 
 // FactoryRequest starts a factory session.
 type FactoryRequest struct {
+	Fallback []string `json:"fallback,omitempty"`
+	// FallbackSet distinguishes an explicitly empty list from project defaults.
+	FallbackSet bool `json:"fallback_set,omitempty"`
 	// ProjectRoot is a project the daemon tracks. Required.
 	ProjectRoot string `json:"project_root"`
 	// Prompt is what the implementer is asked to do. Required unless Continue
@@ -695,4 +708,31 @@ type SessionStartResponse struct {
 // SessionList answers GET /factory.
 type SessionList struct {
 	Sessions []Session `json:"sessions"`
+}
+
+// HarnessSwap records which agent took over a logical turn and why.
+type HarnessSwap struct {
+	Round   int                 `json:"round"`
+	Turn    string              `json:"turn"`
+	From    harness.Name        `json:"from"`
+	To      harness.Name        `json:"to"`
+	Kind    harness.FailureKind `json:"kind"`
+	ResetAt *time.Time          `json:"reset_at,omitempty"`
+}
+
+// HarnessTurn attributes a completed attempt, including failed agent calls.
+type HarnessTurn struct {
+	DurationMS   int64               `json:"duration_ms,omitempty"`
+	CostUSD      float64             `json:"cost_usd,omitempty"`
+	InputTokens  int                 `json:"input_tokens,omitempty"`
+	CachedTokens int                 `json:"cached_tokens,omitempty"`
+	OutputTokens int                 `json:"output_tokens,omitempty"`
+	Round        int                 `json:"round"`
+	Turn         string              `json:"turn"`
+	Harness      harness.Name        `json:"harness"`
+	Model        string              `json:"model,omitempty"`
+	Kind         harness.FailureKind `json:"kind,omitempty"`
+	Error        string              `json:"error,omitempty"`
+	ResetAt      *time.Time          `json:"reset_at,omitempty"`
+	RateLimit    *harness.RateLimit  `json:"rate_limit,omitempty"`
 }

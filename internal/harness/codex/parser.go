@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -113,7 +114,7 @@ var hostMissingRe = regexp.MustCompile("(?i)codex-code-mode-host[`'\"]* is missi
 func (p *parser) classify(texts ...string) {
 	for _, t := range texts {
 		if hostMissingRe.MatchString(t) {
-			p.err = ErrHostMissing
+			p.err = harness.Classified(harness.Unavailable, ErrHostMissing, nil)
 			return
 		}
 	}
@@ -137,6 +138,9 @@ func (p *parser) fail(raw string) {
 	p.failure = readableError(raw)
 	if usageLimitRe.MatchString(p.failure) {
 		p.turn.RateLimit = &harness.RateLimit{Status: "limited", ResetsAt: p.resetTime(p.failure)}
+		p.err = harness.Classified(harness.RateLimited, errors.New(p.failure), p.turn.RateLimit.ResetsAt)
+	} else if credentialRejectedRe.MatchString(p.failure) {
+		p.err = harness.Classified(harness.Auth, ErrCredentialRejected, nil)
 	}
 }
 

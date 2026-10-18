@@ -125,3 +125,14 @@ func TestParserWithoutUsageHasNoContext(t *testing.T) {
 	assert.Equal(t, turn.ContextPeak, 0)
 	assert.Equal(t, turn.ModelCalls, 0)
 }
+
+func TestUnifiedWindowsPreserveFractionAndReset(t *testing.T) {
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792365600,"rateLimitType":"five_hour","overageStatus":"rejected","unifiedWindows":{"five_hour":{"utilization":0.9601,"resetsAt":1792365600},"seven_day":{"utilization":0.47,"resetsAt":1792432800}}}}` + "\n"))
+	rl := p.Outcome().Turn.RateLimit
+	assert.Assert(t, rl != nil)
+	assert.Equal(t, rl.Windows["5h"].Utilization, 0.9601)
+	assert.Equal(t, *rl.Utilization, 96)
+	assert.Assert(t, rl.Windows["7d"].ResetsAt.Equal(time.Unix(1792432800, 0)))
+	assert.Assert(t, p.Outcome().Err == nil)
+}

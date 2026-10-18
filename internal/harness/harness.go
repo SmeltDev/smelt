@@ -12,7 +12,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
@@ -37,10 +39,58 @@ const MissingExitCode = 97
 // that relies on its own deadline passes no timeout, which must not read as
 // "timed out after 0s".
 func TimeoutError(timeout time.Duration, ctxErr error) error {
-	if timeout > 0 {
-		return fmt.Errorf("timed out after %s", timeout)
+	return Classified(Timeout, &deadlineError{timeout: timeout, cause: ctxErr}, nil)
+}
+
+type deadlineError struct {
+	timeout time.Duration
+	cause   error
+}
+
+func (e *deadlineError) Error() string {
+	if e.timeout > 0 {
+		return fmt.Sprintf("timed out after %s", e.timeout)
 	}
-	return fmt.Errorf("timed out: %w", ctxErr)
+	return fmt.Sprintf("timed out: %v", e.cause)
+}
+func (e *deadlineError) Unwrap() error { return e.cause }
+
+// FailureKind identifies failures of an agent rather than the code it checks.
+type FailureKind string
+
+// Harness failure kinds.
+const (
+	RateLimited FailureKind = "rate_limited"
+	Auth        FailureKind = "auth"
+	Unavailable FailureKind = "unavailable"
+	Timeout     FailureKind = "timeout"
+)
+
+// Failure preserves the original cause and any provider reset time.
+type Failure struct {
+	Kind    FailureKind
+	Cause   error
+	ResetAt *time.Time
+}
+
+// Error describes the original failure.
+func (f *Failure) Error() string {
+	if f.Cause != nil {
+		return f.Cause.Error()
+	}
+	return string(f.Kind)
+}
+
+// Unwrap preserves sentinel and context error matching.
+func (f *Failure) Unwrap() error { return f.Cause }
+
+// Classified wraps cause unless it is already classified.
+func Classified(kind FailureKind, cause error, reset *time.Time) error {
+	var f *Failure
+	if errors.As(cause, &f) {
+		return cause
+	}
+	return &Failure{Kind: kind, Cause: cause, ResetAt: reset}
 }
 
 // Credential is what a harness authenticates with. EnvVar is the variable the
@@ -167,12 +217,19 @@ type Context struct {
 	Compactions int
 }
 
-// RateLimit is a rate-limit signal an agent emitted during a turn.
-type RateLimit struct {
-	Status      string     `json:"status"`                // "allowed", "warning", "limited"
-	Bucket      string     `json:"bucket,omitempty"`      // e.g. "5h", "7d"; "" when unknown
-	Utilization *int       `json:"utilization,omitempty"` // percent, when the CLI reports one
+// UsageWindow retains provider fractions without rounding.
+type UsageWindow struct {
+	Utilization float64    `json:"utilization"`
 	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+}
+
+// RateLimit is a provider usage signal, retaining precise windows.
+type RateLimit struct {
+	Windows     map[string]UsageWindow `json:"windows,omitempty"`
+	Status      string                 `json:"status"`                // "allowed", "warning", "limited"
+	Bucket      string                 `json:"bucket,omitempty"`      // e.g. "5h", "7d"; "" when unknown
+	Utilization *int                   `json:"utilization,omitempty"` // percent, when the CLI reports one
+	ResetsAt    *time.Time             `json:"resets_at,omitempty"`
 }
 
 // StreamParser reads the streamed output of an implementer turn as it arrives.
@@ -309,4 +366,18 @@ func WindowName(minutes int) string {
 		return "30d"
 	}
 	return fmt.Sprintf("%dm", minutes)
+}
+
+// ResultLine extracts the final result event from JSONL or preserves a JSON answer.
+func ResultLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var e struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &e) == nil && e.Type == "result" {
+			return lines[i]
+		}
+	}
+	return output
 }

@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -105,4 +106,49 @@ func TestReviewContext(t *testing.T) {
 	several := strings.Replace(result, `"num_turns":1`, `"num_turns":4`, 1)
 	assert.Equal(t, Harness{}.ReviewContext(several), harness.Context{})
 	assert.Equal(t, Harness{}.ReviewContext("not json"), harness.Context{})
+}
+
+func TestFailureClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		code           int
+		stdout, stderr string
+		kind           harness.FailureKind
+	}{
+		{"missing", harness.MissingExitCode, "", "", harness.Unavailable},
+		{"auth", 1, "", "Failed to authenticate: API Error: 401 Unauthorized", harness.Auth},
+		{"crash", 2, "", "process crashed", harness.Unavailable},
+		{"code outcome", 0, "BLOCKED: need a decision", "", ""},
+		{"rate limit with reset", 1, `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792365600}}`, "", harness.RateLimited},
+		{"rate limit without reset", 1, `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}`, "", harness.RateLimited},
+		{"allowed overage rejection", 0, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","overageStatus":"rejected"}}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (Harness{}).RunError(context.Background(), time.Minute, tc.code, nil, tc.stdout, tc.stderr)
+			var failure *harness.Failure
+			if tc.kind == "" {
+				assert.Assert(t, !errors.As(err, &failure))
+				return
+			}
+			assert.Assert(t, errors.As(err, &failure))
+			assert.Equal(t, failure.Kind, tc.kind)
+			if tc.name == "rate limit with reset" {
+				assert.Assert(t, failure.ResetAt != nil)
+			}
+			if tc.name == "missing" {
+				assert.ErrorIs(t, err, ErrMissing)
+			}
+			if tc.name == "auth" {
+				assert.ErrorIs(t, err, ErrCredentialRejected)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, (Harness{}).RunError(ctx, time.Minute, 1, ctx.Err(), "", ""), context.Canceled)
+	deadline, done := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer done()
+	var failure *harness.Failure
+	assert.Assert(t, errors.As((Harness{}).RunError(deadline, time.Minute, 1, nil, "", ""), &failure))
+	assert.Equal(t, failure.Kind, harness.Timeout)
 }
