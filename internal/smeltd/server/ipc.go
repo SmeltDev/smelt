@@ -190,7 +190,8 @@ func (d *daemon) handleSidecarByID(w http.ResponseWriter, r *http.Request) {
 // active ones end, at once when none are. Repeating it answers the same.
 func (d *daemon) handleDrain(w http.ResponseWriter, _ *http.Request) {
 	// The idle hook may stop the server, so the answer is written first; the
-	// hook delays its shutdown to let it flush.
+	// hook delays its shutdown to let it flush. The store logs the request
+	// count under its admission lock, before any completion notifications.
 	active := d.sessions.drain()
 	writeJSON(w, http.StatusOK, smeltd.DrainResponse{Draining: true, Active: active})
 }
@@ -198,5 +199,5 @@ func (d *daemon) handleDrain(w http.ResponseWriter, _ *http.Request) {
 // handleUndrain serves DELETE /drain: admit factory runs again.
 func (d *daemon) handleUndrain(w http.ResponseWriter, _ *http.Request) {
 	d.sessions.undrain()
-	writeJSON(w, http.StatusOK, smeltd.DrainResponse{Active: d.sessions.activeCount()})
+	writeJSON(w, http.StatusOK, smeltd.DrainResponse{Draining: d.sessions.isDraining(), Active: d.sessions.activeCount()})
 }

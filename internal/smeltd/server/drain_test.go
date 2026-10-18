@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,7 +37,7 @@ func newDrainFixture(t *testing.T) *drainFixture {
 			return factory.Report{}, ctx.Err()
 		}
 	})
-	f.d.sessions.onIdle = func() { f.idle.Add(1) }
+	f.d.sessions.onIdle = func(uint64) { f.idle.Add(1) }
 	f.handler = newServer(f.d).Handler
 	return f
 }
@@ -140,7 +141,7 @@ func TestPingReportsDrainingAndRevision(t *testing.T) {
 func TestDrainWaitsForTheRunToWindDown(t *testing.T) {
 	s := newSessionStore(context.Background())
 	var idle atomic.Int32
-	s.onIdle = func() { idle.Add(1) }
+	s.onIdle = func(uint64) { idle.Add(1) }
 	entry, _, err := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
 	assert.NilError(t, err)
 	assert.Equal(t, s.drain(), 1)
@@ -154,4 +155,70 @@ func TestDrainWaitsForTheRunToWindDown(t *testing.T) {
 	close(entry.done)
 	s.ended()
 	assert.Equal(t, idle.Load(), int32(1))
+}
+
+func TestDrainRetainsFinishedRunsUntilDone(t *testing.T) {
+	s := newSessionStore(t.Context())
+	first, _, err := s.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.NilError(t, err)
+	first.s.State = smeltd.SessionDone
+	for range MaxSessionsPerProject {
+		e, _, err := s.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+		assert.NilError(t, err)
+		e.s.State = smeltd.SessionDone
+		close(e.done)
+	}
+	assert.Equal(t, s.activeCount(), 1, "retention must not hide unfinished teardown")
+	assert.Assert(t, s.get(first.s.ID) == first)
+	assert.Equal(t, s.drain(), 1)
+	close(first.done)
+}
+
+// Capture the idle token as a timer would, then exercise every boundary without
+// relying on scheduler timing. A cancelled drain cannot cancel renewed work or
+// shorten the flush delay of a later drain.
+func TestDrainDelayedCommitRevalidatesAdmission(t *testing.T) {
+	s := newSessionStore(t.Context())
+	var token uint64
+	s.onIdle = func(generation uint64) { token = generation }
+	assert.Equal(t, s.drain(), 0)
+	old := token
+	s.undrain()
+	entry, ctx, err := s.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.NilError(t, err)
+	var shutdowns int
+	shutdown := func() { shutdowns++ }
+	s.commitDrain(old, shutdown)
+	assert.Equal(t, shutdowns, 0)
+	assert.NilError(t, ctx.Err())
+	assert.Equal(t, s.drain(), 1)
+	s.commitDrain(old, shutdown)
+	assert.Equal(t, shutdowns, 0)
+	close(entry.done)
+	s.ended()
+	s.commitDrain(old, shutdown)
+	assert.Equal(t, shutdowns, 0, "old timer cannot commit a later drain")
+	s.commitDrain(token, shutdown)
+	assert.Equal(t, shutdowns, 1)
+	s.undrain()
+	_, _, err = s.add(smeltd.Session{ProjectRoot: "/other"}, 1)
+	var draining *drainingError
+	assert.Assert(t, errors.As(err, &draining), "admission must stay closed after shutdown commits: %v", err)
+	s.commitDrain(token, shutdown)
+	assert.Equal(t, shutdowns, 1, "shutdown commits only once")
+}
+
+func TestDrainCommitRechecksOpenDoneChannels(t *testing.T) {
+	s := newSessionStore(t.Context())
+	entry, ctx, err := s.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.NilError(t, err)
+	s.drain()
+	called := false
+	shutdown := func() { called = true }
+	s.commitDrain(s.drainGeneration, shutdown)
+	assert.Assert(t, !called)
+	assert.NilError(t, ctx.Err())
+	finish(entry, smeltd.SessionDone)
+	s.commitDrain(s.drainGeneration, shutdown)
+	assert.Assert(t, called)
 }

@@ -298,3 +298,21 @@ func TestFactoryBuildAgainstADrainingDaemon(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestDaemonRestartRequesterCancellationLeavesDrainEnabled(t *testing.T) {
+	f := &fakeDaemonControl{reachable: true, active: 2}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	command := newDaemonGroupCmdWith(fakeOpts(f, "new-build"))
+	var out bytes.Buffer
+	command.SetOut(&out)
+	command.SetErr(&out)
+	command.SetArgs([]string{"restart", "--when-idle"})
+	command.SetContext(ctx)
+	err := command.Execute()
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+	assert.Equal(t, f.drains, 1)
+	assert.Assert(t, f.draining && f.reachable)
+	assert.Assert(t, !f.cancelDrain)
+	assert.Equal(t, len(f.stopped), 0)
+}
