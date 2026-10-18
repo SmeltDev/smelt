@@ -36,7 +36,9 @@ type sessionEntry struct {
 	// cancelled records that cancellation was asked for, so a session stopped by
 	// it is reported as cancelled rather than as whatever error the stop made.
 	cancelled bool
-	done      chan struct{}
+	// stopRequestedAt is when cancellation was first asked for.
+	stopRequestedAt time.Time
+	done            chan struct{}
 	// loopNote is why the loop ended, and loopFailed that it ran to its end
 	// without its work passing. Both are internal: the record shows their
 	// consequences.
@@ -307,6 +309,9 @@ func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {
 	e.mu.Lock()
 	active := !e.s.State.Finished()
 	if active {
+		if !e.cancelled {
+			e.stopRequestedAt = time.Now()
+		}
 		e.cancelled = true
 	}
 	e.mu.Unlock()

@@ -17,6 +17,7 @@ func DockerBackend(root string, cfg *config.ProjectConfig) (sidecar.Backend, err
 	if err != nil {
 		return nil, fmt.Errorf("docker backend unavailable: %w", err)
 	}
+	b.StopGrace = cfg.Factory.StopGraceDuration()
 	if cfg.Factory != nil {
 		b.ManagedDockerfile = cfg.Factory.Dockerfile
 	}

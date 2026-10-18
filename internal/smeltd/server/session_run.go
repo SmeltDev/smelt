@@ -319,6 +319,9 @@ func friendlyReviewError(err error) string {
 	return err.Error()
 }
 
+// cancelledNote is the reason shown for work a stop cut short.
+const cancelledNote = "cancelled"
+
 // settleSession closes a session that has ended, however it ended.
 func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	entry.mu.Lock()
@@ -330,7 +333,8 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	switch {
 	case entry.cancelled:
 		entry.s.State = smeltd.SessionCancelled
-		stage.State, stage.Note = smeltd.StageFailed, "cancelled"
+		entry.s.StoppedAfterMS = entry.stoppedAfterLocked(now)
+		stage.State, stage.Note = smeltd.StageFailed, cancelledNote
 	case runErr != nil:
 		entry.s.State = smeltd.SessionFailed
 		entry.s.Error = friendlyReviewError(runErr)
@@ -343,17 +347,32 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 		}
 	}
 
-	// Anything still in flight when the session ended did not finish; say so
-	// rather than leaving it shown as running on a session that is over.
-	reason := entry.s.Error
-	if entry.cancelled {
-		reason = "cancelled"
+	entry.failUnfinishedRoundsLocked(now)
+}
+
+// stoppedAfterLocked is the time from the stop request to now, or nil when no
+// stop was requested. The caller holds entry.mu.
+func (e *sessionEntry) stoppedAfterLocked(now time.Time) *int64 {
+	if e.stopRequestedAt.IsZero() {
+		return nil
+	}
+	ms := max(now.Sub(e.stopRequestedAt).Milliseconds(), 0)
+	return &ms
+}
+
+// failUnfinishedRoundsLocked marks anything still in flight when the session
+// ended as failed; say so rather than leaving it shown as running on a session
+// that is over. The caller holds entry.mu.
+func (e *sessionEntry) failUnfinishedRoundsLocked(now time.Time) {
+	reason := e.s.Error
+	if e.cancelled {
+		reason = cancelledNote
 	}
 	if reason == "" {
 		reason = "did not finish"
 	}
-	for ri := range entry.s.Rounds {
-		r := &entry.s.Rounds[ri]
+	for ri := range e.s.Rounds {
+		r := &e.s.Rounds[ri]
 		if r.State == smeltd.RoundDone || r.State == smeltd.RoundFailed {
 			continue
 		}
@@ -364,7 +383,7 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 		for i := range r.Reviews {
 			p := &r.Reviews[i]
 			switch {
-			case entry.cancelled && p.State != smeltd.PromptDone:
+			case e.cancelled && p.State != smeltd.PromptDone:
 				// Whatever a stopped review reported ("context canceled" from
 				// three layers down) is just the cancellation again.
 				p.State, p.Error = smeltd.PromptFailed, reason

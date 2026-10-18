@@ -216,7 +216,7 @@ smelt
 │   │   --json                      # Output as JSON (each entry has run_id, the newest, and state)
 │   ├── status [run-id]             # A run's state, rounds, reviews, result and cost (default: the newest run)
 │   │   --json                      # Output as JSON: the daemon's session, or the record with "state":"done"
-│   ├── stop <run-id>               # Stop a running run; the work so far is committed. A finished run is reported, not an error
+│   ├── stop <run-id>               # Stop a running run; the work so far is committed. Waits for the run to end (grace + 5 s at most). A finished run is reported, not an error
 │   ├── publish <run-id>            # Push a finished run's branch, or open or update its PR
 │   │   --push | --pr               # Mode; without either, asks in a terminal
 │   │   --base <branch>             # Branch the PR targets
@@ -546,6 +546,14 @@ smelt
   under `Verify outside the sandbox:`, logged as `unverified: ...` in the run log and activity stream, and
   rendered in the PR body as a `## Verify before merging` checklist. With `--continue`, the list is the
   latest turn's, not accumulated.
+- **`factory stop` ends the agent's work within seconds on the Docker backend.** Every command a run
+  executes in a sidecar (agent turns, gates, reviews) runs in its own process group. On stop the group
+  gets SIGTERM, then SIGKILL after `factory.stopGrace` seconds (default 10), and the run ends
+  `cancelled`, never `failed`. The session's `stopped_after_ms` is the time from the stop request to
+  the run ending. `factory stop` waits for that, up to the grace plus 5 s, then says the run is still
+  winding down. On the CircleCI backend the sidecar API has no stop for a running command, so stop
+  waits for the current turn to end. A command in an image without `setsid` cannot be signalled and
+  runs until the grace has passed and the stream is closed.
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
   (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)

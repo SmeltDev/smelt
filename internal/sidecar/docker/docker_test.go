@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,4 +194,66 @@ func readFile(t *testing.T, path string) string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// execCancelled runs script in a new container, cancels it once the script has
+// recorded its process group, and returns how long Exec took to return and what
+// `ps` shows afterwards.
+func execCancelled(t *testing.T, b *Provider, script string) (time.Duration, string) {
+	t.Helper()
+	inst, err := b.Create(context.Background(), "smelt-test-cancel", "", repoPath)
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = b.Delete(context.Background(), inst.ID) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := b.Exec(ctx, inst.ID, script, nil, nil, nil)
+		done <- result{err}
+	}()
+	time.Sleep(2 * time.Second) // let the command start and record its group
+	stopped := time.Now()
+	cancel()
+	select {
+	case r := <-done:
+		assert.Assert(t, errors.Is(r.err, context.Canceled), "%v", r.err)
+		took := time.Since(stopped)
+		var ps strings.Builder
+		_, err := b.Exec(context.Background(), inst.ID, "ps", nil, func(_ string, d []byte) { ps.Write(d) }, nil)
+		assert.NilError(t, err)
+		return took, ps.String()
+	case <-time.After(60 * time.Second):
+		t.Fatal("Exec did not return after the cancel")
+	}
+	return 0, ""
+}
+
+func TestExecCancelKillsTheProcessGroup(t *testing.T) {
+	b := newLiveBackend(t)
+	b.StopGrace = 5 * time.Second
+	took, ps := execCancelled(t, b, "sleep 600 & wait")
+	assert.Assert(t, took < b.StopGrace+2*time.Second, "took %s", took)
+	assert.Assert(t, !strings.Contains(ps, "sleep 600"), ps)
+}
+
+func TestExecCancelKillsAfterTheGraceWhenTermIsIgnored(t *testing.T) {
+	b := newLiveBackend(t)
+	b.StopGrace = time.Second
+	took, ps := execCancelled(t, b, "trap '' TERM; sleep 600 & wait")
+	assert.Assert(t, took >= b.StopGrace, "took %s", took)
+	assert.Assert(t, took < b.StopGrace+2*time.Second, "took %s", took)
+	assert.Assert(t, !strings.Contains(ps, "sleep 600"), ps)
+}
+
+func TestGroupedCommandKeepsTheScript(t *testing.T) {
+	cmd := groupedCommand("/tmp/f", "exit 3")
+	assert.DeepEqual(t, cmd[len(cmd)-2:], []string{"/tmp/f", "exit 3"})
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("no setsid on the host")
+	}
+	err := exec.Command(cmd[0], cmd[1:]...).Run()
+	var ee *exec.ExitError
+	assert.Assert(t, errors.As(err, &ee) && ee.ExitCode() == 3, "%v", err)
 }

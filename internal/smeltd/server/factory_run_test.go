@@ -248,7 +248,9 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 	assert.NilError(t, err)
 	found, active := d.sessions.cancelSession(sess.ID)
 	assert.Assert(t, found && active)
-	assert.Equal(t, waitForSessionEnd(t, d, sess.ID).State, smeltd.SessionCancelled)
+	ended := waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, ended.State, smeltd.SessionCancelled)
+	assert.Assert(t, ended.StoppedAfterMS != nil && *ended.StoppedAfterMS >= 0, "stopped_after_ms is recorded")
 }
 
 // One session at a time per project.
