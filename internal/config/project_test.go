@@ -452,3 +452,18 @@ func TestFactoryQualityConfigRejectsBadGlobs(t *testing.T) {
 		assert.ErrorContains(t, err, "factory.quality."+name)
 	}
 }
+
+func TestFactoryRoundAndContextDefaultsAndValidation(t *testing.T) {
+	var unset *FactoryConfig
+	assert.Equal(t, unset.RoundPolicy(), RoundsFresh)
+	assert.Equal(t, unset.ImplementContextWindow(), 150000)
+	assert.Equal(t, (&FactoryConfig{Rounds: RoundsResume}).RoundPolicy(), RoundsResume)
+	zero := 0
+	assert.Equal(t, (&FactoryConfig{ContextWindow: &zero}).ImplementContextWindow(), 0)
+	for _, f := range []*FactoryConfig{{Rounds: "other"}, {ContextWindow: ptrInt(99999)}, {ContextWindow: ptrInt(1000001)}} {
+		assert.Assert(t, (&ProjectConfig{Factory: f}).Validate() != nil)
+	}
+	assert.NilError(t, (&ProjectConfig{Factory: &FactoryConfig{Rounds: RoundsFresh, ContextWindow: ptrInt(100000)}}).Validate())
+}
+
+func ptrInt(v int) *int { return &v }

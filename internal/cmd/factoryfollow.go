@@ -26,14 +26,16 @@ const sessionPollInterval = time.Second
 // keeps going either way.
 const maxSessionPollFailures = 5
 
-// requireLocalDaemon refuses to run when the environment points at a remote
-// daemon. A factory run works from files on this machine, so it belongs to the
-// local daemon; a remote daemon would be working on a different checkout.
-func requireLocalDaemon() error {
+// requireLocalDaemon refuses to run command when the environment points at a
+// remote daemon. A factory run works from files on this machine, so it belongs
+// to the local daemon; a remote daemon would be working on a different
+// checkout. The daemon commands use the pid file and the binary on disk, which
+// are local too.
+func requireLocalDaemon(command string) error {
 	if smeltd.CurrentConnection().Remote == "" {
 		return nil
 	}
-	return newUserError("smelt factory build runs on the local smelt daemon, but SMELT_DAEMON_REMOTE_ADDR is set.").
+	return newUserError(command + " runs on the local smelt daemon, but SMELT_DAEMON_REMOTE_ADDR is set.").
 		withCode("command.invalid_args").
 		withSuggestion("Unset SMELT_DAEMON_REMOTE_ADDR to use this command.").
 		withExitCode(ExitBadArgs).
@@ -78,6 +80,9 @@ func sessionError(err error) error {
 			withSuggestion("Start it with 'smelt watch'.").
 			wrap(err)
 	case errors.As(err, &refused):
+		if refused.Code == smeltd.CodeDaemonDraining {
+			return drainingError(refused.Active)
+		}
 		e := newUserError(refused.Message).withoutDetail()
 		switch refused.Status {
 		case http.StatusConflict:

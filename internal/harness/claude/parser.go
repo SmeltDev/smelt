@@ -11,6 +11,7 @@ import (
 // streamEvent is the part of one stream-json line the implementer reads.
 type streamEvent struct {
 	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
 	SessionID string `json:"session_id"`
 	// ParentToolUseID is set on messages a subagent sent, which have a context
 	// of their own.
@@ -61,6 +62,7 @@ type parser struct {
 	// the turn. claude can print one assistant event per content block of the
 	// same message, so a call is counted once per message ID.
 	peak, calls int
+	compactions int
 	seenMsgs    map[string]bool
 }
 
@@ -84,6 +86,10 @@ func (p *parser) line(b []byte) {
 		p.result, p.sawResult = e, true
 	case "rate_limit_event":
 		p.rateLimit = rateLimit(e)
+	case "system":
+		if e.Subtype == "compact_boundary" {
+			p.compactions++
+		}
 	case "assistant":
 		p.context(e)
 		p.activity(e)
@@ -152,6 +158,7 @@ func (p *parser) Outcome() harness.Outcome {
 			OutputTokens: u.OutputTokens,
 			ContextPeak:  p.peak,
 			ModelCalls:   p.calls,
+			Compactions:  p.compactions,
 			RateLimit:    p.rateLimit,
 			SessionID:    p.sessionID,
 		},

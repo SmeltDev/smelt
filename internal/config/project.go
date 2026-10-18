@@ -217,8 +217,23 @@ func ValidHarness(name string) bool {
 	return false
 }
 
+// RoundPolicy says whether fix rounds resume the implementer's session or
+// start a new one.
+type RoundPolicy string
+
+const (
+	// RoundsFresh starts each fix round in a new session with a handoff.
+	RoundsFresh RoundPolicy = "fresh"
+	// RoundsResume keeps one implementer session across rounds.
+	RoundsResume RoundPolicy = "resume"
+)
+
 // FactoryConfig holds project defaults for `smelt factory build`.
 type FactoryConfig struct {
+	// Rounds selects whether implementer rounds reuse a session or start fresh.
+	Rounds RoundPolicy `json:"rounds,omitempty"`
+	// ContextWindow is the implementer auto-compaction threshold in tokens; zero uses the agent default.
+	ContextWindow *int `json:"contextWindow,omitempty"`
 	// Harness is the coding agent runs use: "claude" or "codex". Empty means
 	// ask, or fail when there is no terminal.
 	Harness string `json:"harness,omitempty"`
@@ -284,6 +299,12 @@ type QualityConfig struct {
 
 // validateLimits checks the numeric settings, which must not be negative.
 func (f *FactoryConfig) validateLimits() error {
+	if f.Rounds != "" && f.Rounds != RoundsFresh && f.Rounds != RoundsResume {
+		return fmt.Errorf("factory.rounds must be %q or %q", RoundsFresh, RoundsResume)
+	}
+	if f.ContextWindow != nil && *f.ContextWindow != 0 && (*f.ContextWindow < 100000 || *f.ContextWindow > 1000000) {
+		return fmt.Errorf("factory.contextWindow must be 0 or between 100000 and 1000000")
+	}
 	if f.MaxAttempts < 0 {
 		return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
 	}
@@ -294,6 +315,22 @@ func (f *FactoryConfig) validateLimits() error {
 		return fmt.Errorf("factory.pack.maxTokens must not be negative, got %d", f.Pack.MaxTokens)
 	}
 	return f.Quality.validate()
+}
+
+// RoundPolicy is the session policy; fresh is the default.
+func (f *FactoryConfig) RoundPolicy() RoundPolicy {
+	if f == nil || f.Rounds == "" {
+		return RoundsFresh
+	}
+	return f.Rounds
+}
+
+// ImplementContextWindow is the auto-compaction threshold; zero delegates to the agent.
+func (f *FactoryConfig) ImplementContextWindow() int {
+	if f == nil || f.ContextWindow == nil {
+		return 150000
+	}
+	return *f.ContextWindow
 }
 
 // DefaultPackMaxTokens is the size cap of a context pack when factory.pack

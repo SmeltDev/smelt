@@ -243,6 +243,14 @@ smelt
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
 │
+├── daemon                          # Inspect and restart the smelt daemon (local daemon only)
+│   ├── status                      # Pid, the daemon's revision vs this binary's, active runs
+│   │   --json                      # Print {running, pid, draining, active_runs, revision, binary_revision, differs}
+│   ├── restart --when-idle         # Drain: finish active runs, accept no new ones, then exit
+│   │   --timeout <duration>        # Stop draining and keep the daemon if runs are still active after this long (default: no limit)
+│   └── stop                        # Stop the daemon unless a factory run is active (or that can't be told)
+│       --force                     # Stop it anyway, cancelling active runs
+│
 ├── conflicts                       # Report whether this branch still merges cleanly into its merge target
 │   --project <path>                # Override project directory
 │   --hook                          # Emit Claude Code hook JSON so the notice reaches the agent
@@ -836,6 +844,34 @@ smelt
   apart. `--json` carries `session_id` and `owner_pid` in full.
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
   patterns like `cat bundle | smelt sidecar ssh -- git fetch ...`.
+- **`smelt --version` prints the build.** `smelt version dev (dabe728, 2026-10-18)`:
+  the version, then the VCS revision (7 characters, `-dirty` for an uncommitted
+  tree) and commit date from the binary's build info. A binary built without VCS
+  information (`go test`, a build outside a checkout) prints the version alone.
+- **`daemon restart --when-idle` drains the daemon.** It puts the daemon in drain
+  mode (`POST /drain`): no new factory runs are admitted, the active ones finish,
+  and the daemon then exits (at once when none are active). The next `smelt`
+  command starts the daemon from the binary on disk. While draining, `smelt
+  factory build` fails with `smelt is restarting to finish an upgrade after N
+  active run(s); try again shortly`, exit code **75** (`EX_TEMPFAIL`, retryable)
+  and, with `--json`, error code `daemon.draining`. Only factory runs count;
+  validate requests are not blocked. With `--timeout`, runs still active at the
+  deadline are left alone: draining stops (`DELETE /drain`), the daemon keeps
+  running, the command explains why and exits 75 with code
+  `daemon.restart_timeout`. A daemon that exits just as the timeout lapses counts
+  as success. Plain `daemon restart` without `--when-idle` is refused (exit 2):
+  an immediate restart would cancel runs, which is `daemon stop --force`. A daemon
+  from a build before drain mode cannot drain; stop it once with `daemon stop --force`.
+- **`daemon stop` refuses while a factory run is active**, and when it cannot tell
+  (exit 75, code `daemon.stop_refused`); `--force` stops it regardless.
+  `scripts/restart-daemon.sh` and `task build` use `restart --when-idle`; `task
+  daemon:restart` uses `stop --force`.
+- **`daemon status` compares revisions.** `smelt daemon status --json` reports
+  `running`, `pid`, `draining`, `active_runs`, the daemon's `revision`, this
+  binary's `binary_revision` and `differs`. A daemon that reports no revision (a
+  build before it was reported) shows `unknown` and counts as differing. With no
+  daemon it prints `not running` (`{"running": false}`) and exits 0. The `daemon`
+  commands do not auto-launch the daemon, and refuse `SMELT_DAEMON_REMOTE_ADDR`.
 - **`sidecar ssh` exits with the remote status**, for both a command and an
   interactive shell, and prints nothing of its own, the same as `ssh` and
   `sidecar exec`. A remote status can therefore coincide with one of smelt's own

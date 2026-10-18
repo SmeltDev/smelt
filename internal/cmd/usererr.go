@@ -19,11 +19,12 @@ import (
 // Exit codes for specific failure modes. Commands should return errors that
 // carry one of these codes so scripts can distinguish failure categories.
 const (
-	ExitGeneral   = 1 // unclassified error
-	ExitBadArgs   = 2 // bad arguments or flag misuse
-	ExitAuthError = 3 // authentication failure
-	ExitAPIError  = 4 // API call failure
-	ExitNotFound  = 5 // resource not found
+	ExitGeneral   = 1  // unclassified error
+	ExitBadArgs   = 2  // bad arguments or flag misuse
+	ExitAuthError = 3  // authentication failure
+	ExitAPIError  = 4  // API call failure
+	ExitNotFound  = 5  // resource not found
+	ExitTempFail  = 75 // temporary failure: retrying later can succeed (EX_TEMPFAIL)
 )
 
 const suggestionReauth = "Check your CircleCI token and try again."
@@ -260,7 +261,7 @@ func (e *userError) withoutDetail() *userError { e.hideDetail = true; return e }
 // failures.
 func (e *userError) TelemetryOutcome() string {
 	switch {
-	case e.blocked, e.exitCode == ExitBadArgs, e.exitCode == ExitAuthError, e.exitCode == ExitNotFound:
+	case e.blocked, e.exitCode == ExitBadArgs, e.exitCode == ExitAuthError, e.exitCode == ExitNotFound, e.exitCode == ExitTempFail:
 		return telemetry.OutcomeBlocked
 	}
 	return telemetry.OutcomeFailure

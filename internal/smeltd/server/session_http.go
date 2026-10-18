@@ -47,6 +47,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeAPIError(w http.ResponseWriter, err error) {
 	var ae *apiError
 	if errors.As(err, &ae) {
+		if ae.code != "" {
+			writeJSON(w, ae.status, map[string]any{"code": ae.code, "active": ae.active, "message": ae.msg})
+			return
+		}
 		http.Error(w, ae.msg, ae.status)
 		return
 	}

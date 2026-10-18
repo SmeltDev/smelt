@@ -141,6 +141,30 @@ func TestImplementerResumesItsSession(t *testing.T) {
 	assert.Assert(t, strings.Contains(lines[0], "Bash(git commit:*)"), "git commits are disallowed: %s", lines[0])
 }
 
+func TestImplementerFreshSessionStartsANewSessionWithHandoff(t *testing.T) {
+	im, home, _ := newImplementer(t, streamOK)
+	im.sessionID = "first-session"
+	_, err := im.Run(context.Background(), "original ticket")
+	assert.NilError(t, err)
+
+	im.FreshSession()
+	freshSession := im.sessionID
+	assert.Assert(t, freshSession != "first-session")
+	_, err = im.Run(context.Background(), "ticket and handoff findings")
+	assert.NilError(t, err)
+
+	args, err := os.ReadFile(filepath.Join(home, "args"))
+	assert.NilError(t, err)
+	lines := strings.Split(strings.TrimSuffix(string(args), "--end--\n"), "--end--\n")
+	assert.Equal(t, len(lines), 2)
+	assert.Assert(t, strings.Contains(lines[0], "--session-id first-session"), lines[0])
+	assert.Assert(t, strings.Contains(lines[1], "--session-id "+freshSession), lines[1])
+	assert.Assert(t, !strings.Contains(lines[1], "--resume"), lines[1])
+	stdin, err := os.ReadFile(filepath.Join(home, "stdin"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(stdin), "ticket and handoff findings"), string(stdin))
+}
+
 func TestImplementerFailures(t *testing.T) {
 	cases := []struct {
 		name string

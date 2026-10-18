@@ -76,6 +76,9 @@ func (Harness) ImplementScript(in harness.ImplementInput) string {
 	if in.Model != "" {
 		args = append(args, "-m", in.Model)
 	}
+	if in.ContextWindow != 0 {
+		args = append(args, "-c", fmt.Sprintf("model_auto_compact_token_limit=%d", in.ContextWindow))
+	}
 	if in.Resume && in.SessionID != "" {
 		args = append(args, "resume", in.SessionID)
 	}

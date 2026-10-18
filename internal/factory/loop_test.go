@@ -9,6 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/quality"
 )
 
@@ -62,6 +63,40 @@ func TestLoopPassesFirstRound(t *testing.T) {
 	assert.Equal(t, out.Result, ResultPassed)
 	assert.Equal(t, out.Rounds, 1)
 	assert.DeepEqual(t, steps.prompts, []string{"add a flag"})
+}
+
+type freshFakeSteps struct {
+	fakeSteps
+	// events records, in order, each FreshSession call and each Implement prompt.
+	events    []string
+	handoffs  int
+	badInputs int
+}
+
+func (f *freshFakeSteps) FreshSession() { f.events = append(f.events, "fresh") }
+
+func (f *freshFakeSteps) Implement(ctx context.Context, prompt string) (Turn, error) {
+	f.events = append(f.events, "implement:"+prompt)
+	return f.fakeSteps.Implement(ctx, prompt)
+}
+
+func (f *freshFakeSteps) Handoff(_ context.Context, ticket, feedback string, _ *Plan, prior Turn, change Change, checks []Check) (string, error) {
+	f.handoffs++
+	if ticket != "ticket" || feedback == "" || prior.Summary == "" || change.Stat == "" || len(checks) == 0 {
+		f.badInputs++
+	}
+	return fmt.Sprintf("handoff %d", f.handoffs), nil
+}
+
+func TestFreshRoundsStartSessionAndUseHandoff(t *testing.T) {
+	steps := &freshFakeSteps{fakeSteps: fakeSteps{changes: []Change{change(1), change(2), change(3)}, checks: [][]Check{{fail}, {fail}, {pass}}}}
+	out, err := (Loop{Attempts: 3, FreshRounds: true}).Run(context.Background(), steps, "ticket")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, out.Rounds, 3)
+	assert.Equal(t, steps.badInputs, 0)
+	// Round 1 keeps the ticket; rounds 2 and 3 each reset the session first.
+	assert.DeepEqual(t, steps.events, []string{"implement:ticket", "fresh", "implement:handoff 1", "fresh", "implement:handoff 2"})
 }
 
 func TestLoopFeedsFailuresBackUntilPass(t *testing.T) {
@@ -267,4 +302,19 @@ func TestLoopSendsAQualityFindingBackAndPassesTheNextRound(t *testing.T) {
 	assert.Assert(t, strings.Contains(steps.prompts[1], "complexity 16"), steps.prompts[1])
 	assert.Assert(t, strings.Contains(steps.prompts[1], "split it"), steps.prompts[1])
 	assert.Assert(t, out.Quality() != nil && out.Quality().ErosionAfter == 10, "the outcome carries the passing round's summary")
+}
+
+func TestNewLoopMapsRoundPolicyToFreshRounds(t *testing.T) {
+	for _, tc := range []struct {
+		rounds config.RoundPolicy
+		fresh  bool
+	}{
+		{"", true},
+		{config.RoundsFresh, true},
+		{config.RoundsResume, false},
+	} {
+		opts := RunOptions{Attempts: 2, Rounds: tc.rounds}
+		loop, _ := opts.newLoop(&Sidecars{}, func(Event) {})
+		assert.Equal(t, loop.FreshRounds, tc.fresh, "rounds %q", tc.rounds)
+	}
 }

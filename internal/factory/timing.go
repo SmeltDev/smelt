@@ -122,6 +122,9 @@ func (t Timing) contextLine() string {
 		for _, c := range t.ImplementContext {
 			known = known || c.Peak > 0
 			label := kTokens(c.Peak)
+			if c.Compactions > 0 {
+				label += fmt.Sprintf(" (compacted %d×)", c.Compactions)
+			}
 			if len(t.ImplementContext) > 1 {
 				label += fmt.Sprintf(" (round %d)", c.Round)
 			}
@@ -152,7 +155,11 @@ func kTokens(n int) string {
 // contextLogLine is one turn's context size for the run log.
 func contextLogLine(c harness.Context) string {
 	if c.Peak <= 0 {
-		return "context peak n/a (not streamed)"
+		line := "context peak n/a (not streamed)"
+		if c.Compactions > 0 {
+			line += fmt.Sprintf(" · compacted %d×", c.Compactions)
+		}
+		return line
 	}
 	line := "context peak " + commas(c.Peak) + " tokens"
 	switch {
@@ -160,6 +167,9 @@ func contextLogLine(c harness.Context) string {
 		line += " (1 model call)"
 	case c.Calls > 1:
 		line += fmt.Sprintf(" (%d model calls)", c.Calls)
+	}
+	if c.Compactions > 0 {
+		line += fmt.Sprintf(" · compacted %d×", c.Compactions)
 	}
 	return line
 }
@@ -218,7 +228,7 @@ func (t *timer) event(e Event) {
 	case EventImplemented:
 		t.timing.Implement += e.Turn.Duration
 		t.timing.ImplementContext = append(t.timing.ImplementContext,
-			RoundContext{Round: e.Round, Context: harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls}})
+			RoundContext{Round: e.Round, Context: harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls, Compactions: e.Turn.Compactions}})
 		for _, c := range e.Turn.Calls {
 			t.timing.Commands += c.Took
 		}

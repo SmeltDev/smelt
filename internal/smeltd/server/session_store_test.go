@@ -24,18 +24,18 @@ func TestSessionStoreAllowsOneActiveSessionPerProject(t *testing.T) {
 	store := newSessionStore(t.Context())
 
 	first, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
 
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
-	assert.Assert(t, busy != "", "a second session on the same project must be refused")
+	assert.Assert(t, busy != nil, "a second session on the same project must be refused")
 
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/other"}, 1)
-	assert.Equal(t, busy, "", "another project is independent")
+	assert.NilError(t, busy, "another project is independent")
 
 	finish(first, smeltd.SessionDone)
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
-	assert.Equal(t, busy, "", "an ended session no longer blocks the project")
+	assert.NilError(t, busy, "an ended session no longer blocks the project")
 }
 
 func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
@@ -44,7 +44,7 @@ func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
 	var ids []string
 	for range MaxSessionsPerProject + 3 {
 		e, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
-		assert.Equal(t, busy, "")
+		assert.NilError(t, busy)
 		ids = append(ids, e.snapshot().ID)
 		finish(e, smeltd.SessionDone)
 	}
@@ -63,7 +63,7 @@ func TestSessionAPIListsGetsAndCancels(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	entry, ctx, busy := d.sessions.add(smeltd.Session{ProjectRoot: "/p"}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	id := entry.snapshot().ID
 	// Cancelling cancels the entry's context; settle it as a run would.
 	go func() {
@@ -98,23 +98,23 @@ func TestSessionStoreLimitsActiveSessionsPerProject(t *testing.T) {
 	store := newSessionStore(t.Context())
 
 	first, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, 2)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 2)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 2)
-	assert.Equal(t, busy, "project already has 2 active run(s) (limit 2; raise factory.maxConcurrent)")
+	assert.Error(t, busy, "project already has 2 active run(s) (limit 2; raise factory.maxConcurrent)")
 
 	finish(first, smeltd.SessionDone)
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 2)
-	assert.Equal(t, busy, "", "a finished run frees its slot")
+	assert.NilError(t, busy, "a finished run frees its slot")
 }
 
 func TestSessionStoreRefusalWithLimitOneNamesTheLimit(t *testing.T) {
 	store := newSessionStore(t.Context())
 	_, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, 0)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	_, _, busy = store.add(smeltd.Session{ProjectRoot: "/p"}, 0)
-	assert.Equal(t, busy, "project already has 1 active run(s) (limit 1; raise factory.maxConcurrent)")
+	assert.Error(t, busy, "project already has 1 active run(s) (limit 1; raise factory.maxConcurrent)")
 }
 
 func TestSessionStoreEvictionNeverDropsActiveSessions(t *testing.T) {
@@ -123,7 +123,7 @@ func TestSessionStoreEvictionNeverDropsActiveSessions(t *testing.T) {
 	var active []string
 	for range limit {
 		e, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, limit)
-		assert.Equal(t, busy, "")
+		assert.NilError(t, busy)
 		active = append(active, e.snapshot().ID)
 	}
 	for _, id := range active {
@@ -133,7 +133,7 @@ func TestSessionStoreEvictionNeverDropsActiveSessions(t *testing.T) {
 		finish(store.get(id), smeltd.SessionDone)
 	}
 	e, _, busy := store.add(smeltd.Session{ProjectRoot: "/p"}, limit)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 	assert.Equal(t, len(store.forProject("/p")), limit+1, "finished runs are kept while the cap allows")
 	assert.Assert(t, store.get(e.snapshot().ID) != nil)
 }

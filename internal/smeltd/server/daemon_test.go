@@ -63,7 +63,7 @@ func TestSnapshotAssignsPoolSidecarsToTheirFactoryRun(t *testing.T) {
 		ProjectRoot: "/repo",
 		Factory:     &smeltd.FactoryRun{RunID: "20261009-010000"},
 	}, 1)
-	assert.Equal(t, busy, "")
+	assert.NilError(t, busy)
 
 	got := d.withSessions("/repo", smeltd.ProjectSnapshot{
 		Root: "/repo",

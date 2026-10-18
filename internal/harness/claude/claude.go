@@ -67,6 +67,9 @@ func (Harness) ImplementScript(in harness.ImplementInput) string {
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
+	if in.ContextWindow != 0 {
+		args = append(args, "--autocompact", fmt.Sprint(in.ContextWindow))
+	}
 	return "export IS_SANDBOX=1\n" + bashTimeoutExports(in) + Script(in.RepoPath, in.Prompt, args)
 }
 

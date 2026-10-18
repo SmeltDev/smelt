@@ -16,6 +16,7 @@ import (
 	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // fakeFiles is a FileSource of in-memory files.
@@ -401,4 +402,29 @@ func TestContinuePackReanchorsAgainstTheBranch(t *testing.T) {
 	assert.Assert(t, s.Pack == nil)
 	assert.Assert(t, !contains(c.prompt(), "Context pack"))
 	assert.Equal(t, record.Pack, from.Pack)
+}
+
+func TestSidecarsHandoffPassesTheReanchoredPack(t *testing.T) {
+	dir := t.TempDir()
+	// The implementer prepended two lines to a.go and created b.go, which the
+	// plan had only expected to be new.
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("new import\nnew import 2\nhead\nfunc A() {\n\tbody\n}\ntail\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("package b\n"), 0o644))
+	s := &Sidecars{
+		Implementer: &Implementer{Entry: &sidecar.PoolEntry{RepoPath: dir}},
+		Scout:       ScoutOptions{Files: fakeFiles{"a.go": "head\nfunc A() {\n\tbody\n}\ntail\n"}, MaxTokens: 1000},
+		Pack: &Pack{Entries: []PackEntry{
+			{Kind: PackEdit, Path: "a.go", Start: 2, End: 4, Reason: "edit A", Priority: 1},
+			{Kind: PackNewFile, Path: "b.go", Reason: "add B", Priority: 1},
+		}},
+	}
+	orig := s.Pack.Entries[0]
+
+	prompt, err := s.Handoff(context.Background(), "ticket", "fix it", nil, Turn{Summary: "did it"}, Change{Stat: "1 file changed"}, nil)
+	assert.NilError(t, err)
+	assert.Assert(t, contains(prompt, "a.go:4-6"), prompt)
+	assert.Assert(t, !contains(prompt, "a.go:2-4"), prompt)
+	assert.Equal(t, s.Pack.Entries[0].Label(), "a.go:4-6", "later rounds and reviews see the re-anchored pack")
+	assert.Equal(t, s.Pack.Entries[1].Kind, PackEdit, "a file that now exists is no longer new")
+	assert.Equal(t, orig.Start, 2)
 }

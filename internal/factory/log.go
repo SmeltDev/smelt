@@ -195,7 +195,7 @@ func (l *runLog) event(e Event) {
 // cost, how large its context got, and what it said.
 func (l *runLog) implemented(e Event) {
 	l.line("info", fmt.Sprintf("round %d: implementer finished in %s ($%.2f)", e.Round, e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
-	l.line("info", fmt.Sprintf("round %d: implementer %s", e.Round, contextLogLine(harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls})))
+	l.line("info", fmt.Sprintf("round %d: implementer %s", e.Round, contextLogLine(harness.Context{Peak: e.Turn.ContextPeak, Calls: e.Turn.ModelCalls, Compactions: e.Turn.Compactions})))
 	l.block(fmt.Sprintf("round %d: implementer's summary", e.Round), e.Turn.Summary)
 	for _, item := range UnverifiedItems(e.Turn.Summary) {
 		l.line("info", "unverified: "+item)

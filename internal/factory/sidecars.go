@@ -267,6 +267,49 @@ func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 	return turn, nil
 }
 
+// FreshSession resets the implementer before a fresh fix round.
+func (s *Sidecars) FreshSession() { s.Implementer.FreshSession() }
+
+// Handoff assembles a concise round prompt from the request and current work.
+func (s *Sidecars) Handoff(ctx context.Context, ticket, feedback string, plan *Plan, prior Turn, change Change, checks []Check) (string, error) {
+	findings := MissingWork(checks)
+	if len(findings) == 0 {
+		findings = append(findings, reviewFindings(checks)...)
+	}
+	pack := s.Pack
+	if pack != nil {
+		rec := *pack
+		rec.Entries = append([]PackEntry(nil), pack.Entries...)
+		current := workingFiles{root: s.Implementer.Entry.RepoPath}
+		for i := range rec.Entries {
+			if rec.Entries[i].Kind == PackNewFile {
+				if _, err := current.ReadFile(ctx, rec.Entries[i].Path); err == nil {
+					rec.Entries[i].Kind = PackEdit
+				}
+			}
+		}
+		revalidated := Reanchor(ctx, rec, s.Scout.Files, current, s.Scout.MaxTokens)
+		pack = &revalidated
+		s.Pack = pack
+	}
+	return BuildHandoff(HandoffOptions{
+		Ticket: ticket + "\n\nCurrent round feedback:\n" + feedback, Plan: plan, Pack: pack,
+		Change: change.Stat, Summary: prior.Summary, Findings: findings,
+	}), nil
+}
+
+func reviewFindings(checks []Check) []review.Finding {
+	var out []review.Finding
+	for _, c := range checks {
+		for _, f := range c.Findings {
+			if f.WorthChanging() {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
 // prove checks a summary that claims passing gates against what the turn ran.
 // A claim with no gate run after the last edit is noted on the turn and
 // reported, and nothing more: the round's own gates run right after and tell

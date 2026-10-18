@@ -118,6 +118,10 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient, opts...)
 }
 
+// drainFlushDelay is how long a finished drain waits before stopping the
+// server, so the response that triggered it is not cut off.
+const drainFlushDelay = 200 * time.Millisecond
+
 // runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
 // TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
 // a listener to discover a free port.
@@ -168,6 +172,10 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	// even if a later return path skips the deferred stopAll below.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	// A completed drain ends the daemon through this cancel, down the same path
+	// a signal takes.
+	ctx, shutdown := context.WithCancel(ctx)
+	defer shutdown()
 
 	d := &daemon{
 		projects: make(map[string]*projectState),
@@ -183,6 +191,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		sessions: newSessionStore(ctx),
 		rcfg:     dopts.review,
 	}
+	d.sessions.onIdle = func() { time.AfterFunc(drainFlushDelay, shutdown) }
 	d.cci.resolve = dopts.resolve
 	// A client or an auth message handed in is the caller's resolution, final.
 	if client != nil || authMessage != "" {
