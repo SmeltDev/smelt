@@ -109,6 +109,55 @@ func (f *Failover) exhaust(cause error) error {
 	return e
 }
 
+// hasLaterCandidate reports whether a candidate after the current one has not
+// failed, so a utilization-based skip never strands the run on nothing.
+// Callers hold f.mu.
+func (f *Failover) hasLaterCandidate() bool {
+	for _, c := range f.candidates[f.current+1:] {
+		if _, skipped := f.skipped[c.Harness.Name()]; !skipped && c.Failure == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// skipIfOverThreshold marks name failed when its last reported utilization is
+// at or over the threshold and another candidate can take over. Callers hold
+// f.mu.
+func (f *Failover) skipIfOverThreshold(name harness.Name) {
+	rl := f.usage[name]
+	if rl == nil || !f.hasLaterCandidate() {
+		return
+	}
+	var highest float64
+	reset := rl.ResetsAt
+	if rl.Utilization != nil {
+		highest = float64(*rl.Utilization) / 100
+	}
+	for _, w := range rl.Windows {
+		if w.Utilization >= highest {
+			highest, reset = w.Utilization, w.ResetsAt
+		}
+	}
+	if highest >= f.threshold {
+		f.skipped[name] = &harness.Failure{Kind: harness.RateLimited, ResetAt: reset}
+	}
+}
+
+// recordSwap notes the move from one harness to another. Callers hold f.mu.
+func (f *Failover) recordSwap(round int, turn string, from, to harness.Name) {
+	var failure *harness.Failure
+	errors.As(f.skipped[from], &failure)
+	swap := HarnessSwap{Round: round, Turn: turn, From: from, To: to}
+	if failure != nil {
+		swap.Kind, swap.ResetAt = failure.Kind, failure.ResetAt
+	}
+	f.swaps = append(f.swaps, swap)
+	if f.onSwap != nil {
+		f.onSwap(swap)
+	}
+}
+
 func (f *Failover) selectCandidate(round int, turn string) (Candidate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -126,34 +175,11 @@ func (f *Failover) selectCandidate(round int, turn string) (Candidate, error) {
 			f.skipped[name] = c.Failure
 		}
 		if _, skipped := f.skipped[name]; !skipped {
-			if rl := f.usage[name]; rl != nil {
-				var highest float64
-				reset := rl.ResetsAt
-				if rl.Utilization != nil {
-					highest = float64(*rl.Utilization) / 100
-				}
-				for _, w := range rl.Windows {
-					if w.Utilization >= highest {
-						highest, reset = w.Utilization, w.ResetsAt
-					}
-				}
-				if highest >= f.threshold {
-					f.skipped[name] = &harness.Failure{Kind: harness.RateLimited, ResetAt: reset}
-				}
-			}
+			f.skipIfOverThreshold(name)
 		}
 		if _, skipped := f.skipped[name]; !skipped {
 			if name != from {
-				var failure *harness.Failure
-				errors.As(f.skipped[from], &failure)
-				swap := HarnessSwap{Round: round, Turn: turn, From: from, To: name}
-				if failure != nil {
-					swap.Kind, swap.ResetAt = failure.Kind, failure.ResetAt
-				}
-				f.swaps = append(f.swaps, swap)
-				if f.onSwap != nil {
-					f.onSwap(swap)
-				}
+				f.recordSwap(round, turn, from, name)
 			}
 			return c, nil
 		}

@@ -176,3 +176,19 @@ func TestFailoverSkipsCredentialFailureAndPreservesExhaustion(t *testing.T) {
 	})
 	assert.Equal(t, err, error(exhausted))
 }
+
+func TestFailoverProactiveSkipKeepsTheLastCandidate(t *testing.T) {
+	f := NewFailover([]Candidate{{Harness: claude.Harness{}}}, 0, nil)
+	hot := 96
+	usage := &harness.RateLimit{Utilization: &hot}
+	var calls int
+	for round := 1; round <= 2; round++ {
+		err := f.Do(context.Background(), round, "implementer", func(Candidate) (*harness.RateLimit, error) {
+			calls++
+			return usage, nil
+		})
+		assert.NilError(t, err)
+	}
+	assert.Equal(t, calls, 2)
+	assert.Equal(t, len(f.Swaps()), 0)
+}
