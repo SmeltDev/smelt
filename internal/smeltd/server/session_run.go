@@ -211,7 +211,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	submit := d.rcfg.Submit
 	if submit == nil {
 		submit = func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string) (string, error) {
-			return d.circleCIClient().SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
+			return sidecar.SubmitScript(ctx, d.circleCIClient(), pe.ID, script, env)
 		}
 	}
 	stream := d.rcfg.Stream

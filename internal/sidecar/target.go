@@ -79,7 +79,7 @@ func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]s
 			}
 			_, _ = w.Write(data)
 		}
-		commandID, err := t.Client.SubmitExec(ctx, t.SidecarID, "sh", []string{"-c", script}, envVars)
+		commandID, err := SubmitScript(ctx, t.Client, t.SidecarID, script, envVars)
 		if err != nil {
 			return "", "", 0, fmt.Errorf("submit command: %w", err)
 		}
