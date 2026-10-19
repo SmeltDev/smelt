@@ -10,6 +10,8 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/claude"
+	"github.com/smeltdev/smelt/internal/harness/grok"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -18,7 +20,7 @@ import (
 const notesJSON = `{"is_error":false,"structured_output":{"title":"Add a flag","what":"- a flag","why":"- users asked","how":"- cmd/flag.go","extra":1}}`
 
 func TestParseNotes(t *testing.T) {
-	n, err := ParseNotes(notesJSON)
+	n, err := ParseNotes(claude.Harness{}, notesJSON)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, n, Notes{Title: "Add a flag", What: "- a flag", Why: "- users asked", How: "- cmd/flag.go"})
 
@@ -27,12 +29,12 @@ func TestParseNotes(t *testing.T) {
 		"not json":      `here are your notes`,
 		"no output":     `{"is_error":true,"subtype":"error_max_turns","result":"gave up"}`,
 	} {
-		_, err := ParseNotes(out)
+		_, err := ParseNotes(claude.Harness{}, out)
 		assert.Assert(t, err != nil, name)
 	}
 
 	long := strings.Repeat("word ", 30)
-	n, err = ParseNotes(`{"structured_output":{"title":"` + long + `","what":"w","why":"y","how":"h"}}`)
+	n, err = ParseNotes(claude.Harness{}, `{"structured_output":{"title":"`+long+`","what":"w","why":"y","how":"h"}}`)
 	assert.NilError(t, err)
 	assert.Assert(t, len([]rune(n.Title)) <= maxTitleRunes, n.Title)
 	assert.Assert(t, strings.HasSuffix(n.Title, "word…"), n.Title)
@@ -172,4 +174,20 @@ func TestNotesContextStaysOutOfThePR(t *testing.T) {
 	b, err := json.Marshal(n)
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(b), "Context"), string(b))
+}
+
+// grok prints its whole json result, with the answer under structuredOutput.
+func TestParseAnswerOnGrok(t *testing.T) {
+	out := `{"text":"{}","structuredOutput":{"title":"Add a flag","what":"- a flag","why":"- asked","how":"- cmd/flag.go"},"stopReason":"end_turn"}`
+	n, err := ParseNotes(grok.Harness{}, out)
+	assert.NilError(t, err)
+	assert.Equal(t, n.Title, "Add a flag")
+
+	plan := `{"text":"","structuredOutput":{"summary":"do it"},"stopReason":"end_turn"}`
+	p, err := parseAnswer[Plan](grok.Harness{}, plan, "plan")
+	assert.NilError(t, err)
+	assert.Equal(t, p.Summary, "do it")
+
+	_, err = ParseNotes(grok.Harness{}, `{"text":"prose","stopReason":"end_turn"}`)
+	assert.ErrorContains(t, err, "no structured answer")
 }

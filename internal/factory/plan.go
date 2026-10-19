@@ -383,16 +383,21 @@ func validPlan(p Plan) (Plan, error) {
 	return p, nil
 }
 
-// parseMessage reads the schema-checked object that is an agent's last message
-// whole, as Codex prints it; what names it in errors.
-func parseMessage[T any](msg, what string) (T, error) {
+// parseAnswer reads the schema-checked object out of the stdout of a review
+// script, whichever harness ran it; what names it in errors.
+func parseAnswer[T any](h harness.Harness, out, what string) (T, error) {
 	var v T
-	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &v); err != nil {
+	raw, err := h.ParseAnswer(out)
+	if err != nil {
+		return v, err
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
 		return v, fmt.Errorf("read the %s: %w", what, err)
 	}
 	return v, nil
 }
 
+<<<<<<< HEAD
 // parseAnswer reads the schema-checked object out of the stdout of a review
 // script, whichever harness ran it.
 func parseAnswer[T any](h harness.Harness, out, what string) (T, error) {
@@ -429,6 +434,8 @@ func parseStructured[T any](output, what string) (T, error) {
 	return *res.StructuredOutput, nil
 }
 
+=======
+>>>>>>> origin/main
 // planPreamble is what the implementer is told before the request: the plan it
 // wrote, what its reviewers still disagreed with when it went ahead, and what
 // it expected not to be able to verify.

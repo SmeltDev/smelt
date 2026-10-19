@@ -59,8 +59,14 @@ func harnessNames() []string {
 
 // harnessReady reports whether name has a credential on this machine.
 func harnessReady(name harness.Name) bool {
-	if name == harness.Codex {
+	switch name {
+	case harness.Claude:
+		// Claude's credential is the default below.
+	case harness.Codex:
 		_, err := codexauth.Find()
+		return err == nil
+	case harness.Grok:
+		_, err := grokHost.Find()
 		return err == nil
 	}
 	rc, err := config.Resolve("", "", false)
@@ -82,11 +88,22 @@ type agentCredential struct {
 // machine, for a command that runs the agent itself rather than through the
 // daemon, which resolves the same credentials at its start.
 func harnessCredential(ctx context.Context, name harness.Name, rc config.ResolvedConfig) (agentCredential, error) {
-	if name == harness.Codex {
+	switch name {
+	case harness.Claude:
+		// Claude's credential is the default below.
+	case harness.Codex:
 		cred, err := codexRunCredential(ctx, codexHost)
 		if err != nil {
 			return agentCredential{}, &userError{
 				msg: "Could not use the Codex login.", suggestion: hintCodexLogin, exitCode: ExitAuthError, err: err,
+			}
+		}
+		return agentCredential{Credential: cred}, nil
+	case harness.Grok:
+		cred, err := grokRunCredential(ctx, grokHost)
+		if err != nil {
+			return agentCredential{}, &userError{
+				msg: "Could not use the Grok login.", suggestion: hintGrokLogin, exitCode: ExitAuthError, err: err,
 			}
 		}
 		return agentCredential{Credential: cred}, nil

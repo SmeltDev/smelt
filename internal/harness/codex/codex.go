@@ -48,9 +48,8 @@ const stderrTail = 2000
 
 var credentialRejectedRe = regexp.MustCompile(`(?i)(401 unauthorized|not logged in|invalid api key|incorrect api key|authentication required)`)
 
-// guardedGit are the git commands that would move the implementer's work out
-// of the working tree the loop collects it from.
-var guardedGit = []string{"commit", "stash", "reset", "checkout", "switch", "rebase"}
+// guardedGit are the git commands the guard refuses.
+var guardedGit = harness.GuardedGit
 
 // binary is the executable name.
 const binary = "codex"
@@ -160,6 +159,16 @@ func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	return harness.ReviewPayload{Review: msg.Review, Findings: msg.Findings}, nil
 }
 
+// ParseAnswer implements harness.Harness: stdout is the last message, which is
+// the answer object itself.
+func (Harness) ParseAnswer(stdout string) (json.RawMessage, error) {
+	msg := json.RawMessage(strings.TrimSpace(stdout))
+	if !json.Valid(msg) {
+		return nil, fmt.Errorf("codex gave no structured answer: %q is not JSON", harness.Tail(stdout, 200))
+	}
+	return msg, nil
+}
+
 // ReviewContext implements harness.Harness. Codex's review prints only the
 // last message, so there is nothing to measure.
 func (Harness) ReviewContext(string) harness.Context { return harness.Context{} }
@@ -193,31 +202,8 @@ echo %[3]s | base64 -d > %[2]s/git && chmod 755 %[2]s/git || exit 1
 	return script, env
 }
 
-// guardScript is the git wrapper that refuses the commands that would hide the
-// implementer's work from the loop, and logs each attempt.
-func guardScript() string {
-	return fmt.Sprintf(`#!/bin/sh
-# Refuses the git commands that move work out of the working tree.
-sub=
-skip=
-for a in "$@"; do
-  if [ -n "$skip" ]; then skip=; continue; fi
-  case "$a" in
-    -C|-c|--git-dir|--work-tree|--namespace) skip=1 ;;
-    -*) ;;
-    *) sub=$a; break ;;
-  esac
-done
-case "$sub" in
-  %s)
-    echo "$sub $*" >> %s/attempts.log
-    echo "smelt: git $sub is not allowed here; leave your changes uncommitted in the working tree" >&2
-    exit 1 ;;
-esac
-PATH=${PATH#%s:}
-exec git "$@"
-`, strings.Join(guardedGit, "|"), guardDir, guardDir)
-}
+// guardScript is the git wrapper installed in guardDir.
+func guardScript() string { return harness.GitGuardScript(guardDir) }
 
 // RunError implements harness.Harness.
 func (Harness) RunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {

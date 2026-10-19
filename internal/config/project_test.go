@@ -468,6 +468,7 @@ func TestFactoryRoundAndContextDefaultsAndValidation(t *testing.T) {
 
 func ptrInt(v int) *int { return &v }
 
+<<<<<<< HEAD
 func TestFactoryFallbackAndThreshold(t *testing.T) {
 	assert.Equal(t, (*FactoryConfig)(nil).SwapThreshold(), 0.95)
 	for _, names := range [][]string{{"codex", "claude", "codex"}, nil} {
@@ -481,5 +482,10 @@ func TestFactoryFallbackAndThreshold(t *testing.T) {
 	}
 	for _, value := range []float64{0.95, 1, 0.001} {
 		assert.NilError(t, (&FactoryConfig{SwapAtUtilization: &value}).validate())
+=======
+func TestValidHarnessAcceptsEachCodingAgent(t *testing.T) {
+	for name, want := range map[string]bool{"": true, "claude": true, "codex": true, "grok": true, "gemini": false} {
+		assert.Equal(t, ValidHarness(name), want, name)
+>>>>>>> origin/main
 	}
 }

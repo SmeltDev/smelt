@@ -1,0 +1,19 @@
+{
+  "default": "",
+  "harnesses": [
+    {
+      "name": "claude",
+      "installed_host": false,
+      "installed_image": false,
+      "auth": "missing",
+      "rate_limits": []
+    },
+    {
+      "name": "codex",
+      "installed_host": false,
+      "installed_image": false,
+      "auth": "missing",
+      "rate_limits": []
+    }
+  ]
+}

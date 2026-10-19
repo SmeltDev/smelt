@@ -41,7 +41,7 @@ func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
 	n := kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", Now: day}
 
 	got := noteKitOutdated(streams, n)
-	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v4"), got)
+	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v5"), got)
 	assert.Equal(t, strings.Count(out.String(), "Dockerfile.smelt was generated with agent kit v1"), 1)
 	assert.Assert(t, strings.Contains(out.String(), "smelt factory image --update-kit"))
 
@@ -62,7 +62,7 @@ func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
 
 func TestNoteKitOutdatedSaysNothingForACurrentOrNewerKit(t *testing.T) {
 	for _, body := range []string{
-		"FROM x\n# --- smelt agent kit (v4) ---\n",
+		"FROM x\n# --- smelt agent kit (v5) ---\n",
 		"FROM x\n# --- smelt agent kit (v9) ---\n",
 	} {
 		root := kitProject(t, body)
@@ -102,9 +102,9 @@ func TestUpdateKitChangesOnlyTheKitSection(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
 	assert.NilError(t, err)
 	head, _, _ := strings.Cut(kitV1Dockerfile, "# --- smelt agent kit")
-	assert.Assert(t, strings.HasPrefix(string(got), head+"# --- smelt agent kit (v4) "), string(got))
+	assert.Assert(t, strings.HasPrefix(string(got), head+"# --- smelt agent kit (v5) "), string(got))
 	assert.Assert(t, strings.Contains(string(got), sandboximage.KitCodex()))
-	assert.Assert(t, strings.Contains(string(got), "smelt.kit=4"))
+	assert.Assert(t, strings.Contains(string(got), "smelt.kit=5"))
 	assert.Assert(t, strings.Contains(string(got), sandboximage.KitLizard()), "the update installs lizard")
 	assert.Assert(t, strings.Contains(out.String(), "+LABEL smelt.harnesses"), out.String())
 	assert.Equal(t, kitWarning(root, "Dockerfile.smelt"), "")
@@ -157,7 +157,7 @@ func TestUpdateKitBringsAV3ImageToV4(t *testing.T) {
 	current := sandboximage.Render(sandboximage.NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
 	head, kit, _ := strings.Cut(current, "# --- smelt agent kit")
 	v3 := head + "# --- smelt agent kit (v3) ---\n" + strings.Replace(strings.SplitN(kit, "\n", 2)[1], sandboximage.KitLizard(), "", 1)
-	v3 = strings.ReplaceAll(strings.ReplaceAll(v3, " python3 python3-venv", ""), "smelt.kit=4", "smelt.kit=3")
+	v3 = strings.ReplaceAll(strings.ReplaceAll(v3, " python3 python3-venv", ""), "smelt.kit=5", "smelt.kit=3")
 	root := kitProject(t, v3)
 	assert.Assert(t, kitWarning(root, "Dockerfile.smelt") != "", "a v3 kit is outdated")
 	streams, _ := capturedStreams()

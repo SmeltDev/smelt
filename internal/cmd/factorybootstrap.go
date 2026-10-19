@@ -17,6 +17,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness/all"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/harness/codex"
+	"github.com/smeltdev/smelt/internal/harness/grok"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -77,7 +78,7 @@ already enforce them.`, review.DefaultDir, factory.StandardsFile),
 			})
 		},
 	}
-	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude or codex (default: factory.harness from config, else ask)")
+	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude, codex or grok (default: factory.harness from config, else ask)")
 	cmd.Flags().StringVar(&model, "model", "", "model for the chosen agent (default: factory.models.<harness> from config, else the agent's own default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", factory.DefaultBootstrapTimeout, "max time for the agent to read the project and write the prompts")
 	cmd.Flags().StringVar(&output, "output", "", fmt.Sprintf("directory to write the prompts to (default: %s)", review.DefaultDir))
@@ -282,14 +283,14 @@ func bootstrapOnSidecar(ctx context.Context, r bootstrapRun) (factory.Bootstrap,
 // bootstrapAgentError turns the agent's failure into one the user can act on.
 func bootstrapAgentError(err error) error {
 	switch {
-	case errors.Is(err, claude.ErrMissing), errors.Is(err, codex.ErrMissing):
+	case errors.Is(err, claude.ErrMissing), errors.Is(err, codex.ErrMissing), errors.Is(err, grok.ErrMissing):
 		return &userError{
 			msg:        "The coding agent is not installed in the sandbox image.",
 			suggestion: "Update the Dockerfile's agent kit: smelt factory image --update-kit",
 			hideDetail: true,
 			err:        err,
 		}
-	case errors.Is(err, claude.ErrCredentialRejected), errors.Is(err, codex.ErrCredentialRejected):
+	case errors.Is(err, claude.ErrCredentialRejected), errors.Is(err, codex.ErrCredentialRejected), errors.Is(err, grok.ErrCredentialRejected):
 		return &userError{
 			msg:        "The coding agent's credential was rejected.",
 			suggestion: "Check it with 'smelt auth status', or log in again with 'smelt auth login'.",
@@ -349,7 +350,7 @@ func printBootstrap(streams iostream.Streams, status iostream.StatusFunc, r boot
 func bootstrapCredential(cmd *cobra.Command) func(context.Context, harness.Name) (agentCredential, error) {
 	return func(ctx context.Context, name harness.Name) (agentCredential, error) {
 		rc, err := config.Resolve("", "", insecureStorageFlag(cmd))
-		if err != nil && name != harness.Codex {
+		if err != nil && name != harness.Codex && name != harness.Grok {
 			return agentCredential{}, &userError{msg: "Could not read the configuration.", err: err}
 		}
 		return harnessCredential(ctx, name, rc)

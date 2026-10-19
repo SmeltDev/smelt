@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -40,8 +41,12 @@ func TestResolveBuildSettingsBuildsOnlyDockerfileImages(t *testing.T) {
 
 	// With the Dockerfile present it gets as far as Docker, which is unreachable here.
 	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
-	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
-	assert.Assert(t, err != nil)
+	// The wait for Docker is cut to a second so the test does not sit out the
+	// default three minutes.
+	begin := time.Now()
+	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3, ReadyTimeout: time.Second}, factoryExplicit{}, cfg)
+	assert.ErrorContains(t, err, "did not finish starting")
+	assert.Assert(t, time.Since(begin) < 10*time.Second, "took %s", time.Since(begin))
 }
 
 func TestPrepareDockerfileKeepsAnExistingFile(t *testing.T) {
@@ -76,16 +81,16 @@ func TestResolveBuildSettingsWarnsAboutAStaleUserImage(t *testing.T) {
 	}{
 		"label missing": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1},
 			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
-			"smelt-sandbox:local has agent kit none; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
+			"smelt-sandbox:local has agent kit none; this smelt expects 5: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
 		"lower": {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: 3, KitLabeled: true},
 			nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`,
-			"smelt-sandbox:local has agent kit 3; this smelt expects 4: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
+			"smelt-sandbox:local has agent kit 3; this smelt expects 5: rebuild it (docker build -t smelt-sandbox:local -f Dockerfile.smelt .)"},
 		"equal":   {sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, Kit: sandboximage.KitVersion, KitLabeled: true}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
 		"missing": {sandboximage.ImageInfo{Status: sandboximage.ImageMissing}, nil, `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
 		"error":   {sandboximage.ImageInfo{}, errors.New("no daemon"), `{"factory":{"backend":"docker","image":"smelt-sandbox:local"}}`, ""},
 		"custom dockerfile hint": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1},
 			nil, `{"factory":{"backend":"docker","image":"x:1","dockerfile":"ci/Dockerfile.dev"}}`,
-			"x:1 has agent kit none; this smelt expects 4: rebuild it (docker build -t x:1 -f ci/Dockerfile.dev .)"},
+			"x:1 has agent kit none; this smelt expects 5: rebuild it (docker build -t x:1 -f ci/Dockerfile.dev .)"},
 		"not docker": {sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, Kit: 1}, nil, `{"factory":{"backend":"circleci","image":"x:1"}}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

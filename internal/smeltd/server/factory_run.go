@@ -28,8 +28,13 @@ const DefaultAttempts = 3
 
 // harnessAuth is the credential setup of the named harness.
 func (d *daemon) harnessAuth(name harness.Name) HarnessAuth {
-	if name == harness.Codex {
+	switch name {
+	case harness.Claude:
+		// Claude's credential is the default below.
+	case harness.Codex:
 		return d.rcfg.Codex
+	case harness.Grok:
+		return d.rcfg.Grok
 	}
 	return HarnessAuth{Credential: d.rcfg.Credential, BaseURL: d.rcfg.BaseURL, AuthError: d.rcfg.AuthError}
 }

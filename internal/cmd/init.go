@@ -819,7 +819,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
 	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.smelt for docker factory runs but do not offer to build the image")
 	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: docker (default) or circleci (skips the prompt)")
-	cmd.Flags().StringVar(&harnessFlag, "harness", "", "Default coding agent for factory runs: claude or codex (skips the prompt)")
+	cmd.Flags().StringVar(&harnessFlag, "harness", "", "Default coding agent for factory runs: claude, codex or grok (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")

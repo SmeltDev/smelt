@@ -143,7 +143,7 @@ implementer must end its turn with the gates' output, and smelt checks that it
 ran them after its last edit. Tests a gate skipped are listed in the run's
 status and in the PR notes.
 
---harness claude|codex picks the coding agent for the implementer and the
+--harness claude|codex|grok picks the coding agent for the implementer and the
 reviewers. Without it, factory.harness from the config is used; with neither,
 a terminal is asked (and offered to save the answer) and anything else fails.
 factory.models.<harness> sets the model when --model is not given.
@@ -303,8 +303,12 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")
 	cmd.Flags().StringVar(&image, "image", "", "image: a Docker image (default: factory.image or factory.dockerfile), or a CircleCI snapshot ID with --backend circleci (default: validation.sidecarImage)")
 	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci or docker (local containers) (default: factory.backend from config, else docker)")
+<<<<<<< HEAD
 	cmd.Flags().StringSliceVar(&fallback, "fallback", nil, "ordered alternate harnesses after --harness (default: factory.fallback)")
 	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude or codex (default: factory.harness from config, else ask)")
+=======
+	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude, codex or grok (default: factory.harness from config, else ask)")
+>>>>>>> origin/main
 	cmd.Flags().StringVar(&model, "model", "", "model for the chosen agent (default: factory.models.<harness> from config, else the agent's own default)")
 	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")

@@ -122,13 +122,18 @@ func TestFactoryStatusReportsTokensAndTheRateLimitSignal(t *testing.T) {
 	assert.Equal(t, seen.Bucket, "5h")
 }
 
+<<<<<<< HEAD
 func TestFactoryFallbackCredentialsModelsAndOverride(t *testing.T) {
+=======
+func TestFactoryRunGivesGrokItsOwnCredential(t *testing.T) {
+>>>>>>> origin/main
 	var got factory.RunOptions
 	run := scriptedRun(factory.ResultPassed)
 	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		got = opts
 		return run(ctx, opts)
 	})
+<<<<<<< HEAD
 	d.rcfg.Codex = codexAuth("alternate")
 	cfg := `{"orgID":"org-1","factory":{"fallback":["codex","claude","codex"],"models":{"claude":"opus","codex":"own-model"},"swapAtUtilization":0.9},"commands":[{"name":"test","run":"true"}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
@@ -243,4 +248,22 @@ func TestFactoryExhaustionStatusRetainsReasonAndEarliestReset(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(raw), `"reason":"no harness available"`))
 	assert.Assert(t, strings.Contains(string(raw), `"reset_at":"2026-10-19T01:00:00Z"`))
+=======
+	d.rcfg.Codex = codexAuth("codex-secret")
+	d.rcfg.Grok = HarnessAuth{Credential: review.Credential{EnvVar: "XAI_API_KEY", Value: "grok-secret"}}
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Harness: "grok"})
+	assert.NilError(t, err)
+	waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, got.Harness.Name(), harness.Grok)
+	assert.Equal(t, got.Credential.Value, "grok-secret")
+	assert.Equal(t, got.Credential.EnvVar, "XAI_API_KEY")
+
+	// Without a Grok credential the run is refused, whatever Codex has.
+	d.rcfg.Grok = HarnessAuth{}
+	_, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Harness: "grok"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae))
+	assert.Check(t, cmp.Contains(ae.msg, "smelt auth login grok"))
+>>>>>>> origin/main
 }

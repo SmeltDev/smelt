@@ -32,9 +32,20 @@ func imageBuildLog(root string) string {
 	return filepath.Join(dir, "image-build.log")
 }
 
-// buildSandboxImage builds the image for dockerfile unless its tag is already on
-// the Docker host, and returns the tag. reason is shown when it builds.
-func buildSandboxImage(ctx context.Context, streams iostream.Streams, root, dockerfile, reason string, rebuild bool) (string, error) {
+// imageBuild says what buildSandboxImage builds.
+type imageBuild struct {
+	Dockerfile string
+	// Reason is shown when it builds.
+	Reason  string
+	Rebuild bool
+	// ReadyTimeout bounds the wait for Docker to start; zero is the default.
+	ReadyTimeout time.Duration
+}
+
+// buildSandboxImage builds the image for b.Dockerfile unless its tag is already
+// on the Docker host, and returns the tag.
+func buildSandboxImage(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (string, error) {
+	dockerfile, reason, rebuild := b.Dockerfile, b.Reason, b.Rebuild
 	plan, err := sandboximage.NewPlan(root, dockerfile)
 	if err != nil {
 		return "", newUserError(fmt.Sprintf("Could not read %s.", dockerfile)).
@@ -50,6 +61,7 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root, dock
 		return "", dockerUnreachable(err)
 	}
 	defer func() { _ = provider.Close() }()
+	provider.ReadyTimeout = b.ReadyTimeout
 	if err := provider.WaitEngine(ctx, func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }); err != nil {
 		return "", dockerUnreachable(err)
 	}
@@ -100,7 +112,7 @@ func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root st
 		return s, err
 	}
 	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile, Now: time.Now()})
-	s.Image, err = buildSandboxImage(ctx, streams, root, s.Dockerfile, s.Dockerfile+" changed", false)
+	s.Image, err = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: s.Dockerfile, Reason: s.Dockerfile + " changed", ReadyTimeout: flags.ReadyTimeout})
 	return s, err
 }
 
@@ -270,7 +282,7 @@ type imageAttempt struct {
 // attemptImage builds the image and verifies it. A failed build or verification
 // is reported in the result; only a problem with Docker itself is an error.
 func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, rebuild bool) (imageAttempt, error) {
-	tag, err := buildSandboxImage(ctx, streams, root, dockerfile, dockerfile+" changed", rebuild)
+	tag, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Reason: dockerfile + " changed", Rebuild: rebuild})
 	var buildErr *sandboximage.BuildError
 	if errors.As(err, &buildErr) {
 		return imageAttempt{Failure: "docker build failed:\n" + buildErr.LogTail}, nil

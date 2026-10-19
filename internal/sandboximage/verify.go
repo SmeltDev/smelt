@@ -23,7 +23,7 @@ const (
 
 // kitCheck proves the tools the factory's own scripts and agent need exist.
 // Codex runs every command through its host, which --version never starts.
-const kitCheck = "git --version && claude --version && codex --version && sha256sum --version && pkill -V && " +
+const kitCheck = "git --version && claude --version && codex --version && grok --version && sha256sum --version && pkill -V && " +
 	`test -x "$HOME/.local/bin/` + codexHostBinary + `"`
 
 // lizardCheck is run after the kit check and only warns: an image without
