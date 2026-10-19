@@ -156,7 +156,7 @@ func (Harness) ReviewContext(stdout string) harness.Context {
 			CacheReadTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(stdout), &res) != nil || res.NumTurns != 1 {
+	if json.Unmarshal([]byte(harness.ResultLine(stdout)), &res) != nil || res.NumTurns != 1 {
 		return harness.Context{}
 	}
 	u := res.Usage
@@ -170,7 +170,7 @@ const maxResultInError = 500
 // an error, not a prose-only review.
 func (Harness) ParseReview(stdout string) (harness.ReviewPayload, error) {
 	var res result
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+	if err := json.Unmarshal([]byte(harness.ResultLine(stdout)), &res); err != nil {
 		return harness.ReviewPayload{}, fmt.Errorf("read claude's result: %w", err)
 	}
 	if res.IsError || res.StructuredOutput == nil {
@@ -240,13 +240,25 @@ func (Harness) RunError(ctx context.Context, timeout time.Duration, code int, ex
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
 		return harness.TimeoutError(timeout, ctx.Err())
+	case ctx.Err() == context.Canceled:
+		return ctx.Err()
 	case execErr != nil:
-		return fmt.Errorf("exec: %w", execErr)
+		return harness.Classified(harness.Unavailable, fmt.Errorf("exec: %w", execErr), nil)
 	case code == harness.MissingExitCode:
-		return ErrMissing
+		return harness.Classified(harness.Unavailable, ErrMissing, nil)
 	case code != 0 && CredentialRejected(stdout, stderr):
-		return ErrCredentialRejected
+		return harness.Classified(harness.Auth, ErrCredentialRejected, nil)
 	case code != 0:
+		p := Harness{}.NewImplementParser(nil)
+		p.Write([]byte(stdout + "\n" + stderr))
+		p.Flush()
+		rl := p.Outcome().Turn.RateLimit
+		if rl != nil && rl.Status != "allowed" && rl.Status != "allowed_warning" {
+			return harness.Classified(harness.RateLimited, exitError(code, stderr), rl.ResetsAt)
+		}
+		if !p.Outcome().Done {
+			return harness.Classified(harness.Unavailable, exitError(code, stderr), nil)
+		}
 		return exitError(code, stderr)
 	}
 	return nil

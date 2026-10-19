@@ -36,6 +36,9 @@ type PackOptions struct {
 // RunOptions is one factory run. Everything that needs a person, such as
 // picking an org or finding a credential, is settled before it.
 type RunOptions struct {
+	InitialFailure    error
+	Fallback          []Candidate
+	SwapAtUtilization float64
 	// Rounds selects fresh sessions or the legacy resumed session; empty defaults to fresh.
 	Rounds config.RoundPolicy
 	// ContextWindow is the implementer auto-compaction threshold; zero requests agent default.
@@ -382,6 +385,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.Verbose {
 		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }
 	}
+	configureFailover(steps, opts, status)
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
 	}
@@ -401,8 +405,11 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	keepRecord(dataDir, rec, status)
 	rep.Started = true
 	rep.Outcome, err = loop.Run(ctx, steps, loopPrompt)
+	rep.Outcome.Plan = steps.plan
 	rep.Timing = tm.timing
+	steps.checks = rep.Outcome.Checks
 	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block, Integrate: integ != nil}, status)
+	err = finishFailover(&rep, steps, err)
 	settleTiming(&rep.Timing, steps, runStart, status)
 	return rep, err
 }
@@ -515,6 +522,12 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 // keepEndedRecord saves rec with how the run ended and the notes it wrote.
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
 	rec.Result, rec.Rounds, rec.Notes, rec.Plan = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes, rep.Outcome.Plan
+	rec.Reason, rec.ResetAt, rec.HarnessSwaps, rec.Turns = rep.Outcome.Reason, rep.Outcome.ResetAt, rep.Outcome.HarnessSwaps, rep.Outcome.Turns
+	for _, turn := range rep.Outcome.Turns {
+		if turn.Turn == turnImplementer {
+			rec.Harness, rec.Model = string(turn.Harness), turn.Model
+		}
+	}
 	rec.ContinuedFromEmpty = rep.Outcome.FromEmpty
 	if p := rep.Outcome.Plan; p != nil {
 		if pk := p.ContextPack(); !pk.Empty() {
@@ -755,4 +768,31 @@ func (o *RunOptions) markRecord(rec *Record) {
 	if o.Integrate != nil {
 		rec.Mode, rec.Against = ModeIntegrate, o.Integrate.Against
 	}
+}
+
+func configureFailover(steps *Sidecars, opts RunOptions, status iostream.StatusFunc) {
+	candidates := append([]Candidate{{Harness: steps.Implementer.agent(), Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Failure: opts.InitialFailure}}, opts.Fallback...)
+	steps.Failover = NewFailover(candidates, opts.SwapAtUtilization, func(swap HarnessSwap) {
+		status(iostream.LevelInfo, swap.String())
+		if opts.OnEvent != nil {
+			opts.OnEvent(Event{Kind: EventHarnessSwap, Round: swap.Round, Swap: &swap})
+		}
+	})
+	steps.onAttempt = func(a TurnAttempt) {
+		if opts.OnEvent != nil {
+			opts.OnEvent(Event{Kind: EventTurnAttempt, Round: a.Round, Attempt: &a})
+		}
+	}
+}
+
+func finishFailover(rep *Report, steps *Sidecars, err error) error {
+	rep.Outcome.HarnessSwaps = steps.Failover.Swaps()
+	rep.Outcome.Turns = steps.attempts()
+	rep.Timing.HarnessSwaps = rep.Outcome.HarnessSwaps
+	if exhausted := steps.Failover.Exhausted(); exhausted != nil {
+		rep.Outcome.Result, rep.Outcome.Reason, rep.Outcome.ResetAt = ResultFailed, noHarnessAvailable, exhausted.ResetAt
+		err = exhausted
+	}
+
+	return err
 }

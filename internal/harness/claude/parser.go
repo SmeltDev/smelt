@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -40,10 +41,14 @@ type streamEvent struct {
 		OutputTokens        int `json:"output_tokens"`
 	} `json:"usage"`
 	RateLimitInfo struct {
-		Status        string `json:"status"`
-		ResetsAt      int64  `json:"resetsAt"`
-		RateLimitType string `json:"rateLimitType"`
-		Utilization   *int   `json:"utilization"`
+		Status         string `json:"status"`
+		ResetsAt       int64  `json:"resetsAt"`
+		RateLimitType  string `json:"rateLimitType"`
+		Utilization    *int   `json:"utilization"`
+		UnifiedWindows map[string]struct {
+			Utilization float64 `json:"utilization"`
+			ResetsAt    int64   `json:"resetsAt"`
+		} `json:"unifiedWindows"`
 	} `json:"rate_limit_info"`
 }
 
@@ -127,6 +132,32 @@ func rateLimit(e streamEvent) *harness.RateLimit {
 		t := time.Unix(info.ResetsAt, 0).UTC()
 		rl.ResetsAt = &t
 	}
+	highest := -1.0
+	if rl.Utilization != nil {
+		highest = float64(*rl.Utilization) / 100
+	}
+	for name, w := range info.UnifiedWindows {
+		if rl.Windows == nil {
+			rl.Windows = map[string]harness.UsageWindow{}
+		}
+		var reset *time.Time
+		if w.ResetsAt > 0 {
+			t := time.Unix(w.ResetsAt, 0).UTC()
+			reset = &t
+		}
+		bucket := rateLimitBuckets[name]
+		if bucket == "" {
+			bucket = name
+		}
+		rl.Windows[bucket] = harness.UsageWindow{Utilization: w.Utilization, ResetsAt: reset}
+		if w.Utilization > highest {
+			highest = w.Utilization
+			pct := int(w.Utilization * 100)
+			rl.Utilization = &pct
+			rl.Bucket = bucket
+			rl.ResetsAt = reset
+		}
+	}
 	return rl
 }
 
@@ -149,7 +180,13 @@ func (p *parser) activity(e streamEvent) {
 // Outcome implements harness.StreamParser.
 func (p *parser) Outcome() harness.Outcome {
 	u := p.result.Usage
-	return harness.Outcome{
+	var err error
+	if p.result.IsError && p.rateLimit != nil && p.rateLimit.Status != "allowed" && p.rateLimit.Status != "allowed_warning" {
+		err = harness.Classified(harness.RateLimited, errors.New(p.result.Result), p.rateLimit.ResetsAt)
+	} else if p.result.IsError && CredentialRejected(p.result.Result, "") {
+		err = harness.Classified(harness.Auth, ErrCredentialRejected, nil)
+	}
+	return harness.Outcome{Err: err,
 		Turn: harness.Turn{
 			Summary:      p.result.Result,
 			CostUSD:      p.result.TotalCostUSD,

@@ -347,3 +347,74 @@ func TestContextIsNotAvailable(t *testing.T) {
 	assert.Equal(t, turn.ModelCalls, 0)
 	assert.Equal(t, Harness{}.ReviewContext(`{"review":"fine","findings":[]}`), harness.Context{})
 }
+
+func TestRealConsecutiveUsageFailuresAreClassified(t *testing.T) {
+	message := "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 19th, 2026 2:31 AM."
+	raw := `{"type":"error","message":"` + message + `"}` + "\n" + `{"type":"turn.failed","error":{"message":"` + message + `"}}` + "\n"
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(raw))
+	p.Flush()
+	out := p.Outcome()
+	var failure *harness.Failure
+	assert.Assert(t, errors.As(out.Err, &failure))
+	assert.Assert(t, out.Done && out.Failed)
+	assert.Equal(t, failure.Kind, harness.RateLimited)
+	assert.Assert(t, failure.ResetAt.Equal(time.Date(2026, 10, 19, 2, 31, 0, 0, time.UTC)))
+	err := (Harness{}).RunError(context.Background(), time.Minute, 1, nil, "", raw)
+	assert.Assert(t, errors.As(err, &failure))
+	assert.Equal(t, failure.Kind, harness.RateLimited)
+}
+
+func TestFailureClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		code           int
+		stdout, stderr string
+		kind           harness.FailureKind
+	}{
+		{"missing", harness.MissingExitCode, "", "", harness.Unavailable},
+		{"auth", 1, "", "401 Unauthorized", harness.Auth},
+		{"crash", 2, "", "process crashed", harness.Unavailable},
+		{"code outcome", 0, "BLOCKED: need a decision", "", ""},
+		{"rate limit with reset", 1, `{"type":"turn.failed","error":{"message":"usage limit; try again at 2026-10-19T02:31:00Z"}}`, "", harness.RateLimited},
+		{"rate limit without reset", 1, `{"type":"turn.failed","error":{"message":"usage limit"}}`, "", harness.RateLimited},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (Harness{}).RunError(context.Background(), time.Minute, tc.code, nil, tc.stdout, tc.stderr)
+			var failure *harness.Failure
+			if tc.kind == "" {
+				assert.Assert(t, !errors.As(err, &failure))
+				return
+			}
+			assert.Assert(t, errors.As(err, &failure))
+			assert.Equal(t, failure.Kind, tc.kind)
+			if tc.name == "rate limit with reset" {
+				assert.Assert(t, failure.ResetAt != nil)
+			}
+			if tc.name == "missing" {
+				assert.ErrorIs(t, err, ErrMissing)
+			}
+			if tc.name == "auth" {
+				assert.ErrorIs(t, err, ErrCredentialRejected)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, (Harness{}).RunError(ctx, time.Minute, 1, ctx.Err(), "", ""), context.Canceled)
+	deadline, done := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer done()
+	var failure *harness.Failure
+	assert.Assert(t, errors.As((Harness{}).RunError(deadline, time.Minute, 1, nil, "", ""), &failure))
+	assert.Equal(t, failure.Kind, harness.Timeout)
+}
+
+func TestParserClassifiesRejectedAuthentication(t *testing.T) {
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(`{"type":"turn.failed","error":{"message":"401 Unauthorized: login expired"}}` + "\n"))
+	p.Flush()
+	var failure *harness.Failure
+	assert.Assert(t, errors.As(p.Outcome().Err, &failure))
+	assert.Equal(t, failure.Kind, harness.Auth)
+	assert.ErrorIs(t, p.Outcome().Err, ErrCredentialRejected)
+}

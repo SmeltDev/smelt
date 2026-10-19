@@ -60,7 +60,8 @@ func (c SlowCall) Warning() string {
 
 // Timing is where a run's time went.
 type Timing struct {
-	Plan time.Duration
+	HarnessSwaps []HarnessSwap
+	Plan         time.Duration
 	// Implement is the time of the implementer's turns, of which Commands was
 	// spent inside tool calls.
 	Implement time.Duration
@@ -97,6 +98,9 @@ type RoundContext struct {
 func (t Timing) Format() string {
 	line := fmt.Sprintf("Time: plan %s · implement %s (commands %s) · gates %s · reviews %s · notes %s · total %s",
 		minSec(t.Plan), minSec(t.Implement), minSec(t.Commands), minSec(t.Gates), minSec(t.Reviews), minSec(t.Notes), minSec(t.Total))
+	for _, swap := range t.HarnessSwaps {
+		line += " · " + swap.String()
+	}
 	if ctx := t.contextLine(); ctx != "" {
 		line += "\n" + ctx
 	}
@@ -244,7 +248,7 @@ func (t *timer) event(e Event) {
 		if GatesOnlyFailed(e.Checks) {
 			t.timing.GateOnlyRounds = append(t.timing.GateOnlyRounds, e.Round)
 		}
-	case EventImplementing, EventCollected, EventChecking, EventNoPriorWork:
+	case EventImplementing, EventCollected, EventChecking, EventNoPriorWork, EventHarnessSwap, EventTurnAttempt:
 	}
 }
 

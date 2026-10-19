@@ -66,9 +66,12 @@ const reasonGatesFailed = "gates failed"
 // review is treated like any other command run on a sidecar: it passes or
 // fails, and a failure carries feedback for the implementer.
 type Check struct {
-	Name   string
-	Kind   Kind
-	Status Status
+	Harness   harness.Name
+	Model     string
+	RateLimit *harness.RateLimit
+	Name      string
+	Kind      Kind
+	Status    Status
 	// Mode is how a review was run; empty for other checks and for reviews
 	// that were skipped.
 	Mode      Mode
@@ -110,7 +113,7 @@ const outputTail = 4000
 // round to polish style remarks. Lower findings are kept for display. A review
 // that could not run errored.
 func FromReview(r review.Result) Check {
-	c := Check{Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings, Prose: r.Parsed.Prose, Context: r.Context}
+	c := Check{Harness: r.Harness, Model: r.Model, RateLimit: r.RateLimit, Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings, Prose: r.Parsed.Prose, Context: r.Context}
 	if r.Error != "" {
 		c.Status, c.Error = StatusErrored, r.Error
 		return c

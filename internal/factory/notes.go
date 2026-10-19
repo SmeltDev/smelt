@@ -107,16 +107,9 @@ func (s *Sidecars) writeNotes(ctx context.Context, in NotesInput) (Notes, error)
 	if in.Log != nil {
 		in.Log("notes prompt", prompt)
 	}
-	h := im.agent()
-	script := h.ReviewScript(harness.ReviewInput{
+	out, h, err := s.agentAnswer(ctx, "notes", harness.ReviewInput{
 		RepoPath: im.Entry.RepoPath, Prompt: prompt, Model: im.Model, Schema: NotesSchema, Tools: notesTools,
-	})
-	ctx, cancel := context.WithTimeout(ctx, notesTimeout)
-	defer cancel()
-	out, err := review.RunScriptEnv(ctx, s.Exec, im.Entry, script, h.Env(im.Credential, im.BaseURL), maxNotesOutputBytes)
-	if ctx.Err() == context.DeadlineExceeded {
-		return Notes{}, fmt.Errorf("timed out after %s", notesTimeout)
-	}
+	}, notesTimeout, maxNotesOutputBytes)
 	if err != nil {
 		return Notes{}, err
 	}

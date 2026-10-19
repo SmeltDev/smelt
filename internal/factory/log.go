@@ -155,18 +155,19 @@ func (l *runLog) pack(p Pack) {
 
 func (l *runLog) event(e Event) {
 	switch e.Kind {
+	case EventHarnessSwap:
+		if e.Swap != nil {
+			l.line("harness", e.Swap.String()+" · turn "+e.Swap.Turn)
+		}
+	case EventTurnAttempt:
+		if e.Attempt != nil && e.Attempt.Error != "" {
+			l.line("harness", fmt.Sprintf("round %d %s on %s (%s): %s", e.Attempt.Round, e.Attempt.Turn, e.Attempt.Harness, e.Attempt.Kind, e.Attempt.Error))
+		}
+
 	case EventPlanning:
 		l.line("step", "planning")
 	case EventPlanReviewed:
-		l.block("plan", e.Plan.Markdown())
-		if e.Plan != nil {
-			l.line("info", "plan: "+contextLogLine(e.Plan.Context))
-			l.pack(e.Plan.ContextPack())
-		}
-		for _, f := range e.Findings {
-			l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)
-		}
-		l.line("info", "plan reviewed")
+		l.planReviewed(e)
 	case EventNoPriorWork:
 		l.line("info", noPriorWork)
 	case EventImplementing:
@@ -182,13 +183,17 @@ func (l *runLog) event(e Event) {
 	case EventChecking:
 		l.line("step", fmt.Sprintf("round %d: reviewing and validating", e.Round))
 	case EventChecked:
-		for _, c := range e.Checks {
-			if c.Kind == KindReview {
-				l.review(e.Round, c)
-			}
-		}
-		l.line("info", fmt.Sprintf("round %d: %s", e.Round, checkTally(e.Checks)))
+		l.checked(e)
 	}
+}
+
+func (l *runLog) checked(e Event) {
+	for _, c := range e.Checks {
+		if c.Kind == KindReview {
+			l.review(e.Round, c)
+		}
+	}
+	l.line("info", fmt.Sprintf("round %d: %s", e.Round, checkTally(e.Checks)))
 }
 
 // implemented records the implementer's turn: how long it took and what it
@@ -431,4 +436,16 @@ func orNone(s string) string {
 		return "none"
 	}
 	return s
+}
+
+func (l *runLog) planReviewed(e Event) {
+	l.block("plan", e.Plan.Markdown())
+	if e.Plan != nil {
+		l.line("info", "plan: "+contextLogLine(e.Plan.Context))
+		l.pack(e.Plan.ContextPack())
+	}
+	for _, f := range e.Findings {
+		l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)
+	}
+	l.line("info", "plan reviewed")
 }

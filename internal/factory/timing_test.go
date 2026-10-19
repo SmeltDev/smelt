@@ -121,3 +121,8 @@ func TestTimerCollectsContext(t *testing.T) {
 	assert.DeepEqual(t, got.ImplementContext, []RoundContext{{Round: 1, Context: harness.Context{Peak: 88412, Calls: 24}}})
 	assert.Equal(t, got.ReviewsContext.Peak, 41000)
 }
+
+func TestTimingIncludesHarnessSwaps(t *testing.T) {
+	timing := Timing{HarnessSwaps: []HarnessSwap{{Round: 2, Turn: "implementer", From: "codex", To: "claude", Kind: "rate_limited"}}}
+	assert.Assert(t, strings.Contains(timing.Format(), "swapped codex → claude (rate_limited) in round 2"))
+}

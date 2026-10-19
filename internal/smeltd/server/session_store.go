@@ -66,6 +66,8 @@ func cloneSession(s smeltd.Session) smeltd.Session {
 	}
 	if s.Factory != nil {
 		f := *s.Factory
+		f.HarnessSwaps = slices.Clone(s.Factory.HarnessSwaps)
+		f.Turns = slices.Clone(s.Factory.Turns)
 		f.SidecarIDs = slices.Clone(s.Factory.SidecarIDs)
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
 		f.Progress = cloneFeed(s.Factory.Progress)

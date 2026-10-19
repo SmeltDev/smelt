@@ -46,6 +46,9 @@ func (c *Continuation) prompt() string {
 		b.WriteString("\n\nThe developer adds:\n\n")
 		b.WriteString(g)
 	}
+	if c.From.Plan != nil {
+		b.WriteString("\n\n## Approved plan\n\n" + c.From.Plan.Markdown())
+	}
 	b.WriteString(c.packSection())
 	if len(c.From.Conflicts) > 0 {
 		base := ChooseBase("", c.From.BaseBranch, c.From.DefaultBranch)
@@ -66,6 +69,9 @@ func (c *Continuation) emptyPrompt() string {
 		b.WriteString(g)
 	}
 	b.WriteString("\n\nAn earlier run on this branch produced no work; start from the request.")
+	if c.From.Plan != nil {
+		b.WriteString("\n\n## Approved plan\n\n" + c.From.Plan.Markdown())
+	}
 	b.WriteString(c.packSection())
 	return b.String()
 }
@@ -85,6 +91,7 @@ func (s *Sidecars) continueRun(ctx context.Context, opts *RunOptions, wt Worktre
 		return
 	}
 	opts.Continue = s.continuePack(ctx, *opts, wt, rec, status)
+	s.plan = opts.Continue.From.Plan
 	opts.Prompt = opts.Continue.prompt()
 	if s.Pack != nil && opts.OnPack != nil {
 		opts.OnPack(*s.Pack)

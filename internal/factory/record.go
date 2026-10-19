@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
 )
@@ -20,7 +21,11 @@ var ErrNoRecord = errors.New("no record of the run")
 // data directory beside the run's worktree, so it outlives the daemon's
 // sessions.
 type Record struct {
-	RunID string `json:"run_id"`
+	Reason       string        `json:"reason,omitempty"`
+	ResetAt      *time.Time    `json:"reset_at,omitempty"`
+	HarnessSwaps []HarnessSwap `json:"harness_swaps,omitempty"`
+	Turns        []TurnAttempt `json:"turns,omitempty"`
+	RunID        string        `json:"run_id"`
 	// Prompt is the original request. A continued run keeps it, so a chain of
 	// runs is all one change.
 	Prompt   string `json:"prompt"`

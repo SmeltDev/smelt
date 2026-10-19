@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -65,8 +66,18 @@ func Members(impl *sidecar.PoolEntry, ids []string) []*sidecar.PoolEntry {
 // code on the member it holds for the whole run, which also runs validation,
 // and each review runs on another member the implementer's tree is relayed to.
 type Sidecars struct {
-	Exec        review.Execer
-	Implementer *Implementer
+	agentMu       sync.Mutex
+	prepared      map[string]bool
+	turns         []TurnAttempt
+	onAttempt     func(TurnAttempt)
+	Failover      *Failover
+	round         int
+	plan          *Plan
+	prior         Turn
+	reviewHandoff string
+	checks        []Check
+	Exec          review.Execer
+	Implementer   *Implementer
 	// Acquire and Release hand out reviewer sidecars: the pool's own, with the
 	// implementer's member already checked out.
 	Acquire   func(context.Context) (*sidecar.PoolEntry, error)
@@ -266,10 +277,41 @@ func (s *Sidecars) setUpReviewers(ctx context.Context) error {
 
 // Implement runs one implementer turn.
 func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
-	turn, err := s.Implementer.Run(ctx, prompt)
+	var turn Turn
+	run := func(c Candidate) (*harness.RateLimit, error) {
+		im := s.Implementer
+		if im.agent().Name() != c.Harness.Name() {
+			change, err := s.Collect(ctx)
+			if err != nil {
+				return nil, err
+			}
+			handoff, err := s.Handoff(ctx, s.Request, prompt, s.plan, handoffPrior(turn, s.prior), change, s.checks)
+			if err != nil {
+				return nil, err
+			}
+			prompt = handoff
+			im.FreshSession()
+		}
+		s.useCandidate(c)
+		if err := s.prepareCandidate(ctx, im.Entry, c); err != nil {
+			s.recordAttempt(TurnAttempt{Round: s.round, Turn: turnImplementer}, c, err)
+			return nil, err
+		}
+		var err error
+		turn, err = im.Run(ctx, prompt)
+		s.recordAttempt(TurnAttempt{Round: s.round, Turn: turnImplementer, RateLimit: turn.RateLimit, DurationMS: turn.Duration.Milliseconds(), CostUSD: turn.CostUSD, InputTokens: turn.InputTokens, CachedTokens: turn.CachedTokens, OutputTokens: turn.OutputTokens}, c, err)
+		return turn.RateLimit, err
+	}
+	var err error
+	if s.Failover != nil {
+		err = s.Failover.Do(ctx, s.round, turnImplementer, run)
+	} else {
+		turn, err = s.Implementer.Run(ctx, prompt)
+	}
 	if err != nil {
 		return turn, err
 	}
+	s.prior = turn
 	turn = s.prove(turn)
 	s.answer(turn.Summary)
 	return turn, nil
@@ -288,7 +330,14 @@ func (s *Sidecars) Handoff(ctx context.Context, ticket, feedback string, plan *P
 	if pack != nil {
 		rec := *pack
 		rec.Entries = append([]PackEntry(nil), pack.Entries...)
-		current := workingFiles{root: s.Implementer.Entry.RepoPath}
+		root := s.Implementer.Entry.RepoPath
+		if s.Relay != nil {
+			if err := s.Pull(ctx); err != nil {
+				return "", err
+			}
+			root = s.Relay.dir
+		}
+		current := workingFiles{root: root}
 		for i := range rec.Entries {
 			if rec.Entries[i].Kind == PackNewFile {
 				if _, err := current.ReadFile(ctx, rec.Entries[i].Path); err == nil {
@@ -362,8 +411,14 @@ func (s *Sidecars) Collect(ctx context.Context) (Change, error) {
 // has it reviewed. With GatesFirst the validation commands run first and the
 // reviews only when none failed; otherwise both run at the same time.
 func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
+	s.round = round
 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
 		return nil, err
+	}
+	if len(s.Prompts) > 0 {
+		if err := s.captureReviewHandoff(ctx); err != nil {
+			return nil, err
+		}
 	}
 	if s.GatesFirst && !s.Integrate && len(s.Prompts) > 0 {
 		return s.checkGatesFirst(ctx, round)
@@ -514,7 +569,7 @@ func (s *Sidecars) relayToReviewers(ctx context.Context, round int) error {
 // found for the next round. In a focused re-check, a new medium finding on code
 // the fix did not touch is downgraded before it is judged.
 func (s *Sidecars) runReviews(ctx context.Context, round int, scope roundScope) ([]Check, error) {
-	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scope.Prompts, s.Review)
+	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scope.Prompts, s.reviewOptions(round, "review", s.Review))
 	if err != nil {
 		return nil, fmt.Errorf("reviews: %w", err)
 	}
@@ -755,6 +810,9 @@ func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
 // dependencies are installed. Its secrets are in the setup's environment only,
 // so later turns never get them.
 func (s *Sidecars) prepareHarness(ctx context.Context, e *sidecar.PoolEntry) error {
+	if s.Failover != nil {
+		return nil
+	}
 	script, env := s.Implementer.agent().Prepare(s.Implementer.Credential)
 	if script == "" {
 		return nil

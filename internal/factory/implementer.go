@@ -218,7 +218,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 			im.OnActivity(a)
 		}
 	})
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	script := h.ImplementScript(harness.ImplementInput{
 		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Gates),
 		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
@@ -230,6 +230,10 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 				stderr.Write(data)
 			}
 			return
+		}
+		stdout.Write(data)
+		if stdout.Len() > outputTail {
+			stdout.Next(stdout.Len() - outputTail)
 		}
 		parser.Write(data)
 	}, nil)
@@ -253,7 +257,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// A failure the parser classified ends the run however the CLI exited: an
 	// agent that cannot run commands reports "done" with nothing changed, which
 	// would otherwise read as an empty change.
-	if out.Err != nil {
+	if out.Err != nil && ctx.Err() == nil {
 		return turn, fmt.Errorf("implementer: %w", out.Err)
 	}
 
@@ -266,13 +270,13 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// explain stands in for stderr, so stderr goes in with the result for the
 	// credential check: a 401 there must not hide behind a result that says
 	// something else.
-	switch err := h.RunError(ctx, timeout, code, err, out.Message+"\n"+stderr.String(), explain); {
+	switch err := h.RunError(ctx, timeout, code, err, stdout.String()+"\n"+stderr.String(), explain); {
 	case err != nil:
 		return turn, fmt.Errorf("implementer: %w", err)
 	case out.Failed:
 		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
 	case !out.Done:
-		return turn, errors.New("implementer ended without a result")
+		return turn, harness.Classified(harness.Unavailable, errors.New("implementer ended without a result"), nil)
 	}
 	return turn, nil
 }

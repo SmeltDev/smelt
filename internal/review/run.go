@@ -43,7 +43,8 @@ var ErrCredentialRejected = claude.ErrCredentialRejected
 // should stop rather than run the rest and report identical failures. Every
 // sidecar in a pool shares one image and one credential.
 func fatal(err error) bool {
-	return errors.Is(err, ErrClaudeMissing) || errors.Is(err, ErrCredentialRejected)
+	var terminal interface{ StopReviewPass() }
+	return errors.As(err, &terminal) || errors.Is(err, ErrClaudeMissing) || errors.Is(err, ErrCredentialRejected)
 }
 
 // Credential is the credential a review authenticates with.
@@ -85,8 +86,15 @@ type ProgressEvent struct {
 	Error     string
 }
 
-// Options configures one review pass.
+// RetryTurn wraps one individual review before pass cancellation. run executes one
+// attempt with its own immutable options and returns its typed error.
+type RetryTurn func(context.Context, *sidecar.PoolEntry, Prompt, Options, func(Options) (Result, error)) (Result, error)
+
+// Options configures a review pass.
 type Options struct {
+	Retry RetryTurn
+	// PromptPrefix adds a factory handoff while retaining this review's instructions.
+	PromptPrefix string
 	// Harness is the agent that runs each review; Claude Code when nil.
 	Harness    harness.Harness
 	Credential Credential
@@ -123,6 +131,9 @@ func (o Options) agent() harness.Harness {
 // Result is the outcome of one prompt in one pass. Output and Error are not
 // exclusive: a review that fails partway keeps what it produced.
 type Result struct {
+	Harness   harness.Name
+	Model     string
+	RateLimit *harness.RateLimit
 	Prompt    string
 	SidecarID string
 	Output    string
@@ -196,7 +207,19 @@ func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEn
 			defer release(entry)
 			status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, entry.ID))
 			progress(ProgressEvent{Prompt: p.Name, SidecarID: entry.ID, State: StateRunning})
-			r := runOne(ctx, exec, entry, p, opts)
+			var r runResult
+			if opts.Retry == nil {
+				r = runOne(ctx, exec, entry, p, opts)
+			} else {
+				result, err := opts.Retry(ctx, entry, p, opts, func(attempt Options) (Result, error) {
+					one := runOne(ctx, exec, entry, p, attempt)
+					return one.Result, one.err
+				})
+				r = runResult{Result: result}
+				if err != nil {
+					r = r.fail(err)
+				}
+			}
 			// If context was canceled because another review hit a fatal error,
 			// attribute this result to the same root cause so no spurious
 			// "context canceled" failures are shown alongside the real error.
@@ -282,15 +305,23 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	if opts.OnSubmitted != nil {
 		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
 	}
-	in := harness.ReviewInput{RepoPath: entry.RepoPath, Prompt: p.Body, Model: opts.Model, Tools: tools}
+	in := harness.ReviewInput{RepoPath: entry.RepoPath, Prompt: opts.PromptPrefix + p.Body, Model: opts.Model, Tools: tools, Stream: opts.Retry != nil}
 	if opts.StructuredFindings {
 		in.Schema = FindingsSchema
 	}
 	h := opts.agent()
+	r.Harness, r.Model = h.Name(), opts.Model
 	code, err := exec(ctx, entry, h.ReviewScript(in), h.Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
+	parser := h.NewImplementParser(nil)
+	parser.Write([]byte(stdout.String() + "\n" + stderr.String()))
+	parser.Flush()
+	r.RateLimit = parser.Outcome().Turn.RateLimit
 	if err := h.RunError(ctx, opts.Timeout, code, err, r.Output, stderr.String()); err != nil {
+		return r.fail(err)
+	}
+	if err := parser.Outcome().Err; err != nil {
 		return r.fail(err)
 	}
 	if opts.StructuredFindings {

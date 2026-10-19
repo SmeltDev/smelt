@@ -41,6 +41,7 @@ func newFactoryCmd() *cobra.Command {
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
+	var fallback []string
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
@@ -208,9 +209,9 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if err := preflightBuild(ctx, root, reviewsDir, checks, cfg, noValidate); err != nil {
 				return err
 			}
-			agent, err := resolveHarness(ctx, streams, harnessChoice{
+			agent, fallbackList, err := resolveBuildHarness(ctx, streams, harnessChoice{
 				Root: root, Cfg: cfg, Flag: harnessFlag, Image: settings.dockerImage(), CanPrompt: canPrompt(cmd.InOrStdin(), jsonOut),
-			})
+			}, fallbackChoice{Names: fallback, Explicit: flags.Changed("fallback")})
 			if err != nil {
 				return err
 			}
@@ -254,6 +255,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				Reviewers:               reviewers,
 				Model:                   model,
 				Harness:                 agent,
+				Fallback:                fallbackList,
+				FallbackSet:             true,
 				ImplementerInstructions: implementerInstructions,
 				ImplementTimeoutSeconds: int(implementTimeout / time.Second),
 				ReviewTimeoutSeconds:    int(reviewTimeout / time.Second),
@@ -300,6 +303,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")
 	cmd.Flags().StringVar(&image, "image", "", "image: a Docker image (default: factory.image or factory.dockerfile), or a CircleCI snapshot ID with --backend circleci (default: validation.sidecarImage)")
 	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci or docker (local containers) (default: factory.backend from config, else docker)")
+	cmd.Flags().StringSliceVar(&fallback, "fallback", nil, "ordered alternate harnesses after --harness (default: factory.fallback)")
 	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude, codex or grok (default: factory.harness from config, else ask)")
 	cmd.Flags().StringVar(&model, "model", "", "model for the chosen agent (default: factory.models.<harness> from config, else the agent's own default)")
 	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
@@ -919,4 +923,29 @@ func preflightBuild(ctx context.Context, root, reviewsDir string, c buildChecks,
 		return nil
 	}
 	return checkIntegrate(ctx, root, c.from, c.against)
+}
+
+// resolveFallback keeps caller order, with an explicit flag replacing config.
+type fallbackChoice struct {
+	Names    []string
+	Explicit bool
+}
+
+func resolveFallback(primary string, choice fallbackChoice, cfg *config.FactoryConfig) ([]string, error) {
+	names := choice.Names
+	if !choice.Explicit && cfg != nil {
+		names = cfg.Fallback
+	}
+	out := []string{}
+	seen := map[string]bool{primary: true}
+	for _, name := range names {
+		if name == "" || !config.ValidHarness(name) {
+			return nil, newUserError(fmt.Sprintf("unknown fallback harness %q", name)).withCode("command.invalid_args").withExitCode(ExitBadArgs).withSuggestion("Choose one of: " + strings.Join(harnessNames(), ", "))
+		}
+		if !seen[name] {
+			out = append(out, name)
+			seen[name] = true
+		}
+	}
+	return out, nil
 }

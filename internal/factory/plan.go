@@ -306,16 +306,9 @@ func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 	im := s.Implementer
 	in.Scout = s.scouting()
 	prompt := planPrompt(in)
-	h := im.agent()
-	script := h.ReviewScript(harness.ReviewInput{
+	out, h, err := s.agentAnswer(ctx, "plan", harness.ReviewInput{
 		RepoPath: im.Entry.RepoPath, Prompt: prompt, Model: im.Model, Schema: PlanSchema, Tools: planTools,
-	})
-	ctx, cancel := context.WithTimeout(ctx, planTimeout)
-	defer cancel()
-	out, err := review.RunScriptEnv(ctx, s.Exec, im.Entry, script, h.Env(im.Credential, im.BaseURL), maxPlanOutputBytes)
-	if ctx.Err() == context.DeadlineExceeded {
-		return Plan{}, fmt.Errorf("timed out after %s", planTimeout)
-	}
+	}, planTimeout, maxPlanOutputBytes)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -328,7 +321,9 @@ func (s *Sidecars) Plan(ctx context.Context, in PlanInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return s.scoutPack(ctx, p), nil
+	p = s.scoutPack(ctx, p)
+	s.plan = &p
+	return p, nil
 }
 
 // scouting reports whether the plan turn builds a context pack.
@@ -359,7 +354,11 @@ func (s *Sidecars) ReviewPlan(ctx context.Context, request string, plan Plan) ([
 		return nil, err
 	}
 	// Progress is left out: it is recorded against a round, and none has begun.
-	opts := s.Review
+	s.plan = &plan
+	if err := s.captureReviewHandoff(ctx); err != nil {
+		return nil, err
+	}
+	opts := s.reviewOptions(0, "plan_review", s.Review)
 	opts.ProgressFn = nil
 	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, prompts, opts)
 	if err != nil {
