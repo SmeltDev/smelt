@@ -154,6 +154,9 @@ type Report struct {
 	Started bool
 	// Committed reports whether the work was committed on Worktree.Branch.
 	Committed bool
+	// newCommit is the commit this run made, "" when its work changed nothing.
+	// Only that commit may have its message rewritten.
+	newCommit string
 	// Stat is the committed work's diff stat against Worktree.Baseline, "" for
 	// no changes. StatErr says why it could not be worked out.
 	Stat    string
@@ -456,7 +459,7 @@ func keepSummary(last *string, next func(Event)) func(Event) {
 // from it; its message is rewritten once they are. It sets what the run left
 // behind in rep.
 func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report, in NotesInput, status iostream.StatusFunc) {
-	rep.Committed = commitWork(ctx, steps, wt, Notes{Title: requestTitle(in.Request)}.CommitMessage(rep.RunID, rep.Outcome, ""), status)
+	rep.newCommit, rep.Committed = commitWork(ctx, steps, wt, Notes{Title: requestTitle(in.Request)}.CommitMessage(rep.RunID, rep.Outcome, ""), status)
 	if !rep.Committed {
 		return
 	}
@@ -493,7 +496,9 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	} else {
 		status(iostream.LevelDone, "PR notes written")
 	}
-	if in.Integrate {
+	if in.Integrate || rep.newCommit == "" {
+		// With no commit of its own the run leaves HEAD alone: it may already
+		// be published, and the notes go to the PR body.
 		return &notes
 	}
 	amendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
@@ -581,8 +586,10 @@ func workStat(ctx context.Context, wt Worktree) (string, error) {
 // commitWork brings the implementer's last work into the worktree and commits
 // it on the run's branch. It gets one deadline for the pull and a fresh one
 // for the commit, so a pull that hangs cannot use up the commit's time. What
-// an earlier round pulled is committed even if the last pull fails.
-func commitWork(ctx context.Context, steps *Sidecars, wt Worktree, message string, status iostream.StatusFunc) bool {
+// an earlier round pulled is committed even if the last pull fails. It returns
+// the commit made, "" when the work changed nothing, and whether the commit
+// step succeeded.
+func commitWork(ctx context.Context, steps *Sidecars, wt Worktree, message string, status iostream.StatusFunc) (string, bool) {
 	base := context.WithoutCancel(ctx)
 	pullCtx, cancelPull := context.WithTimeout(base, pullTimeout)
 	err := steps.Pull(pullCtx)
@@ -592,11 +599,12 @@ func commitWork(ctx context.Context, steps *Sidecars, wt Worktree, message strin
 	}
 	ctx, cancel := context.WithTimeout(base, cleanupTimeout)
 	defer cancel()
-	if _, err := wt.Commit(ctx, message); err != nil {
+	sha, err := wt.Commit(ctx, message)
+	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not commit the work in %s: %v", wt.Path, err))
-		return false
+		return "", false
 	}
-	return true
+	return sha, true
 }
 
 // closePool deletes the run's sidecars, or with keep leaves them running and
