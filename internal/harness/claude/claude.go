@@ -193,6 +193,11 @@ func (Harness) ParseAnswer(stdout string) (json.RawMessage, error) {
 		StructuredOutput json.RawMessage `json:"structured_output"`
 	}
 	if err := json.Unmarshal([]byte(resultLine(stdout)), &res); err != nil {
+		if strings.Contains(strings.TrimSpace(stdout), "\n") {
+			// A stream with no result event: say that, not JSON's complaint
+			// about the second event.
+			return nil, fmt.Errorf("read claude's result: no result event in %d bytes of stream output", len(stdout))
+		}
 		return nil, fmt.Errorf("read claude's result: %w", err)
 	}
 	if res.IsError || len(res.StructuredOutput) == 0 || string(res.StructuredOutput) == "null" {
