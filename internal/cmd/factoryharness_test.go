@@ -70,7 +70,7 @@ func TestFallbackFlagOverridesConfigAndPreservesOrder(t *testing.T) {
 	got, err = resolveFallback("claude", fallbackChoice{Names: []string{}, Explicit: true}, cfg)
 	assert.NilError(t, err)
 	assert.Equal(t, len(got), 0)
-	_, err = resolveFallback("claude", fallbackChoice{Names: []string{"grok"}, Explicit: true}, cfg)
+	_, err = resolveFallback("claude", fallbackChoice{Names: []string{"gemini"}, Explicit: true}, cfg)
 	assert.ErrorContains(t, err, "unknown fallback harness")
 }
 

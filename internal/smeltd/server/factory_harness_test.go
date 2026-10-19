@@ -122,18 +122,13 @@ func TestFactoryStatusReportsTokensAndTheRateLimitSignal(t *testing.T) {
 	assert.Equal(t, seen.Bucket, "5h")
 }
 
-<<<<<<< HEAD
 func TestFactoryFallbackCredentialsModelsAndOverride(t *testing.T) {
-=======
-func TestFactoryRunGivesGrokItsOwnCredential(t *testing.T) {
->>>>>>> origin/main
 	var got factory.RunOptions
 	run := scriptedRun(factory.ResultPassed)
 	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		got = opts
 		return run(ctx, opts)
 	})
-<<<<<<< HEAD
 	d.rcfg.Codex = codexAuth("alternate")
 	cfg := `{"orgID":"org-1","factory":{"fallback":["codex","claude","codex"],"models":{"claude":"opus","codex":"own-model"},"swapAtUtilization":0.9},"commands":[{"name":"test","run":"true"}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
@@ -150,7 +145,7 @@ func TestFactoryRunGivesGrokItsOwnCredential(t *testing.T) {
 	assert.NilError(t, err)
 	waitForSessionEnd(t, d, sess.ID)
 	assert.Equal(t, len(got.Fallback), 0)
-	_, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Fallback: []string{"grok"}})
+	_, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Fallback: []string{"gemini"}})
 	assert.ErrorContains(t, err, "unknown fallback harness")
 }
 
@@ -248,7 +243,15 @@ func TestFactoryExhaustionStatusRetainsReasonAndEarliestReset(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(raw), `"reason":"no harness available"`))
 	assert.Assert(t, strings.Contains(string(raw), `"reset_at":"2026-10-19T01:00:00Z"`))
-=======
+}
+
+func TestFactoryRunGivesGrokItsOwnCredential(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
 	d.rcfg.Codex = codexAuth("codex-secret")
 	d.rcfg.Grok = HarnessAuth{Credential: review.Credential{EnvVar: "XAI_API_KEY", Value: "grok-secret"}}
 
@@ -265,5 +268,4 @@ func TestFactoryExhaustionStatusRetainsReasonAndEarliestReset(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae))
 	assert.Check(t, cmp.Contains(ae.msg, "smelt auth login grok"))
->>>>>>> origin/main
 }
