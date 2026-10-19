@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"os"
@@ -344,8 +345,8 @@ func (b *Provider) Pull(ctx context.Context, id, repoPath, localDir string, stat
 	return nil
 }
 
-// Exec runs script with `sh -c` inside container id and streams its stdout and
-// stderr to onOutput, returning the command's exit code. onSubmitted, when
+// Exec runs script with `sh` inside container id and streams its stdout and
+// stderr to onOutput (the script is sent on the exec's stdin, never in argv), returning the command's exit code. onSubmitted, when
 // non-nil, receives the Docker exec ID between creation and streaming.
 //
 // The script runs in its own process group. When ctx is done the group gets
@@ -359,7 +360,7 @@ func (b *Provider) Exec(ctx context.Context, id, script string, env map[string]s
 		env = merged
 	}
 	pgidFile := pgidPath()
-	return b.run(ctx, id, execSpec{cmd: groupedCommand(pgidFile, script), pgidFile: pgidFile}, env, onOutput, onSubmitted)
+	return b.run(ctx, id, execSpec{cmd: groupedCommand(pgidFile), stdin: script, pgidFile: pgidFile}, env, onOutput, onSubmitted)
 }
 
 // execAs is Exec as user, or as the image's own user when user is empty. It is
@@ -374,14 +375,19 @@ func (b *Provider) execAs(ctx context.Context, id, user, script string, onOutput
 type execSpec struct {
 	user     string
 	cmd      []string
+	stdin    string // when set, attached to the exec's stdin
 	pgidFile string
 }
 
 func (b *Provider) run(ctx context.Context, id string, spec execSpec, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
+	if err := sidecar.CheckArgv(spec.cmd...); err != nil {
+		return 0, err
+	}
 	created, err := b.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
 		User:         spec.user,
 		Cmd:          spec.cmd,
 		Env:          envSlice(env),
+		AttachStdin:  spec.stdin != "",
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -397,6 +403,16 @@ func (b *Provider) run(ctx context.Context, id string, spec execSpec, env map[st
 		return 0, fmt.Errorf("docker exec attach: %w", err)
 	}
 	defer att.Close()
+
+	if spec.stdin != "" {
+		// Written off the reading path so a large script and the output stream
+		// cannot deadlock; the deferred att.Close fails a stuck write.
+		go func() {
+			if _, err := io.WriteString(att.Conn, spec.stdin); err == nil {
+				_ = att.CloseWrite()
+			}
+		}()
+	}
 
 	if spec.pgidFile != "" {
 		finished := make(chan struct{})
@@ -486,21 +502,26 @@ func pgidPath() string {
 	return "/tmp/" + brand.Command + "-pgid-" + hex.EncodeToString(r[:])
 }
 
-// groupedCommand runs script under `sh -c` in its own session, whose id is the
-// process group the exec is killed through, written to pgidFile. setsid runs in
-// the background and is waited for: a foreground setsid forks when its caller
-// leads a group and would lose the exit code. Without setsid the script runs
-// ungrouped and cannot be signalled.
-func groupedCommand(pgidFile, script string) []string {
-	const wrapper = `if command -v setsid >/dev/null 2>&1; then
-  setsid sh -c 'echo $$ > "$0"; exec sh -c "$1"' "$1" "$2" &
+// groupedCommand runs the script it reads from stdin under `sh` in its own
+// session, whose id is the process group the exec is killed through, written to
+// pgidFile. The script is spooled to a file and run with stdin from /dev/null,
+// so the command cannot swallow the rest of it. setsid runs in the background
+// and is waited for: a foreground setsid forks when its caller leads a group and
+// would lose the exit code. Without setsid the script runs ungrouped and cannot
+// be signalled.
+func groupedCommand(pgidFile string) []string {
+	const wrapper = `s="$1.sh"
+cat > "$s"
+if command -v setsid >/dev/null 2>&1; then
+  setsid sh -c 'echo $$ > "$0"; exec sh "$1" </dev/null' "$1" "$s" &
   wait $!
-  code=$?
-  rm -f "$1"
-  exit $code
+else
+  sh "$s" </dev/null
 fi
-exec sh -c "$2"`
-	return []string{"sh", "-c", wrapper, "sh", pgidFile, script}
+code=$?
+rm -f "$1" "$s"
+exit $code`
+	return []string{"sh", "-c", wrapper, "sh", pgidFile}
 }
 
 // rsyncMirror makes dst an exact copy of src (archive mode, deleting extraneous

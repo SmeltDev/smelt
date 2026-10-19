@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"os/exec"
@@ -248,12 +249,65 @@ func TestExecCancelKillsAfterTheGraceWhenTermIsIgnored(t *testing.T) {
 }
 
 func TestGroupedCommandKeepsTheScript(t *testing.T) {
-	cmd := groupedCommand("/tmp/f", "exit 3")
-	assert.DeepEqual(t, cmd[len(cmd)-2:], []string{"/tmp/f", "exit 3"})
+	cmd := groupedCommand(filepath.Join(t.TempDir(), "pgid"))
 	if _, err := exec.LookPath("setsid"); err != nil {
 		t.Skip("no setsid on the host")
 	}
-	err := exec.Command(cmd[0], cmd[1:]...).Run()
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Stdin = strings.NewReader("exit 3")
+	err := c.Run()
 	var ee *exec.ExitError
 	assert.Assert(t, errors.As(err, &ee) && ee.ExitCode() == 3, "%v", err)
+}
+
+func TestGroupedCommandRunsALargeScriptWithoutStdin(t *testing.T) {
+	cmd := groupedCommand(filepath.Join(t.TempDir(), "pgid"))
+	script := "cat | wc -c; echo '" + strings.Repeat("x", 1<<20) + "' | wc -c"
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Stdin = strings.NewReader(script)
+	out, err := c.Output()
+	assert.NilError(t, err)
+	// The script's own stdin is /dev/null, so it never sees its own text.
+	assert.Equal(t, strings.Fields(string(out))[0], "0")
+}
+
+func TestExecArgvIsIndependentOfTheScript(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	f := &fakeDocker{}
+	b := &Provider{cli: f}
+	_, err := b.Exec(context.Background(), "c", big, nil, func(string, []byte) {}, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, len(f.execs), 1)
+	total := 0
+	for _, a := range f.execs[0].Cmd {
+		total += len(a)
+	}
+	assert.Assert(t, total < 4096, "argv is %d bytes", total)
+	assert.Assert(t, f.execs[0].AttachStdin)
+}
+
+func TestRunRefusesAScriptInArgv(t *testing.T) {
+	b := &Provider{cli: &fakeDocker{}}
+	_, err := b.execAs(context.Background(), "c", "", strings.Repeat("x", 200*1024), nil)
+	assert.ErrorContains(t, err, "internal: script passed as an argument (204800 bytes)")
+}
+
+func TestExecPipesALargeScriptToTheContainer(t *testing.T) {
+	b := newLiveBackend(t)
+	inst, err := b.Create(context.Background(), "smelt-test-bigscript", "", repoPath)
+	assert.NilError(t, err)
+	defer func() { _ = b.Delete(context.Background(), inst.ID) }()
+
+	prompt := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("p", 1<<20)))
+	var stdout strings.Builder
+	code, err := b.Exec(context.Background(), inst.ID,
+		"echo "+prompt+" | base64 -d | wc -c", nil,
+		func(stream string, data []byte) {
+			if stream == iostream.StreamStdout {
+				stdout.Write(data)
+			}
+		}, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, code, 0)
+	assert.Equal(t, strings.TrimSpace(stdout.String()), "1048576")
 }

@@ -77,7 +77,7 @@ func (b *circleciBackend) Pull(ctx context.Context, id, repoPath, localDir strin
 func (b *circleciBackend) Exec(ctx context.Context, id, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
 	// Submit and stream are kept apart so onSubmitted sees the command ID: the
 	// caller needs it before the command ends, not after.
-	commandID, err := b.client.SubmitExec(ctx, id, "sh", []string{"-c", script}, env)
+	commandID, err := SubmitScript(ctx, b.client, id, script, env)
 	if err != nil {
 		return 0, fmt.Errorf("submit: %w", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -151,4 +153,26 @@ func TestFailureClassification(t *testing.T) {
 	var failure *harness.Failure
 	assert.Assert(t, errors.As((Harness{}).RunError(deadline, time.Minute, 1, nil, "", ""), &failure))
 	assert.Equal(t, failure.Kind, harness.Timeout)
+}
+
+// TestImplementScriptCarriesALargePrompt runs the script with a 300 KB prompt
+// against a fake claude that counts what it receives.
+func TestImplementScriptCarriesALargePrompt(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	assert.NilError(t, os.MkdirAll(bin, 0o755))
+	counted := filepath.Join(home, "counted")
+	fake := "#!/bin/sh\nwc -c > \"$COUNTED\"\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755))
+
+	prompt := strings.Repeat("p", 300*1024)
+	script := Harness{}.ImplementScript(harness.ImplementInput{RepoPath: repo, Prompt: prompt})
+	cmd := exec.Command("sh", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(), "HOME="+home, "COUNTED="+counted)
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, string(out))
+	got, err := os.ReadFile(counted)
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(got)), "307200")
 }
