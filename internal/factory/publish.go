@@ -328,9 +328,37 @@ func (p Publication) Push(ctx context.Context) error {
 	ref := "refs/heads/" + p.Head
 	out, err := (gitexec.Runner{Dir: p.Dir}).CombinedOutput(ctx, "push", "--set-upstream", p.Remote, ref+":"+ref)
 	if err != nil {
-		return fmt.Errorf("push %s to %s: %w: %s", p.Head, p.Remote, err, strings.TrimSpace(string(out)))
+		err = fmt.Errorf("push %s to %s: %w: %s", p.Head, p.Remote, err, strings.TrimSpace(string(out)))
+		if p.rewrittenLocally(ctx) {
+			return fmt.Errorf("the branch was rewritten locally; its tree matches %s/%s. Reset it to the remote's with git reset --hard %s/%s: %w", p.Remote, p.Head, p.Remote, p.Head, err)
+		}
+		return err
 	}
 	return nil
+}
+
+// rewrittenLocally reports whether the head branch and the remote's differ
+// only by commit identity: different tips with the same tree. The remote's
+// branch is fetched first, as a rejected push leaves its tracking ref stale; a
+// fetch that fails says nothing.
+func (p Publication) rewrittenLocally(ctx context.Context) bool {
+	git := gitexec.Runner{Dir: p.Dir}
+	tracking := "refs/remotes/" + p.Remote + "/" + p.Head
+	if git.Run(ctx, "fetch", "--quiet", p.Remote, "+refs/heads/"+p.Head+":"+tracking) != nil {
+		return false
+	}
+	tip := func(rev string) string {
+		out, err := git.Output(ctx, "rev-parse", "--verify", "--quiet", rev)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	local, remote := tip("refs/heads/"+p.Head), tip(tracking)
+	if local == "" || remote == "" || local == remote {
+		return false
+	}
+	return tip("refs/heads/"+p.Head+"^{tree}") == tip(tracking+"^{tree}")
 }
 
 // OpenPR opens a PR from the head branch into t.Base, which must be pushed.

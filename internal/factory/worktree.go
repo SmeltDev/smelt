@@ -233,13 +233,41 @@ func (w Worktree) Stat(ctx context.Context) (string, error) {
 }
 
 // Amend rewrites the message of the work's commit, once the notes that make
-// it up are written.
+// it up are written. It refuses a commit the branch's upstream already has:
+// the new hash could only be pushed by forcing.
 func (w Worktree) Amend(ctx context.Context, message string) error {
 	git := gitexec.Runner{Dir: w.Path, Env: commitEnv(w.Author)}
+	if up := w.upstreamHolding(ctx); up != "" {
+		return fmt.Errorf("the commit is already on %s and will not be rewritten", up)
+	}
 	if out, err := git.CombinedOutput(ctx, "-c", "commit.gpgsign=false", "commit", "--amend", "--quiet", "--no-verify", "-m", message); err != nil {
 		return fmt.Errorf("rewrite the commit message: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// upstreamHolding names the upstream ref that already contains HEAD, or ""
+// when the branch has none or HEAD is not on it. The remote-tracking ref of
+// the same name stands in for an upstream that was never set.
+func (w Worktree) upstreamHolding(ctx context.Context) string {
+	git := gitexec.Runner{Dir: w.Path}
+	var candidates []string
+	if out, err := git.Output(ctx, "rev-parse", "--abbrev-ref", "--symbolic-full-name", w.Branch+"@{upstream}"); err == nil {
+		candidates = append(candidates, strings.TrimSpace(string(out)))
+	}
+	if out, err := git.Output(ctx, "config", "--get", "branch."+w.Branch+".remote"); err == nil {
+		candidates = append(candidates, strings.TrimSpace(string(out))+"/"+w.Branch)
+	}
+	candidates = append(candidates, "origin/"+w.Branch)
+	for _, ref := range candidates {
+		if git.Run(ctx, "rev-parse", "--verify", "--quiet", "refs/remotes/"+ref) != nil {
+			continue
+		}
+		if git.Run(ctx, "merge-base", "--is-ancestor", "HEAD", "refs/remotes/"+ref) == nil {
+			return ref
+		}
+	}
+	return ""
 }
 
 // DiffStat is git's per-file diff stat of the branch's work since the

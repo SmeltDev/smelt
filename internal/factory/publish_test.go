@@ -186,3 +186,35 @@ func TestCheckGHRepo(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicationPushSaysWhenTheBranchWasRewrittenLocally(t *testing.T) {
+	ctx := context.Background()
+	pub, _ := remoteProject(t)
+	writeFile(t, pub.Dir, "flag.go", "package main\n")
+	gitOutput(t, pub.Dir, "add", "-A")
+	gitOutput(t, pub.Dir, "commit", "-m", "work")
+	assert.NilError(t, pub.Push(ctx))
+
+	gitOutput(t, pub.Dir, "commit", "--amend", "-m", "work, reworded")
+	err := pub.Push(ctx)
+
+	assert.ErrorContains(t, err, "the branch was rewritten locally; its tree matches origin/"+pub.Head)
+	assert.ErrorContains(t, err, "git reset --hard origin/"+pub.Head)
+}
+
+func TestPublicationPushKeepsTheGenericErrorForDifferentTrees(t *testing.T) {
+	ctx := context.Background()
+	pub, _ := remoteProject(t)
+	writeFile(t, pub.Dir, "flag.go", "package main\n")
+	gitOutput(t, pub.Dir, "add", "-A")
+	gitOutput(t, pub.Dir, "commit", "-m", "work")
+	assert.NilError(t, pub.Push(ctx))
+
+	writeFile(t, pub.Dir, "flag.go", "package other\n")
+	gitOutput(t, pub.Dir, "add", "-A")
+	gitOutput(t, pub.Dir, "commit", "--amend", "-m", "work, changed")
+	err := pub.Push(ctx)
+
+	assert.Assert(t, err != nil)
+	assert.Assert(t, !strings.Contains(err.Error(), "rewritten locally"), err.Error())
+}

@@ -121,7 +121,8 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	assert.Assert(t, commitWork(cancelled, steps, wt, "smelt factory: add a flag", status))
+	_, ok := commitWork(cancelled, steps, wt, "smelt factory: add a flag", status)
+	assert.Assert(t, ok)
 
 	assert.Equal(t, len(warnings), 1, "%v", warnings)
 	assert.Assert(t, strings.HasPrefix(warnings[0], "could not bring back the implementer's last changes"), warnings[0])
@@ -390,4 +391,58 @@ func TestRunStopsBeforeCreatingSidecarsWhenTheBackendIsNotReady(t *testing.T) {
 	err := runWithBackend(t, b)
 	assert.ErrorContains(t, err, "create the run's sidecars: Docker did not finish starting")
 	assert.DeepEqual(t, b.events, []string{"ready:smelt-sandbox:local"})
+}
+
+// publishedFixture is concludeFixture's worktree with a commit already pushed
+// to a bare origin, as a continued run finds it.
+func publishedFixture(t *testing.T) (Worktree, *Sidecars, string) {
+	t.Helper()
+	wt, steps, _ := concludeFixture(t, true, func() (int, string) { return 0, notesJSON })
+	_, err := wt.Commit(context.Background(), "first run")
+	assert.NilError(t, err)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gitOutput(t, wt.Path, "init", "--bare", origin)
+	gitOutput(t, wt.Path, "remote", "set-url", "origin", origin)
+	gitOutput(t, wt.Path, "push", "--set-upstream", "origin", wt.Branch)
+	return wt, steps, origin
+}
+
+func TestConcludeRunLeavesAPublishedCommitAloneWhenNothingChanged(t *testing.T) {
+	wt, steps, origin := publishedFixture(t)
+	before := gitOutput(t, wt.Path, "rev-parse", "HEAD")
+	rep := Report{RunID: "run-2", Outcome: Outcome{Result: ResultPassed, Rounds: 1}}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag"}, func(iostream.Level, string) {})
+
+	assert.Assert(t, rep.Committed)
+	assert.Assert(t, rep.Notes != nil)
+	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD"), before)
+	gitOutput(t, wt.Path, "push", "origin", wt.Branch)
+	assert.Equal(t, gitOutput(t, origin, "rev-parse", wt.Branch), before)
+}
+
+func TestConcludeRunAmendsANewCommitOnAPublishedBranch(t *testing.T) {
+	wt, steps, origin := publishedFixture(t)
+	before := gitOutput(t, wt.Path, "rev-parse", "HEAD")
+	writeFile(t, wt.Path, "more.go", "package main\n")
+	rep := Report{RunID: "run-2", Outcome: Outcome{Result: ResultPassed, Rounds: 1}}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag"}, func(iostream.Level, string) {})
+
+	assert.Assert(t, rep.newCommit != "")
+	msg := gitOutput(t, wt.Path, "log", "-1", "--format=%B", wt.Branch)
+	assert.Assert(t, strings.HasPrefix(msg, "Add a flag"), msg)
+	gitOutput(t, wt.Path, "push", "origin", wt.Branch)
+	assert.Equal(t, gitOutput(t, origin, "rev-parse", wt.Branch), gitOutput(t, wt.Path, "rev-parse", "HEAD"))
+	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD~1"), before)
+}
+
+func TestAmendRefusesACommitOnTheUpstream(t *testing.T) {
+	wt, _, _ := publishedFixture(t)
+	before := gitOutput(t, wt.Path, "rev-parse", "HEAD")
+
+	err := wt.Amend(context.Background(), "new message")
+
+	assert.ErrorContains(t, err, "already on origin/"+wt.Branch)
+	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD"), before)
 }
