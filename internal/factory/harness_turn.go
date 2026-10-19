@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/harness"
@@ -140,7 +139,9 @@ func (s *Sidecars) agentAnswer(ctx context.Context, turn string, in harness.Revi
 		start := time.Now()
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		var stdout, stderr strings.Builder
+		// A streamed turn prints its result last, after every event: keep the
+		// end of each stream, never the start.
+		stdout, stderr := harness.StreamTail{Limit: limit}, harness.StreamTail{Limit: limit}
 		in.Model = c.Model
 		in.Stream = true
 		code, execErr := s.Exec(attemptCtx, s.Implementer.Entry, h.ReviewScript(in), h.Env(c.Credential, c.BaseURL), func(stream string, data []byte) {
@@ -148,8 +149,7 @@ func (s *Sidecars) agentAnswer(ctx context.Context, turn string, in harness.Revi
 			if stream == iostream.StreamStderr {
 				buf = &stderr
 			}
-			room := max(limit-buf.Len(), 0)
-			buf.Write(data[:min(room, len(data))])
+			_, _ = buf.Write(data)
 		}, nil)
 		output = stdout.String()
 		parser := h.NewImplementParser(nil)

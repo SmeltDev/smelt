@@ -278,28 +278,25 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
-	var stdout, stderr strings.Builder
 	// Only stdout carries the JSON result, so only it gets the larger cap; stderr
 	// is read for a short tail and stays small.
 	stdoutLimit := maxOutputBytes
 	if opts.StructuredFindings {
 		stdoutLimit = maxStructuredOutputBytes
 	}
-	stdoutCut := false
+	// A streamed review prints its result last: keep the end of each stream.
+	stdout := harness.StreamTail{Limit: stdoutLimit, MaxLine: stdoutLimit}
+	stderr := harness.StreamTail{Limit: maxOutputBytes}
 	tools := opts.AllowedTools
 	if len(tools) == 0 {
 		tools = allowedTools
 	}
 	onOutput := func(stream string, data []byte) {
-		buf, limit := &stdout, stdoutLimit
+		buf := &stdout
 		if stream == iostream.StreamStderr {
-			buf, limit = &stderr, maxOutputBytes
+			buf = &stderr
 		}
-		room := max(limit-buf.Len(), 0)
-		if len(data) > room && buf == &stdout {
-			stdoutCut = true
-		}
-		buf.Write(data[:min(len(data), room)])
+		_, _ = buf.Write(data)
 	}
 	var onSubmitted func(string)
 	if opts.OnSubmitted != nil {
@@ -327,7 +324,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	if opts.StructuredFindings {
 		// A result cut at the cap cannot decode; say why instead of reporting
 		// malformed JSON.
-		if stdoutCut {
+		if stdout.LastLineCut() {
 			return r.fail(fmt.Errorf("%s's result is over %d bytes", h.Name(), stdoutLimit))
 		}
 		parsed, err := parseReview(h, r.Output)

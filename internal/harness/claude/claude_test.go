@@ -176,3 +176,10 @@ func TestImplementScriptCarriesALargePrompt(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, strings.TrimSpace(string(got)), "307200")
 }
+
+func TestParseAnswerSaysWhenAStreamHasNoResultEvent(t *testing.T) {
+	stream := `{"type":"system","subtype":"init"}` + "\n" + `{"type":"assistant","message":{}}` + "\n"
+	_, err := Harness{}.ParseAnswer(stream)
+	assert.ErrorContains(t, err, "no result event in ")
+	assert.ErrorContains(t, err, "bytes of stream output")
+}
