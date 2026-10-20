@@ -529,6 +529,7 @@ smelt
   `GOCACHE`, `GOMODCACHE`, `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at `/tmp/smelt-cache-<uid>` in the
   container for that member's commands, so the run goes on, with a cold cache. The CircleCI backend is
   unaffected.
+- `factory status --json` lists the implementer's tool calls as `factory.activity`: `{round, tool, detail, outcome, exit_code, error}`, newest last, the latest 500. `outcome` is `ok`, `failed` or `""` when the agent does not say; `exit_code` and `error` (the first line of the output, up to 200 characters) are set for failed calls where the agent reports them (claude and codex).
 - **Where the time went.** At the end of a run `factory build` prints, the run log records and
   `factory status --json` carries (as `factory.timing`, in milliseconds, with the `line`) one line:
   `Time: plan 1m02s · implement 3m40s (commands 1m10s) · gates 0m52s · reviews 0m21s · notes 0m15s · total 6m10s`.

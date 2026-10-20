@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_01S6u94TX4GX5pnLRz2AdNUS","name":"Bash","input":{"command":"ls /nonexistent-dir-xyz","description":"List a nonexistent directory"},"caller":{"type":"direct"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 1\nls: /nonexistent-dir-xyz: No such file or directory","is_error":true,"tool_use_id":"toolu_01S6u94TX4GX5pnLRz2AdNUS"}]}}
+{"type":"assistant","message":{"id":"msg_2","content":[{"type":"tool_use","id":"toolu_01HcXHmkryYTQo3zgQ1dNvQi","name":"Bash","input":{"command":"echo recovered","description":"Print recovered"},"caller":{"type":"direct"}}]}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01HcXHmkryYTQo3zgQ1dNvQi","type":"tool_result","content":"recovered","is_error":false}]}}

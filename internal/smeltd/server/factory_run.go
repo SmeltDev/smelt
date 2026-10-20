@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -295,6 +296,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	}
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
+	opts.OnActivity = rec.activity
 	opts.OnPack = rec.setPack
 	opts.OnReviewProgress = rec.reviewProgress
 	opts.OnCheck = rec.checked
@@ -397,6 +399,9 @@ type factoryRecorder struct {
 	// attribute reads cur through the entry's lock.
 	rounds map[int]int
 	cur    int
+	// activityRound is the factory round the implementer is in; guarded by the
+	// entry's lock, as activity runs on the exec goroutine.
+	activityRound int
 
 	// harness is the agent the run uses.
 	harness harness.Name
@@ -426,6 +431,34 @@ func (r *factoryRecorder) progress(level iostream.Level, msg string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	addFeedLine(&e.s.Factory.Progress, level, msg)
+}
+
+// activity records an implementer tool call, or sets the outcome of the call
+// with the same ID when it is an Update. It runs on
+// the exec goroutine.
+func (r *factoryRecorder) activity(a harness.Activity) {
+	if a.Tool == "" || a.Tool == harness.ReasoningTool {
+		return
+	}
+	e := r.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	f := e.s.Factory
+	rec := smeltd.ToolActivity{Round: r.activityRound, ID: a.ID, Tool: a.Tool, Detail: a.Detail,
+		Outcome: string(a.Outcome), ExitCode: a.ExitCode, Error: a.Error}
+	if a.Update {
+		for i := len(f.Activity) - 1; i >= 0; i-- {
+			if got := f.Activity[i]; got.ID != "" && got.ID == rec.ID {
+				f.Activity[i] = rec
+				return
+			}
+		}
+		return
+	}
+	f.Activity = append(f.Activity, rec)
+	if over := len(f.Activity) - smeltd.MaxToolActivity; over > 0 {
+		f.Activity = slices.Delete(f.Activity, 0, over)
+	}
 }
 
 // round returns the record's index for a factory round, beginning it if it
@@ -465,6 +498,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		// Recorded above.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
+		r.activityRound = ev.Round
 		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning, Fix: r.integrate}
 	case factory.EventImplemented:
 		if impl := round.Implement; impl != nil {
