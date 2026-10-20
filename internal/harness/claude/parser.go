@@ -3,6 +3,8 @@ package claude
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,10 +27,14 @@ type streamEvent struct {
 			CacheReadTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
+			Type      string          `json:"type"`
+			Text      string          `json:"text"`
+			Name      string          `json:"name"`
+			Input     json.RawMessage `json:"input"`
+			ID        string          `json:"id"`
+			ToolUseID string          `json:"tool_use_id"`
+			IsError   bool            `json:"is_error"`
+			Content   json.RawMessage `json:"content"`
 		} `json:"content"`
 	} `json:"message"`
 	IsError      bool    `json:"is_error"`
@@ -69,6 +75,10 @@ type parser struct {
 	peak, calls int
 	compactions int
 	seenMsgs    map[string]bool
+	// called are the IDs of the tool calls reported, and early the results that
+	// arrived before their call.
+	called map[string]bool
+	early  map[string]harness.Activity
 }
 
 // NewImplementParser implements harness.Harness.
@@ -98,6 +108,8 @@ func (p *parser) line(b []byte) {
 	case "assistant":
 		p.context(e)
 		p.activity(e)
+	case "user":
+		p.results(e)
 	}
 }
 
@@ -172,9 +184,87 @@ func (p *parser) activity(e streamEvent) {
 				p.onActivity(harness.Activity{Detail: t})
 			}
 		case "tool_use":
-			p.onActivity(harness.Activity{Tool: c.Name, Detail: toolDetail(c.Input)})
+			p.toolUse(c.ID, c.Name, toolDetail(c.Input))
 		}
 	}
+}
+
+// toolUse reports a call, with its result if that came first.
+func (p *parser) toolUse(id, name, detail string) {
+	a := harness.Activity{Tool: name, Detail: detail, ID: id}
+	if early, ok := p.early[id]; ok && id != "" {
+		delete(p.early, id)
+		a.Outcome, a.ExitCode, a.Error = early.Outcome, early.ExitCode, early.Error
+	} else if id != "" {
+		if p.called == nil {
+			p.called = map[string]bool{}
+		}
+		p.called[id] = true
+	}
+	p.onActivity(a)
+}
+
+// results reports how the calls in a user event ended, matched by tool_use_id.
+// A result whose call has not been seen is kept until it is.
+func (p *parser) results(e streamEvent) {
+	if p.onActivity == nil {
+		return
+	}
+	for _, c := range e.Message.Content {
+		if c.Type != "tool_result" || c.ToolUseID == "" {
+			continue
+		}
+		a := toolResult(c.ToolUseID, c.IsError, resultText(c.Content))
+		if p.called[c.ToolUseID] {
+			delete(p.called, c.ToolUseID)
+			p.onActivity(a)
+			continue
+		}
+		if p.early == nil {
+			p.early = map[string]harness.Activity{}
+		}
+		p.early[c.ToolUseID] = a
+	}
+}
+
+// exitCodeRe finds the exit code claude prints first in a failed Bash result.
+var exitCodeRe = regexp.MustCompile(`^Exit code (\d+)`)
+
+// toolResult builds the Update for a call's result.
+func toolResult(id string, isError bool, text string) harness.Activity {
+	a := harness.Activity{ID: id, Update: true, Outcome: harness.CallOK}
+	if !isError {
+		return a
+	}
+	a.Outcome = harness.CallFailed
+	text = strings.TrimSpace(text)
+	if m := exitCodeRe.FindStringSubmatch(text); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			a.ExitCode = &n
+		}
+		_, text, _ = strings.Cut(text, "\n")
+	}
+	a.Error = harness.FirstLine(text)
+	return a
+}
+
+// resultText reads a tool_result's content, a string or a list of text blocks.
+func resultText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		parts = append(parts, b.Text)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Outcome implements harness.StreamParser.

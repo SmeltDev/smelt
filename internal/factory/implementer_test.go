@@ -15,6 +15,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -297,4 +298,34 @@ func TestLongestGate(t *testing.T) {
 	assert.Equal(t, longestGate(nil), time.Duration(0))
 	got := longestGate([]config.Command{{Timeout: 30}, {Timeout: 400}, {}})
 	assert.Equal(t, got, 400*time.Second)
+}
+
+const streamWithResult = `printf '%s\n' \
+ '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls /x"}}]}}' \
+ '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Exit code 1\nls: /x: No such file or directory"}]}}' \
+ '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`
+
+// A result arriving after its call reaches the callback as the call itself
+// with its outcome, and is one entry in the turn, not two.
+func TestImplementerMergesAResultIntoItsCall(t *testing.T) {
+	im, _, acts := newImplementer(t, streamWithResult)
+
+	turn, err := im.Run(context.Background(), "p")
+	assert.NilError(t, err)
+	one := 1
+	call := Activity{Tool: "Bash", Detail: "ls /x", ID: "t1"}
+	merged := call
+	merged.Update, merged.Outcome, merged.ExitCode, merged.Error = true, harness.CallFailed, &one, "ls: /x: No such file or directory"
+	assert.DeepEqual(t, *acts, []Activity{call, merged})
+
+	assert.Equal(t, len(turn.Activity), 1)
+	assert.Equal(t, turn.Activity[0].Outcome, harness.CallFailed)
+	assert.Equal(t, len(turn.Calls), 1)
+}
+
+func TestMergeResultDropsAnUnknownID(t *testing.T) {
+	acts := []Activity{{Tool: "Bash", Detail: "a", ID: "t1"}}
+	_, ok := mergeResult(acts, Activity{ID: "other", Update: true, Outcome: harness.CallOK})
+	assert.Assert(t, !ok)
+	assert.Equal(t, acts[0].Outcome, harness.CallOutcome(""))
 }

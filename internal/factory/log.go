@@ -216,7 +216,27 @@ func (l *runLog) activity(a Activity) {
 		l.block("implementer", a.Detail)
 		return
 	}
-	l.line("info", fmt.Sprintf("implementer: %s %s", a.Tool, oneLine(a.Detail)))
+	l.line("info", fmt.Sprintf("implementer: %s %s%s", a.Tool, oneLine(a.Detail), outcomeSuffix(a)))
+}
+
+// outcomeSuffix is how a call ended, for the end of its progress line: " ✓",
+// or " ✗ exit 1: the error", and "" while the outcome is not known. An Update
+// has no tool or detail of its own, so it only prints what it adds.
+func outcomeSuffix(a Activity) string {
+	switch a.Outcome {
+	case harness.CallOK:
+		return " ✓"
+	case harness.CallFailed:
+		s := " ✗"
+		if a.ExitCode != nil {
+			s += fmt.Sprintf(" exit %d", *a.ExitCode)
+		}
+		if a.Error != "" {
+			s += ": " + oneLine(a.Error)
+		}
+		return s
+	}
+	return ""
 }
 
 func (l *runLog) reviewProgress(e review.ProgressEvent) {

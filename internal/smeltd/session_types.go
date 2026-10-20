@@ -242,6 +242,23 @@ type QualityFunction struct {
 	Lines    int    `json:"lines"`
 }
 
+// MaxToolActivity is how many tool calls FactoryRun.Activity keeps.
+const MaxToolActivity = 500
+
+// ToolActivity is one tool call of the implementer.
+type ToolActivity struct {
+	// Round is the factory round (from 1) the call was made in.
+	Round int `json:"round"`
+	// ID pairs an update with its call; it is not part of the record.
+	ID     string `json:"-"`
+	Tool   string `json:"tool"`
+	Detail string `json:"detail"`
+	// Outcome is "ok" or "failed", "" when the agent does not say.
+	Outcome  string `json:"outcome"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 // FactoryRun is what a factory session works on and where its work is.
 type FactoryRun struct {
 	HarnessSwaps []HarnessSwap `json:"harness_swaps,omitempty"`
@@ -331,6 +348,9 @@ type FactoryRun struct {
 	KeptSidecars []string `json:"kept_sidecars,omitempty"`
 	// Log is the path of the run's log, once the run has ended, if it kept one.
 	Log string `json:"log,omitempty"`
+	// Activity is the implementer's tool calls with how each ended, newest
+	// last, capped at the latest MaxToolActivity.
+	Activity []ToolActivity `json:"activity,omitempty"`
 	// Progress is what the run said as it went: its sidecars being made
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`

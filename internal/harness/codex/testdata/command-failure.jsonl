@@ -1,0 +1,2 @@
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'ls /nonexistent-dir-xyz'","aggregated_output":"ls: /nonexistent-dir-xyz: No such file or directory\n","exit_code":1,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'echo recovered'","aggregated_output":"recovered\n","exit_code":0,"status":"completed"}}

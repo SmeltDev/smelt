@@ -190,6 +190,47 @@ type Activity struct {
 	Tool string
 	// Detail is the tool's target (a file, a command) or the text.
 	Detail string
+	// ID names the tool call, for a harness that reports its result apart from
+	// the call; "" when it does not.
+	ID string
+	// Outcome is how the call ended: "" while it runs or when the harness does
+	// not say.
+	Outcome CallOutcome
+	// ExitCode is the call's exit code, when the harness reports one.
+	ExitCode *int
+	// Error is the first non-empty line of a failed call's output, capped at
+	// MaxErrorRunes.
+	Error string
+	// Update marks an Activity that reports the result of an earlier call with
+	// the same ID, rather than a new call.
+	Update bool
+}
+
+// CallOutcome is how a tool call ended.
+type CallOutcome string
+
+// The ways a tool call can end.
+const (
+	CallOK     CallOutcome = "ok"
+	CallFailed CallOutcome = "failed"
+)
+
+// MaxErrorRunes caps Activity.Error.
+const MaxErrorRunes = 200
+
+// FirstLine is the first non-empty line of s, capped at MaxErrorRunes.
+func FirstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if r := []rune(line); len(r) > MaxErrorRunes {
+			return string(r[:MaxErrorRunes])
+		}
+		return line
+	}
+	return ""
 }
 
 // ReasoningTool is the Tool of an Activity that is a harness's own reasoning

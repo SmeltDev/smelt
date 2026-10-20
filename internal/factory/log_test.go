@@ -287,3 +287,19 @@ func TestLogRecordsEachTurnsContext(t *testing.T) {
 		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
 	}
 }
+
+func TestLogShowsHowToolCallsEnded(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	one := 1
+	lg.activity(Activity{Tool: "Bash", Detail: "ls /x", Outcome: harness.CallFailed, ExitCode: &one, Error: "ls: /x: No such file or directory"})
+	lg.activity(Activity{Tool: "Bash", Detail: "echo hi", Outcome: harness.CallOK})
+	lg.activity(Activity{Tool: "Read", Detail: "a.go"})
+	lg.close(Report{}, nil)
+	assert.Equal(t, readLog(t, path), strings.Join([]string{
+		"2026-10-02T15:04:05Z info  implementer: Bash ls /x ✗ exit 1: ls: /x: No such file or directory",
+		"2026-10-02T15:04:05Z info  implementer: Bash echo hi ✓",
+		"2026-10-02T15:04:05Z info  implementer: Read a.go",
+		"2026-10-02T15:04:05Z end   run finished",
+		"",
+	}, "\n"))
+}

@@ -213,7 +213,14 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	var acts []Activity
 	var seen []time.Time
 	parser := h.NewImplementParser(func(a Activity) {
-		acts, seen = append(acts, a), append(seen, time.Now())
+		if a.Update {
+			var ok bool
+			if a, ok = mergeResult(acts, a); !ok {
+				return
+			}
+		} else {
+			acts, seen = append(acts, a), append(seen, time.Now())
+		}
 		if im.OnActivity != nil {
 			im.OnActivity(a)
 		}
@@ -279,6 +286,21 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 		return turn, harness.Classified(harness.Unavailable, errors.New("implementer ended without a result"), nil)
 	}
 	return turn, nil
+}
+
+// mergeResult records an Update's result on the earlier activity with its ID,
+// so a call is one entry however late its result came. It returns that entry,
+// as an Update, and false when no earlier activity has the ID.
+func mergeResult(acts []Activity, u Activity) (Activity, bool) {
+	for i := len(acts) - 1; i >= 0; i-- {
+		if acts[i].ID == u.ID {
+			acts[i].Outcome, acts[i].ExitCode, acts[i].Error = u.Outcome, u.ExitCode, u.Error
+			merged := acts[i]
+			merged.Update = true
+			return merged, true
+		}
+	}
+	return Activity{}, false
 }
 
 // FreshSession makes the next turn start a new agent session.

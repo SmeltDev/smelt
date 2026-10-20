@@ -330,7 +330,8 @@ func TestReviewScriptStreamNeedsNothingExtra(t *testing.T) {
 	var seen []harness.Activity
 	p := Harness{}.NewImplementParser(func(a harness.Activity) { seen = append(seen, a) })
 	p.Write([]byte(`{"type":"item.completed","item":{"type":"command_execution","command":"git log","exit_code":0}}` + "\n"))
-	assert.DeepEqual(t, seen, []harness.Activity{{Tool: "Bash", Detail: "git log"}})
+	zero := 0
+	assert.DeepEqual(t, seen, []harness.Activity{{Tool: "Bash", Detail: "git log", ExitCode: &zero, Outcome: harness.CallOK}})
 }
 
 // TestContextIsNotAvailable pins that Codex reports only a turn's total usage,
@@ -439,4 +440,17 @@ func TestImplementScriptCarriesALargePrompt(t *testing.T) {
 	got, err := os.ReadFile(counted)
 	assert.NilError(t, err)
 	assert.Equal(t, strings.TrimSpace(string(got)), "307200")
+}
+
+func TestParserReportsCommandOutcomes(t *testing.T) {
+	b, err := os.ReadFile("testdata/command-failure.jsonl")
+	assert.NilError(t, err)
+	var acts []harness.Activity
+	p := Harness{}.NewImplementParser(func(a harness.Activity) { acts = append(acts, a) })
+	p.Write(b)
+	one, zero := 1, 0
+	assert.DeepEqual(t, acts, []harness.Activity{
+		{Tool: "Bash", Detail: "/bin/zsh -lc 'ls /nonexistent-dir-xyz'", Outcome: harness.CallFailed, ExitCode: &one, Error: "ls: /nonexistent-dir-xyz: No such file or directory"},
+		{Tool: "Bash", Detail: "/bin/zsh -lc 'echo recovered'", Outcome: harness.CallOK, ExitCode: &zero},
+	})
 }

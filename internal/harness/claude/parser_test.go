@@ -136,3 +136,43 @@ func TestUnifiedWindowsPreserveFractionAndReset(t *testing.T) {
 	assert.Assert(t, rl.Windows["7d"].ResetsAt.Equal(time.Unix(1792432800, 0)))
 	assert.Assert(t, p.Outcome().Err == nil)
 }
+
+func TestParserPairsToolResultsWithTheirCalls(t *testing.T) {
+	b, err := os.ReadFile("testdata/tool-failure-stream.jsonl")
+	assert.NilError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	one := 1
+	failed := harness.Activity{ID: "toolu_01S6u94TX4GX5pnLRz2AdNUS", Update: true, Outcome: harness.CallFailed, ExitCode: &one, Error: "ls: /nonexistent-dir-xyz: No such file or directory"}
+	ok := harness.Activity{ID: "toolu_01HcXHmkryYTQo3zgQ1dNvQi", Update: true, Outcome: harness.CallOK}
+	first := harness.Activity{Tool: "Bash", Detail: "ls /nonexistent-dir-xyz", ID: failed.ID}
+	second := harness.Activity{Tool: "Bash", Detail: "echo recovered", ID: ok.ID}
+
+	tests := map[string]struct {
+		order []int
+		want  []harness.Activity
+	}{
+		"result after its call": {[]int{0, 1, 2, 3}, []harness.Activity{first, failed, second, ok}},
+		"result before its call": {[]int{1, 0, 3, 2}, []harness.Activity{
+			{Tool: "Bash", Detail: "ls /nonexistent-dir-xyz", ID: failed.ID, Outcome: harness.CallFailed, ExitCode: &one, Error: failed.Error},
+			{Tool: "Bash", Detail: "echo recovered", ID: ok.ID, Outcome: harness.CallOK},
+		}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var acts []harness.Activity
+			p := Harness{}.NewImplementParser(func(a harness.Activity) { acts = append(acts, a) })
+			for _, i := range tt.order {
+				p.Write([]byte(lines[i] + "\n"))
+			}
+			assert.DeepEqual(t, acts, tt.want)
+		})
+	}
+}
+
+func TestToolResultReadsBlocksAndCapsTheError(t *testing.T) {
+	text := resultText([]byte(`[{"type":"text","text":"\n  "},{"type":"text","text":"` + strings.Repeat("é", 300) + `"}]`))
+	a := toolResult("id", true, text)
+	assert.Equal(t, a.Outcome, harness.CallFailed)
+	assert.Assert(t, a.ExitCode == nil)
+	assert.Equal(t, len([]rune(a.Error)), harness.MaxErrorRunes)
+}

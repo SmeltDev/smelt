@@ -892,3 +892,60 @@ func TestFactoryRecorderRecordsRatchetCounts(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"ratchet":{"new":1,"fixed":2,"existing":3}`), string(b))
 }
+
+// The implementer's tool calls reach the status JSON under factory.activity,
+// per round, with a result that arrives later set on its call.
+func TestFactoryRecorderRecordsToolActivityInStatusJSON(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.NilError(t, busy)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	one := 1
+
+	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 1})
+	rec.activity(harness.Activity{Tool: "Bash", Detail: "ls /x", ID: "t1"})
+	rec.activity(harness.Activity{Detail: "thinking out loud"})
+	rec.activity(harness.Activity{Tool: "Bash", Detail: "ls /x", ID: "t1", Update: true, Outcome: harness.CallFailed, ExitCode: &one, Error: "no such file"})
+	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 2})
+	rec.activity(harness.Activity{Tool: "Bash", Detail: "echo hi", Outcome: harness.CallOK})
+
+	b, err := json.Marshal(entry.detail())
+	assert.NilError(t, err)
+	var got struct {
+		Factory struct {
+			Activity json.RawMessage `json:"activity"`
+		} `json:"factory"`
+	}
+	assert.NilError(t, json.Unmarshal(b, &got))
+	assert.Equal(t, string(got.Factory.Activity), `[`+
+		`{"round":1,"tool":"Bash","detail":"ls /x","outcome":"failed","exit_code":1,"error":"no such file"},`+
+		`{"round":2,"tool":"Bash","detail":"echo hi","outcome":"ok"}]`)
+}
+
+func TestFactoryRecorderKeepsTheLatestToolActivity(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.NilError(t, busy)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	for i := range smeltd.MaxToolActivity + 5 {
+		rec.activity(harness.Activity{Tool: "Bash", Detail: fmt.Sprint(i)})
+	}
+	got := entry.snapshot().Factory.Activity
+	assert.Equal(t, len(got), smeltd.MaxToolActivity)
+	assert.Equal(t, got[0].Detail, "5")
+	assert.Equal(t, got[len(got)-1].Detail, fmt.Sprint(smeltd.MaxToolActivity+4))
+}
+
+// The daemon hands the recorder to the run as its activity hook, which is how
+// a real run's tool calls reach the status.
+func TestFactorySessionRecordsTheImplementersToolCalls(t *testing.T) {
+	d, root := newFactoryDaemon(t, func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1})
+		opts.OnActivity(harness.Activity{Tool: "Bash", Detail: "ls /x", Outcome: harness.CallOK})
+		return factory.Report{}, nil
+	})
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	assert.DeepEqual(t, detail.Factory.Activity, []smeltd.ToolActivity{{Round: 1, Tool: "Bash", Detail: "ls /x", Outcome: "ok"}})
+}

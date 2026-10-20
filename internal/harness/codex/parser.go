@@ -21,6 +21,7 @@ type event struct {
 		Command string `json:"command"`
 		Output  string `json:"aggregated_output"`
 		Exit    *int   `json:"exit_code"`
+		Status  string `json:"status"`
 		Message string `json:"message"`
 		Changes []struct {
 			Path string `json:"path"`
@@ -94,7 +95,12 @@ func (p *parser) item(e event) {
 		p.turn.Summary = t
 		p.activity(harness.Activity{Detail: t})
 	case "command_execution":
-		p.activity(harness.Activity{Tool: "Bash", Detail: e.Item.Command})
+		a := harness.Activity{Tool: "Bash", Detail: e.Item.Command, ExitCode: e.Item.Exit}
+		a.Outcome = commandOutcome(e.Item.Status, e.Item.Exit)
+		if a.Outcome == harness.CallFailed {
+			a.Error = harness.FirstLine(e.Item.Output)
+		}
+		p.activity(a)
 	case "file_change":
 		paths := make([]string, 0, len(e.Item.Changes))
 		for _, c := range e.Item.Changes {
@@ -104,6 +110,21 @@ func (p *parser) item(e event) {
 	case "reasoning":
 		p.activity(harness.Activity{Tool: harness.ReasoningTool, Detail: strings.TrimSpace(e.Item.Text)})
 	}
+}
+
+// commandOutcome maps a command's status, or failing that its exit code.
+func commandOutcome(status string, exit *int) harness.CallOutcome {
+	switch {
+	case status == "failed":
+		return harness.CallFailed
+	case status == "completed":
+		return harness.CallOK
+	case exit == nil:
+		return ""
+	case *exit != 0:
+		return harness.CallFailed
+	}
+	return harness.CallOK
 }
 
 // hostMissingRe finds Codex saying it cannot start the program it runs every

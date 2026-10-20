@@ -70,6 +70,7 @@ func cloneSession(s smeltd.Session) smeltd.Session {
 		f.Turns = slices.Clone(s.Factory.Turns)
 		f.SidecarIDs = slices.Clone(s.Factory.SidecarIDs)
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
+		f.Activity = slices.Clone(s.Factory.Activity)
 		f.Progress = cloneFeed(s.Factory.Progress)
 		out.Factory = &f
 	}
