@@ -395,7 +395,7 @@ func TestRunDoesNotCommitDeletionsOfTheBasesFiles(t *testing.T) {
 		},
 	})
 	assert.NilError(t, err)
-	assert.Equal(t, rep.Outcome.Result, ResultExhausted)
+	assert.Equal(t, rep.Outcome.Result, ResultStuck, "the fake implementer repeats the same deletion")
 	assert.Assert(t, failedGate(rep.Outcome.Checks, DeletionsGateName), "%+v", rep.Outcome.Checks)
 	var listed string
 	for _, c := range rep.Outcome.Checks {

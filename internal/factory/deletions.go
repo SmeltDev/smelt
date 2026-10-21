@@ -19,7 +19,7 @@ const DeletionsGateName = "deletions"
 // through.
 func DeletionsGate(request string, from UpdatedFrom) config.Command {
 	script := fmt.Sprintf(`request=%s
-gone=$(git diff --name-only --diff-filter=D HEAD | while IFS= read -r path; do
+gone=$(git diff --no-renames --name-only --diff-filter=D HEAD | while IFS= read -r path; do
   case "$request" in *"$(basename -- "$path")"*) ;; *) printf '%%s\n' "$path" ;; esac
 done)
 if [ -n "$gone" ]; then
