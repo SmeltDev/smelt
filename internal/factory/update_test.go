@@ -311,3 +311,29 @@ func TestLoadChecksAddsTheMarkersGate(t *testing.T) {
 	_, _, err = LoadChecks(t.TempDir(), true, &config.ProjectConfig{}, false)
 	assert.ErrorIs(t, err, ErrNothingToCheck, "the gate alone is not something to check with")
 }
+
+// sidecars tells the reviewers about an update only for a continuation of an
+// updated run.
+func TestSidecarsCarryTheUpdateNoteOnlyWhenUpdated(t *testing.T) {
+	u := &UpdatedFrom{Branch: "main", Commit: "0123456789abcdef"}
+	tests := []struct {
+		name string
+		opts RunOptions
+		want string
+	}{
+		{"updated", RunOptions{Continue: &Continuation{From: Record{UpdatedFrom: u}}}, "updated from main at 0123456789ab"},
+		{"not updated", RunOptions{Continue: &Continuation{From: Record{}}}, ""},
+		{"not a continuation", RunOptions{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := tt.opts.sidecars("req")
+			assert.Equal(t, s.Request, "req")
+			if tt.want == "" {
+				assert.Equal(t, s.UpdateNote, "")
+				return
+			}
+			assert.Assert(t, strings.Contains(s.UpdateNote, tt.want), s.UpdateNote)
+		})
+	}
+}

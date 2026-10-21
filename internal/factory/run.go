@@ -351,42 +351,33 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		status(iostream.LevelInfo, "implementer started (reviewers still starting)")
 	}
 
-	updateNote := opts.guardUpdate(request)
 	exec := opts.Exec
 	if exec == nil {
 		exec = review.ClientExec
 	}
-	steps := &Sidecars{
-		Exec: exec,
-		Implementer: &Implementer{
-			Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
-			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions, ContextWindow: opts.ContextWindow,
-			OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
-		},
-		Acquire:       pool.Acquire,
-		Release:       pool.Release,
-		WaitReviewers: reviewersOf(pool, impl),
-		Relay:         NewRelay(backend, wt.Path, status),
-		Request:       request,
-		UpdateNote:    updateNote,
-		Scout:         ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}},
-		Prompts:       opts.Prompts,
-		Review: review.Options{
-			Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
-			StructuredFindings: true,
-			ProgressFn:         opts.OnReviewProgress,
-		},
-		Commands:        opts.Commands,
-		GatesFirst:      opts.GatesFirst,
-		FocusedRechecks: opts.FocusedRechecks,
-		Integrate:       integ != nil,
-		Quality:         opts.qualityCheck(exec, impl, status),
-		Status:          status,
-		OnCheck:         opts.OnCheck,
-		Install:         opts.Install,
-		OnInstallOutput: func(id, line string) {
-			status(iostream.LevelInfo, "install "+id+": "+line)
-		},
+	steps := opts.sidecars(request)
+	steps.Exec = exec
+	steps.Implementer = &Implementer{
+		Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
+		Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions, ContextWindow: opts.ContextWindow,
+		OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
+	}
+	steps.Acquire, steps.Release = pool.Acquire, pool.Release
+	steps.WaitReviewers = reviewersOf(pool, impl)
+	steps.Relay = NewRelay(backend, wt.Path, status)
+	steps.Scout = ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}}
+	steps.Review = review.Options{
+		Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
+		StructuredFindings: true,
+		ProgressFn:         opts.OnReviewProgress,
+	}
+	steps.Integrate = integ != nil
+	steps.Quality = opts.qualityCheck(exec, impl, status)
+	steps.Status = status
+	steps.OnCheck = opts.OnCheck
+	steps.Install = opts.Install
+	steps.OnInstallOutput = func(id, line string) {
+		status(iostream.LevelInfo, "install "+id+": "+line)
 	}
 	if opts.Verbose {
 		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }
@@ -772,6 +763,21 @@ func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string
 		loop.Attempts, loop.CheckFirst, prompt = IntegrateAttempts, true, integrateFixLead
 	}
 	return loop, prompt
+}
+
+// sidecars returns the steps with what the request and the continuation
+// decide: the request, the update note for an updated continuation, and the
+// checks. Run fills in the rest, which needs the pool.
+func (o *RunOptions) sidecars(request string) *Sidecars {
+	updateNote := o.guardUpdate(request)
+	return &Sidecars{
+		Request:         request,
+		UpdateNote:      updateNote,
+		Prompts:         o.Prompts,
+		Commands:        o.Commands,
+		GatesFirst:      o.GatesFirst,
+		FocusedRechecks: o.FocusedRechecks,
+	}
 }
 
 // guardUpdate adds the deletions gate to the commands of a continuation of an
