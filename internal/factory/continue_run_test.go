@@ -373,6 +373,8 @@ func TestRunDoesNotCommitDeletionsOfTheBasesFiles(t *testing.T) {
 	saved, err := LoadRecord(root, rec.RunID)
 	assert.NilError(t, err)
 	saved.Result = ResultExhausted
+	// The update is done; the sidecar pool needs a GitHub remote to detect the repo.
+	gitOutput(t, root, "remote", "set-url", "origin", "https://github.com/o/r.git")
 	before := gitOutput(t, root, "rev-parse", saved.Branch)
 
 	home := t.TempDir()
