@@ -27,7 +27,7 @@ const gatesHeading = "## Gates"
 func gateCommands(cmds []config.Command) []config.Command {
 	var out []config.Command
 	for _, c := range cmds {
-		if c.Role == config.RoleGate && c.Name != MarkersGate.Name {
+		if c.Role == config.RoleGate && c.Name != MarkersGate.Name && c.Name != DeletionsGateName {
 			out = append(out, c)
 		}
 	}

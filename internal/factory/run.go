@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -350,6 +351,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		status(iostream.LevelInfo, "implementer started (reviewers still starting)")
 	}
 
+	updateNote := opts.guardUpdate(request)
 	exec := opts.Exec
 	if exec == nil {
 		exec = review.ClientExec
@@ -366,6 +368,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		WaitReviewers: reviewersOf(pool, impl),
 		Relay:         NewRelay(backend, wt.Path, status),
 		Request:       request,
+		UpdateNote:    updateNote,
 		Scout:         ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}},
 		Prompts:       opts.Prompts,
 		Review: review.Options{
@@ -459,6 +462,10 @@ func keepSummary(last *string, next func(Event)) func(Event) {
 // from it; its message is rewritten once they are. It sets what the run left
 // behind in rep.
 func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report, in NotesInput, status iostream.StatusFunc) {
+	if failedGate(rep.Outcome.Checks, DeletionsGateName) {
+		status(iostream.LevelWarn, fmt.Sprintf("not committing: the %s check still fails, so the work deletes files of the base the branch was updated from; the work is left uncommitted in %s", DeletionsGateName, wt.Path))
+		return
+	}
 	rep.newCommit, rep.Committed = commitWork(ctx, steps, wt, Notes{Title: requestTitle(in.Request)}.CommitMessage(rep.RunID, rep.Outcome, ""), status)
 	if !rep.Committed {
 		return
@@ -765,6 +772,19 @@ func (o *RunOptions) newLoop(steps *Sidecars, onEvent func(Event)) (Loop, string
 		loop.Attempts, loop.CheckFirst, prompt = IntegrateAttempts, true, integrateFixLead
 	}
 	return loop, prompt
+}
+
+// guardUpdate adds the deletions gate to the commands of a continuation of an
+// updated run, and returns the note telling the reviewers about the update; a
+// run that was not updated gets neither.
+func (o *RunOptions) guardUpdate(request string) string {
+	if o.Continue == nil || o.Continue.From.UpdatedFrom == nil {
+		return ""
+	}
+	u := *o.Continue.From.UpdatedFrom
+	// A copy, so the caller's commands are not extended.
+	o.Commands = append(slices.Clone(o.Commands), DeletionsGate(request, u))
+	return u.Note()
 }
 
 // markRecord records what kind of run this is: whose request it continues, or

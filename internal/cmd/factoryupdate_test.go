@@ -62,6 +62,30 @@ func TestUpdateRunCleanJSONAndPush(t *testing.T) {
 	assert.Assert(t, pushed(t, origin, rec.Branch))
 }
 
+func TestUpdateRunMovesTheBaselineIntoTheStatus(t *testing.T) {
+	root, _, rec := updateProject(t, false)
+	var out, errOut bytes.Buffer
+	assert.NilError(t, updateRun(t.Context(), iostream.Streams{Out: &out, Err: &errOut}, root, rec, updateFlags{}))
+
+	saved, err := factory.LoadRecord(root, rec.RunID)
+	assert.NilError(t, err)
+	tip := runGit(t, root, "rev-parse", "main")
+	assert.Equal(t, saved.Baseline, tip)
+	assert.Equal(t, saved.OriginalBaseline, rec.Baseline)
+	assert.DeepEqual(t, *saved.UpdatedFrom, factory.UpdatedFrom{Branch: "main", Commit: tip})
+	assert.Assert(t, strings.Contains(out.String(), "baseline is now"), out.String())
+
+	b, err := json.Marshal(saved)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"baseline":"`+tip+`"`), string(b))
+	assert.Assert(t, strings.Contains(string(b), `"updated_from":{"branch":"main","commit":"`+tip+`"}`), string(b))
+
+	saved.Result = factory.ResultPassed
+	run, err := publishableRun(saved)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, *run.UpdatedFrom, smeltd.UpdatedFrom{Branch: "main", Commit: tip})
+}
+
 func TestUpdateRunWithConflictsDoesNotPush(t *testing.T) {
 	root, origin, rec := updateProject(t, true)
 	var out, errOut bytes.Buffer

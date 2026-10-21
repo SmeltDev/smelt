@@ -358,3 +358,52 @@ fi
 		})
 	}
 }
+
+// A round of an updated run that deletes a file of the base it was updated
+// from, without the request naming it, fails the deletions gate, and the work
+// is not committed.
+func TestRunDoesNotCommitDeletionsOfTheBasesFiles(t *testing.T) {
+	skipWithoutTools(t)
+	t.Setenv(config.EnvHome, t.TempDir())
+	ctx := context.Background()
+	root, _, rec := updateProject(t)
+	landOnMain(t, root, "other.go", "package main\n")
+	_, err := UpdateBranch(ctx, root, rec, UpdateOptions{Author: runAuthor})
+	assert.NilError(t, err)
+	saved, err := LoadRecord(root, rec.RunID)
+	assert.NilError(t, err)
+	saved.Result = ResultExhausted
+	before := gitOutput(t, root, "rev-parse", saved.Branch)
+
+	home := t.TempDir()
+	installFakeClaude(t, home, "rm -f other.go\n"+streamOK)
+	backend := &localBackend{dir: t.TempDir()}
+	var warnings []string
+	rep, err := Run(ctx, RunOptions{
+		Root:       root,
+		Continue:   &Continuation{From: saved, Guidance: "tidy up"},
+		Attempts:   2,
+		Backend:    backend,
+		Exec:       backend.inWorkspace(withoutPkill(localExec(home))),
+		Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
+		Status: func(l iostream.Level, msg string) {
+			if l == iostream.LevelWarn {
+				warnings = append(warnings, msg)
+			}
+		},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, rep.Outcome.Result, ResultExhausted)
+	assert.Assert(t, failedGate(rep.Outcome.Checks, DeletionsGateName), "%+v", rep.Outcome.Checks)
+	var listed string
+	for _, c := range rep.Outcome.Checks {
+		if c.Name == DeletionsGateName {
+			listed = c.Output
+		}
+	}
+	assert.Assert(t, strings.Contains(listed, "other.go"), listed)
+	assert.Assert(t, !rep.Committed)
+	assert.Equal(t, gitOutput(t, root, "rev-parse", saved.Branch), before, "the branch did not move")
+	assert.Assert(t, strings.Contains(strings.Join(warnings, "\n"), "not committing"), "%v", warnings)
+	assert.Assert(t, strings.Contains(readFile(t, home, "stdin"), "updated from main at"), "the implementer is told")
+}

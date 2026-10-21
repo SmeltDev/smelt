@@ -34,6 +34,9 @@ type UpdateReport struct {
 	Result        UpdateResult `json:"result"`
 	MergedCommits int          `json:"merged_commits"`
 	Conflicts     []string     `json:"conflicts"`
+	// Baseline is the run's baseline after the update: the base's tip the
+	// branch now contains. It is "" when the update left it alone.
+	Baseline string `json:"baseline,omitempty"`
 }
 
 // UpdateOptions describes an update.
@@ -72,13 +75,15 @@ func UpdateBranch(ctx context.Context, root string, rec Record, o UpdateOptions)
 	}
 	if rep.MergedCommits == 0 {
 		rep.Result = UpdateUpToDate
-		return rep, nil
+		rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
+		return rep, err
 	}
 
 	out, mergeErr := git.CombinedOutput(ctx, "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "--no-verify", target)
 	if mergeErr == nil {
 		rep.Result = UpdateClean
-		return rep, nil
+		rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
+		return rep, err
 	}
 	conflicts, err := conflictedFiles(ctx, git)
 	if err != nil || len(conflicts) == 0 {
@@ -90,10 +95,34 @@ func UpdateBranch(ctx context.Context, root string, rec Record, o UpdateOptions)
 	}
 	rep.Result, rep.Conflicts = UpdateConflicts, conflicts
 	rec.Conflicts = conflicts
-	if err := recordConflicts(root, rec); err != nil {
-		return rep, err
+	rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
+	return rep, err
+}
+
+// moveBaseline records the merge base of the branch and target as the run's
+// baseline, so a continued run measures only its own work and not what the
+// base brought in, and saves rec. It returns the new baseline, "" when it is
+// the one rec already had (the branch was never behind a base that moved).
+func moveBaseline(ctx context.Context, git gitexec.Runner, root string, rec Record, base, target string) (string, error) {
+	out, err := git.Output(ctx, "merge-base", "HEAD", target)
+	if err != nil {
+		return "", fmt.Errorf("find the merge base of %s and %s: %w", rec.Branch, target, err)
 	}
-	return rep, nil
+	mergeBase := strings.TrimSpace(string(out))
+	// A base behind the baseline, such as one the run's unpushed start was ahead
+	// of, would move the baseline back and make that earlier work look new.
+	if mergeBase == rec.Baseline || git.Run(ctx, "merge-base", "--is-ancestor", rec.Baseline, mergeBase) != nil {
+		if len(rec.Conflicts) == 0 {
+			return "", nil
+		}
+		return "", saveUpdated(root, rec)
+	}
+	if rec.OriginalBaseline == "" {
+		rec.OriginalBaseline = rec.Baseline
+	}
+	rec.Baseline = mergeBase
+	rec.UpdatedFrom = &UpdatedFrom{Branch: base, Commit: mergeBase}
+	return mergeBase, saveUpdated(root, rec)
 }
 
 // checkUpdatable refuses a worktree the merge cannot safely run in: not on the
@@ -134,9 +163,9 @@ func commitConflicts(ctx context.Context, git gitexec.Runner, base, branch strin
 	return nil
 }
 
-// recordConflicts saves rec, whose Conflicts were just set, in the project's
-// data directory.
-func recordConflicts(root string, rec Record) error {
+// saveUpdated saves rec, which an update just changed, in the project's data
+// directory.
+func saveUpdated(root string, rec Record) error {
 	dataDir, err := config.ProjectDataDir(root)
 	if err != nil {
 		return fmt.Errorf("find smelt's data directory for the project: %w", err)

@@ -1241,6 +1241,18 @@ active.
   so `smelt factory build --continue <run-id> "Resolve the merge conflict markers in …"` works.
   That run's prompt names the files and asks for the markers to be removed; the record's
   `conflicts` are cleared when it ends.
+- **The baseline moves:** after a clean, conflicted or already-merged update the run's
+  `baseline` becomes the merge base of the branch and the base (the base's tip), so a
+  continuation's change, reviews, quality, ratchet and PR notes cover only the ticket's own
+  work. The record keeps `original_baseline` for history and `updated_from`
+  (`{"branch","commit"}`); `smelt factory status --json` reports `baseline` and
+  `updated_from`, and `update --json` the new `baseline`. The continuation's prompt and the
+  reviewers' request say "This branch was updated from main at <sha>; review only the
+  changes since then made for this ticket."
+- **The `deletions` check** runs in a continuation of an updated run: it fails while the
+  change deletes a file of the baseline whose base name the request (prompt plus guidance)
+  does not mention, and lists the files. A run whose last round still fails it is not
+  committed; its work stays uncommitted in the worktree.
 - **The `markers` check** runs in every factory run: it fails while any tracked file has a
   conflict marker line (`git grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)'`), so a
   half-resolved merge never passes.

@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,122 @@ func TestUpdateBranchRefusesADirtyWorktree(t *testing.T) {
 
 	_, err := UpdateBranch(context.Background(), root, rec, UpdateOptions{Author: runAuthor})
 	assert.ErrorContains(t, err, "uncommitted changes")
+}
+
+// After an update the run's baseline is the base's tip, so what the base
+// brought in is not part of the change a continuation measures.
+func TestUpdateBranchMovesTheBaselineToTheBase(t *testing.T) {
+	ctx := context.Background()
+	root, _, rec := updateProject(t)
+	landOnMain(t, root, "other.go", "package main\n")
+	tip := gitOutput(t, root, "rev-parse", "main")
+
+	rep, err := UpdateBranch(ctx, root, rec, UpdateOptions{Author: runAuthor})
+	assert.NilError(t, err)
+	assert.Equal(t, rep.Baseline, tip)
+	saved, err := LoadRecord(root, rec.RunID)
+	assert.NilError(t, err)
+	assert.Equal(t, saved.Baseline, tip)
+	assert.Equal(t, saved.OriginalBaseline, rec.Baseline)
+	assert.DeepEqual(t, *saved.UpdatedFrom, UpdatedFrom{Branch: "main", Commit: tip})
+
+	wt, err := openWorktree(ctx, root, saved, "run-2", runAuthor)
+	assert.NilError(t, err)
+	assert.Equal(t, wt.Baseline, tip)
+	assert.NilError(t, wt.showBaseline(ctx))
+	assert.Equal(t, readFile(t, wt.Path, "other.go"), "package main\n")
+	assert.NilError(t, wt.restoreWork(ctx))
+	assert.Equal(t, gitOutput(t, wt.Path, "diff", "--name-only", wt.Baseline, "HEAD"), "work.go", "only the ticket's own file")
+	stat, err := wt.DiffStat(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stat, "work.go") && !strings.Contains(stat, "other.go"), stat)
+}
+
+func TestUpdateBranchUpToDateKeepsTheBaseline(t *testing.T) {
+	root, _, rec := updateProject(t)
+	rep, err := UpdateBranch(context.Background(), root, rec, UpdateOptions{Author: runAuthor})
+	assert.NilError(t, err)
+	assert.Equal(t, rep.Baseline, "")
+	_, err = LoadRecord(root, rec.RunID)
+	assert.ErrorIs(t, err, ErrNoRecord, "nothing changed, so nothing was saved")
+}
+
+func TestUpdateBranchConflictsMoveTheBaselineToo(t *testing.T) {
+	root, _, rec := updateProject(t)
+	writeFile(t, rec.Worktree, "shared.go", "package main\n\nvar a = 2\n")
+	gitOutput(t, rec.Worktree, "commit", "-am", "change a on the branch")
+	landOnMain(t, root, "shared.go", "package main\n\nvar a = 3\n")
+	tip := gitOutput(t, root, "rev-parse", "main")
+
+	_, err := UpdateBranch(context.Background(), root, rec, UpdateOptions{Author: runAuthor})
+	assert.NilError(t, err)
+	saved, err := LoadRecord(root, rec.RunID)
+	assert.NilError(t, err)
+	assert.Equal(t, saved.Baseline, tip)
+	assert.DeepEqual(t, saved.Conflicts, []string{"shared.go"})
+}
+
+func TestUpdateNoteIsInThePromptAndTheReviewRequest(t *testing.T) {
+	u := &UpdatedFrom{Branch: "main", Commit: "0123456789abcdef"}
+	want := "This branch was updated from main at 0123456789ab; review only the changes since then made for this ticket."
+	c := &Continuation{From: Record{Prompt: "add work", UpdatedFrom: u}}
+	assert.Assert(t, strings.Contains(c.prompt(), want), c.prompt())
+	assert.Assert(t, !strings.Contains((&Continuation{From: Record{Prompt: "x"}}).prompt(), "updated from"))
+
+	s := &Sidecars{Request: "add work\n", UpdateNote: u.Note()}
+	assert.Equal(t, s.reviewRequest(), "add work\n\n"+want)
+	assert.Equal(t, (&Sidecars{Request: "add work"}).reviewRequest(), "add work")
+}
+
+// The deletions gate lists the baseline's files the change removes that the
+// request does not name.
+func TestDeletionsGateFailsOnUnmentionedDeletions(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+		remove  []string
+		want    string // "" passes; else a path the output lists
+		absent  string // a path the output must not list
+	}{
+		{"nothing deleted", "add work", nil, "", ""},
+		{"unmentioned file", "add work", []string{"pkg/notify.go"}, "pkg/notify.go", ""},
+		{"mentioned by base name", "remove notify.go, it is dead", []string{"pkg/notify.go"}, "", ""},
+		{"mentioned by path", "delete pkg/notify.go", []string{"pkg/notify.go"}, "", ""},
+		{"one of two mentioned", "drop old.go", []string{"old.go", "pkg/notify.go"}, "pkg/notify.go", "old.go"},
+		{"quotes in the request", "it's a \"test\" $(touch pwned)", []string{"keep.go"}, "keep.go", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			gitOutput(t, dir, "init", "--quiet")
+			for _, f := range []string{"old.go", "pkg/notify.go", "keep.go"} {
+				writeFile(t, dir, f, "package main\n")
+				gitOutput(t, dir, "add", f)
+			}
+			gitOutput(t, dir, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+			for _, f := range tt.remove {
+				assert.NilError(t, os.Remove(filepath.Join(dir, f)))
+			}
+			gate := DeletionsGate(tt.request, UpdatedFrom{Branch: "main", Commit: "0123456789abcdef"})
+			assert.Equal(t, gate.Name, DeletionsGateName)
+			cmd := exec.Command("sh", "-c", gate.Run)
+			cmd.Dir = dir
+			cmd.Env = gitrepo.GitEnv(dir)
+			out, err := cmd.CombinedOutput()
+			if tt.want == "" {
+				assert.NilError(t, err, string(out))
+				return
+			}
+			assert.Assert(t, err != nil, string(out))
+			assert.Assert(t, strings.Contains(string(out), tt.want), string(out))
+			assert.Assert(t, strings.Contains(string(out), "main at 0123456789ab"), string(out))
+			if tt.absent != "" {
+				assert.Assert(t, !strings.Contains(strings.SplitN(string(out), "\n", 2)[1], tt.absent), string(out))
+			}
+			_, statErr := os.Stat(filepath.Join(dir, "pwned"))
+			assert.Assert(t, os.IsNotExist(statErr), "the request was run as shell")
+		})
+	}
 }
 
 func TestMarkersGateFailsOnlyWhileMarkersRemain(t *testing.T) {
