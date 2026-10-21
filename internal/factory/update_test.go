@@ -177,6 +177,20 @@ func TestUpdateNoteIsInThePromptAndTheReviewRequest(t *testing.T) {
 	assert.Equal(t, (&Sidecars{Request: "add work"}).reviewRequest(), "add work")
 }
 
+// Run hands the reviewers the note guardUpdate returns, and only for an
+// updated run.
+func TestGuardUpdateReturnsTheNoteAndAddsTheGate(t *testing.T) {
+	u := &UpdatedFrom{Branch: "main", Commit: "0123456789abcdef"}
+	opts := RunOptions{Continue: &Continuation{From: Record{UpdatedFrom: u}}}
+	assert.Equal(t, opts.guardUpdate("req"), u.Note())
+	assert.Equal(t, len(opts.Commands), 1)
+	assert.Equal(t, opts.Commands[0].Name, DeletionsGateName)
+
+	plain := RunOptions{Continue: &Continuation{From: Record{}}}
+	assert.Equal(t, plain.guardUpdate("req"), "")
+	assert.Equal(t, len(plain.Commands), 0)
+}
+
 // The deletions gate lists the baseline's files the change removes that the
 // request does not name.
 func TestDeletionsGateFailsOnUnmentionedDeletions(t *testing.T) {
