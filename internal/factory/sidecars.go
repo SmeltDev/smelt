@@ -87,6 +87,9 @@ type Sidecars struct {
 	// or check needs them, so the implementer can start before they are ready.
 	WaitReviewers func(context.Context) ([]*sidecar.PoolEntry, error)
 	Relay         *Relay
+	// OperatorNotes, when set, is drained once per round into the round's
+	// implementer and review prompts.
+	OperatorNotes *NoteLog
 	// Request is the original change the implementer was asked to make. It is
 	// included in every review, including rounds where the implementer is sent
 	// only feedback from the preceding checks.
@@ -144,6 +147,11 @@ type Sidecars struct {
 	// setup and baseline. Loop.run calls Plan, ReviewPlan and Check one after
 	// the other, so it needs no lock.
 	reviewersReady bool
+	// notesMu guards the round's drained notes: notesRound is the round
+	// notesText was taken for.
+	notesMu    sync.Mutex
+	notesRound int
+	notesText  string
 	// history is what each review found in earlier rounds, by prompt name.
 	history map[string][]priorRound
 	// downgraded are the findings the guard lowered, over all rounds, as the
@@ -285,6 +293,8 @@ func (s *Sidecars) setUpReviewers(ctx context.Context) error {
 // Implement runs one implementer turn.
 func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 	var turn Turn
+	notes := s.roundNotes(s.round)
+	prompt = withNotes(notes, prompt)
 	run := func(c Candidate) (*harness.RateLimit, error) {
 		im := s.Implementer
 		if im.agent().Name() != c.Harness.Name() {
@@ -296,7 +306,7 @@ func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 			if err != nil {
 				return nil, err
 			}
-			prompt = handoff
+			prompt = withNotes(notes, handoff)
 			im.FreshSession()
 		}
 		s.useCandidate(c)
@@ -535,6 +545,36 @@ func (s *Sidecars) qualityChecks(ctx context.Context) []Check {
 // reviewSet is the reviews to run in round, as each reviewer is sent them, and
 // the checks of reviews that are not run again.
 func (s *Sidecars) reviewSet(round int) roundScope {
+	rs := s.scopeReviews(round)
+	if notes := s.roundNotes(round); notes != "" {
+		for i := range rs.Prompts {
+			rs.Prompts[i].Body += "\n\n" + notes
+		}
+	}
+	return rs
+}
+
+// roundNotes is the operator notes section for round: the notes no earlier
+// round has read, taken once however many prompts of the round ask.
+func (s *Sidecars) roundNotes(round int) string {
+	if s.OperatorNotes == nil {
+		return ""
+	}
+	s.notesMu.Lock()
+	defer s.notesMu.Unlock()
+	if round == s.notesRound {
+		return s.notesText
+	}
+	notes, err := s.OperatorNotes.Take(round)
+	if err != nil && s.Status != nil {
+		s.Status(iostream.LevelWarn, fmt.Sprintf("operator notes: %v", err))
+	}
+	s.notesRound, s.notesText = round, notesSection(notes)
+	return s.notesText
+}
+
+// scopeReviews is the round's reviews without the operator's notes.
+func (s *Sidecars) scopeReviews(round int) roundScope {
 	switch {
 	case s.Integrate:
 		return scopePrompts(scopeInput{Broad: broadPreamble(s.Request), Spec: s.Request}, s.Prompts, s.history, round)

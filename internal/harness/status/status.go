@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-
 	"time"
 
 	"github.com/smeltdev/smelt/internal/codexauth"

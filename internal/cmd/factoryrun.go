@@ -155,7 +155,8 @@ func resolveRunID(ctx context.Context, root string, args []string) (string, erro
 // only left by a run that ended, so its state is done.
 type recordStatus struct {
 	factory.Record
-	State smeltd.SessionState `json:"state"`
+	State smeltd.SessionState    `json:"state"`
+	Notes []factory.OperatorNote `json:"operator_notes"`
 }
 
 func newFactoryStatusCmd() *cobra.Command {
@@ -186,14 +187,22 @@ a restart, is shown from its record, with state "done".`,
 				if err != nil {
 					return sessionError(err)
 				}
-				return printStatus(streams, detail, jsonOut)
+				notes, err := runNotes(root, runID)
+				if err != nil {
+					return err
+				}
+				return printStatus(streams, detail, notes, jsonOut)
 			}
 			rec, err := loadRunRecord(root, runID)
 			if err != nil {
 				return err
 			}
 			if jsonOut {
-				return iostream.PrintJSON(streams.Out, recordStatus{Record: rec, State: smeltd.SessionDone})
+				notes, err := runNotes(root, runID)
+				if err != nil {
+					return err
+				}
+				return iostream.PrintJSON(streams.Out, recordStatus{Record: rec, State: smeltd.SessionDone, Notes: notes})
 			}
 			streams.Printf("Run %s: %s\n  Branch: %s\n  Worktree: %s\n  Result: %s after %d round(s)\n",
 				rec.RunID, smeltd.SessionDone, rec.Branch, rec.Worktree, rec.Result, rec.Rounds)
@@ -206,9 +215,9 @@ a restart, is shown from its record, with state "done".`,
 
 // printStatus writes a daemon session's status: all of it as JSON, or a
 // short summary.
-func printStatus(streams iostream.Streams, detail smeltd.SessionDetail, jsonOut bool) error {
+func printStatus(streams iostream.Streams, detail smeltd.SessionDetail, notes []factory.OperatorNote, jsonOut bool) error {
 	if jsonOut {
-		return iostream.PrintJSON(streams.Out, detail)
+		return iostream.PrintJSON(streams.Out, sessionStatus{SessionDetail: detail, Notes: notes})
 	}
 	f := detail.Factory
 	if f == nil {

@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"gotest.tools/v3/assert"
+
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
-	"gotest.tools/v3/assert"
 )
 
 func TestFactoryIndividualReviewFailsOverBeforePassCancellation(t *testing.T) {
