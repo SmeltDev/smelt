@@ -409,3 +409,19 @@ func TestRunDoesNotCommitDeletionsOfTheBasesFiles(t *testing.T) {
 	assert.Assert(t, strings.Contains(strings.Join(warnings, "\n"), "not committing"), "%v", warnings)
 	assert.Assert(t, strings.Contains(readFile(t, home, "stdin"), "updated from main at"), "the implementer is told")
 }
+
+func TestFinishFailoverMapsAnUnavailableHarness(t *testing.T) {
+	var rep Report
+	steps := &Sidecars{Failover: NewFailover(failoverCandidates(), 0, nil)}
+	err := finishFailover(&rep, steps, &HarnessUnavailable{Harness: "codex", Waited: 30 * time.Minute})
+	assert.Assert(t, err != nil)
+	assert.Equal(t, rep.Outcome.Result, ResultUnavailable)
+	assert.Equal(t, rep.Outcome.Stop, StopHarnessUnavailable)
+
+	dir := t.TempDir()
+	keepEndedRecord(dir, Record{RunID: "run-1"}, rep, func(iostream.Level, string) {})
+	raw, err := os.ReadFile(filepath.Join(dir, "factory", "run-1.json"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(raw), `"result": "unavailable"`), string(raw))
+	assert.Assert(t, strings.Contains(string(raw), `"stop": "harness_unavailable"`), string(raw))
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -351,4 +352,15 @@ func TestLoopStopsAtACancelledImplementerTurn(t *testing.T) {
 	assert.Equal(t, steps.implement, 1)
 	assert.Equal(t, steps.collected, 0)
 	assert.Equal(t, steps.checked, 0)
+}
+
+func TestLoopStopsUnavailableWithoutSpendingARound(t *testing.T) {
+	steps := &fakeSteps{implErr: &HarnessUnavailable{Harness: "codex", Waited: 30 * time.Minute}}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
+	var unavailable *HarnessUnavailable
+	assert.Assert(t, errors.As(err, &unavailable))
+	assert.Equal(t, out.Result, ResultUnavailable)
+	assert.Equal(t, out.Reason, "codex at capacity for 30m")
+	assert.Equal(t, out.Stop, StopHarnessUnavailable)
+	assert.Equal(t, out.Rounds, 0)
 }

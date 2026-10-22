@@ -12,6 +12,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/harness/codex"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 func failoverCandidates() []Candidate {
@@ -192,4 +193,150 @@ func TestFailoverProactiveSkipKeepsTheLastCandidate(t *testing.T) {
 	}
 	assert.Equal(t, calls, 2)
 	assert.Equal(t, len(f.Swaps()), 0)
+}
+
+// capacityClock is a fake clock: Sleep records the wait and returns at once.
+type capacityClock struct {
+	mu    sync.Mutex
+	waits []time.Duration
+	logs  []string
+}
+
+func (c *capacityClock) sleep(_ context.Context, d time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.waits = append(c.waits, d)
+	return nil
+}
+
+func (c *capacityClock) log(msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.logs = append(c.logs, msg)
+}
+
+func (c *capacityClock) total() (sum time.Duration) {
+	for _, d := range c.waits {
+		sum += d
+	}
+	return sum
+}
+
+func atCapacity() error {
+	return harness.AtCapacity(errors.New("selected model is at capacity, please try a different model"))
+}
+
+func newCapacityFailover(candidates []Candidate, wait time.Duration) (*Failover, *capacityClock) {
+	clock := &capacityClock{}
+	f := NewFailover(candidates, 0, nil).Configure(FailoverOptions{Sleep: clock.sleep, Log: clock.log, CapacityWait: wait})
+	return f, clock
+}
+
+func TestCapacityBackoff(t *testing.T) {
+	for attempt, want := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute} {
+		assert.Equal(t, capacityBackoff(attempt), want)
+	}
+}
+
+func TestFailoverRetriesTheSameHarnessAtCapacity(t *testing.T) {
+	f, clock := newCapacityFailover(failoverCandidates(), 0)
+	var calls []harness.Name
+	err := f.Do(context.Background(), 1, "implementer", func(c Candidate) (*harness.RateLimit, error) {
+		calls = append(calls, c.Harness.Name())
+		if len(calls) <= 2 {
+			return nil, atCapacity()
+		}
+		return nil, nil
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, calls, []harness.Name{harness.Codex, harness.Codex, harness.Codex})
+	assert.DeepEqual(t, clock.waits, []time.Duration{30 * time.Second, time.Minute})
+	assert.DeepEqual(t, clock.logs, []string{
+		"round 1 implementer: codex at capacity, retrying in 30s (1 of 4)",
+		"round 1 implementer: codex at capacity, retrying in 1m (2 of 4)",
+	})
+	assert.Equal(t, len(f.Swaps()), 0)
+}
+
+func TestFailoverMovesOnAfterFourCapacityRetries(t *testing.T) {
+	f, clock := newCapacityFailover(failoverCandidates(), 0)
+	var calls []harness.Name
+	err := f.Do(context.Background(), 1, "implementer", func(c Candidate) (*harness.RateLimit, error) {
+		calls = append(calls, c.Harness.Name())
+		if c.Harness.Name() == harness.Codex {
+			return nil, atCapacity()
+		}
+		return nil, nil
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, len(calls), 6)
+	assert.Equal(t, calls[5], harness.Claude)
+	assert.DeepEqual(t, clock.waits, []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute})
+	assert.Equal(t, f.Swaps()[0].Kind, harness.Unavailable)
+}
+
+func TestFailoverWaitsUpToCapacityWaitThenIsUnavailable(t *testing.T) {
+	f, clock := newCapacityFailover([]Candidate{{Harness: codex.Harness{}}}, 30*time.Minute)
+	err := f.Do(context.Background(), 1, "implementer", func(Candidate) (*harness.RateLimit, error) {
+		return nil, atCapacity()
+	})
+	var unavailable *HarnessUnavailable
+	assert.Assert(t, errors.As(err, &unavailable))
+	assert.Equal(t, err.Error(), "codex at capacity for 30m")
+	assert.Equal(t, clock.total(), 30*time.Minute)
+	for _, d := range clock.waits {
+		assert.Assert(t, d <= 5*time.Minute)
+	}
+	assert.Assert(t, f.Exhausted() == nil)
+	// A later success still works: giving up did not exhaust the failover.
+	assert.NilError(t, f.Do(context.Background(), 2, "implementer", func(Candidate) (*harness.RateLimit, error) { return nil, nil }))
+}
+
+func TestFailoverCapacityWaitHonoursCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := NewFailover(failoverCandidates(), 0, nil).Configure(FailoverOptions{
+		Sleep: func(ctx context.Context, _ time.Duration) error { cancel(); return ctx.Err() },
+	})
+	err := f.Do(ctx, 1, "implementer", func(Candidate) (*harness.RateLimit, error) { return nil, atCapacity() })
+	assert.ErrorIs(t, err, context.Canceled)
+	var unavailable *HarnessUnavailable
+	assert.Assert(t, !errors.As(err, &unavailable))
+}
+
+func TestFailoverDoesNotRetryAMissingBinary(t *testing.T) {
+	f, clock := newCapacityFailover([]Candidate{{Harness: codex.Harness{}}}, 0)
+	err := f.Do(context.Background(), 1, "implementer", func(Candidate) (*harness.RateLimit, error) {
+		return nil, harness.Classified(harness.Unavailable, errors.New("codex missing"), nil)
+	})
+	var exhausted *Exhaustion
+	assert.Assert(t, errors.As(err, &exhausted))
+	assert.Equal(t, len(clock.waits), 0)
+}
+
+// TestConfigureFailoverWiresCapacityWaitAndLog drives the Failover a real run
+// builds, so a dropped CapacityWait or Log option shows up here.
+func TestConfigureFailoverWiresCapacityWaitAndLog(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	status := func(_ iostream.Level, msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, msg)
+	}
+	steps := &Sidecars{Implementer: &Implementer{Harness: codex.Harness{}}}
+	configureFailover(steps, RunOptions{CapacityWait: 2 * time.Millisecond}, status)
+
+	calls := 0
+	err := steps.Failover.Do(context.Background(), 3, "implementer", func(Candidate) (*harness.RateLimit, error) {
+		calls++
+		return nil, atCapacity()
+	})
+	var unavailable *HarnessUnavailable
+	assert.Assert(t, errors.As(err, &unavailable), "%v", err)
+	assert.Equal(t, unavailable.Waited, 2*time.Millisecond)
+	assert.Equal(t, err.Error(), "codex at capacity for 2ms")
+	assert.Equal(t, calls, 2)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.DeepEqual(t, lines, []string{"round 3 implementer: codex at capacity, retrying in 2ms (1 of 4)"})
 }

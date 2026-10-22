@@ -454,3 +454,38 @@ func TestParserReportsCommandOutcomes(t *testing.T) {
 		{Tool: "Bash", Detail: "/bin/zsh -lc 'echo recovered'", Outcome: harness.CallOK, ExitCode: &zero},
 	})
 }
+
+func TestAtCapacityIsUnavailableAndRetryable(t *testing.T) {
+	b, err := os.ReadFile("testdata/real/codex-exec-at-capacity.jsonl")
+	assert.NilError(t, err)
+	raw := string(b)
+	const message = "Selected model is at capacity. Please try a different model."
+	p := Harness{}.NewImplementParser(nil)
+	p.Write(b)
+	p.Flush()
+	out := p.Outcome()
+	var failure *harness.Failure
+	assert.Assert(t, errors.As(out.Err, &failure))
+	assert.Equal(t, failure.Kind, harness.Unavailable)
+	assert.Assert(t, harness.IsAtCapacity(out.Err))
+
+	for name, run := range map[string]error{
+		"stream":      (Harness{}).RunError(context.Background(), time.Minute, 1, nil, raw, message),
+		"stderr only": (Harness{}).RunError(context.Background(), time.Minute, 1, nil, "", message),
+		"result":      resultError(1, true, "", message),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Assert(t, errors.As(run, &failure))
+			assert.Equal(t, failure.Kind, harness.Unavailable)
+			assert.Assert(t, harness.IsAtCapacity(run))
+			assert.ErrorContains(t, run, "at capacity")
+		})
+	}
+
+	plain := resultError(1, true, "", "boom")
+	assert.Assert(t, !errors.As(plain, &failure))
+	missing := (Harness{}).RunError(context.Background(), time.Minute, harness.MissingExitCode, nil, "", "")
+	assert.Assert(t, errors.As(missing, &failure))
+	assert.Equal(t, failure.Kind, harness.Unavailable)
+	assert.Assert(t, !harness.IsAtCapacity(missing))
+}

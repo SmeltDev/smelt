@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -487,5 +488,15 @@ func TestFactoryFallbackAndThreshold(t *testing.T) {
 func TestValidHarnessAcceptsEachCodingAgent(t *testing.T) {
 	for name, want := range map[string]bool{"": true, "claude": true, "codex": true, "grok": true, "gemini": false} {
 		assert.Equal(t, ValidHarness(name), want, name)
+	}
+}
+
+func TestFactoryCapacityWait(t *testing.T) {
+	assert.Equal(t, (*FactoryConfig)(nil).CapacityWaitDuration(), 30*time.Minute)
+	assert.Equal(t, (&FactoryConfig{}).CapacityWaitDuration(), 30*time.Minute)
+	assert.Equal(t, (&FactoryConfig{CapacityWait: "45m"}).CapacityWaitDuration(), 45*time.Minute)
+	assert.NilError(t, (&FactoryConfig{CapacityWait: "90s"}).validate())
+	for _, v := range []string{"soon", "0s", "-5m", "30"} {
+		assert.Assert(t, (&FactoryConfig{CapacityWait: v}).validate() != nil, v)
 	}
 }
