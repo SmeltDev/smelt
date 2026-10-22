@@ -3,6 +3,8 @@ package factory
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -219,6 +221,7 @@ func TestSyncBaseCommitsAConflictWithItsMarkers(t *testing.T) {
 	// The markers are in the implementer's tree, and the markers gate holds
 	// until they are resolved.
 	assert.Assert(t, strings.Contains(readFile(t, r.impl.RepoPath, "README.md"), "<<<<<<<"))
+	assert.Assert(t, strings.Contains(gitOutput(t, r.wt, "show", "HEAD:README.md"), "<<<<<<<"), "markers are committed")
 	check := runCommand(ctx, r.s.Exec, r.impl, MarkersGate)
 	assert.Equal(t, check.Status, StatusFailed, check.Output)
 
@@ -248,8 +251,9 @@ func TestSyncBaseFailureDropsTheSyncAndSaysWhy(t *testing.T) {
 	_, err := r.queue.Enqueue("nosuch")
 	assert.NilError(t, err)
 
-	_, err = r.s.SyncBase(context.Background(), 1)
-	assert.ErrorContains(t, err, "sync nosuch")
+	dropped, err := r.s.SyncBase(context.Background(), 1)
+	assert.NilError(t, err)
+	assert.Equal(t, dropped.State, SyncDropped)
 	got := r.queue.Snapshot()
 	assert.Equal(t, got[0].State, SyncDropped)
 	assert.Assert(t, strings.HasPrefix(got[0].Reason, "failed: "), got[0].Reason)
@@ -276,4 +280,43 @@ func TestSyncQueue(t *testing.T) {
 	_, err = q.Enqueue("main")
 	assert.ErrorIs(t, err, ErrSyncsClosed)
 	assert.DeepEqual(t, q.Close(), got)
+}
+
+// failWorkPushBackend allows the baseline push but rejects the restored work.
+type failWorkPushBackend struct{ mirrorBackend }
+
+func (b failWorkPushBackend) Sync(ctx context.Context, id, repoPath, cwd string, fresh bool, status iostream.StatusFunc) error {
+	if _, err := os.Stat(filepath.Join(cwd, "feature.txt")); err == nil {
+		return fmt.Errorf("injected work push failure")
+	}
+	return b.mirrorBackend.Sync(ctx, id, repoPath, cwd, fresh, status)
+}
+
+func TestSyncBaseWorkPushFailureStopsWithLocalWorkPreserved(t *testing.T) {
+	r := newSyncRun(t)
+	r.implement(t, 1, "feature.txt", "mine\n")
+	tip := r.baseMoves(t, "base.txt", "base\n")
+	r.s.Relay.backend = failWorkPushBackend{}
+	_, err := r.queue.Enqueue("main")
+	assert.NilError(t, err)
+	got, err := r.s.SyncBase(t.Context(), 1)
+	var unsafe *syncWorkspaceError
+	assert.Assert(t, errors.As(err, &unsafe), "%v", err)
+	assert.Equal(t, got.State, SyncDropped)
+	assert.Equal(t, readFile(t, r.wt, "feature.txt"), "mine\n")
+	assert.Equal(t, r.rec.Baseline, tip)
+	assert.Equal(t, r.s.Base.Wt.Baseline, tip)
+}
+
+func TestSyncBaseUntrackedCollisionStopsAndKeepsStash(t *testing.T) {
+	r := newSyncRun(t)
+	r.implement(t, 1, "feature.txt", "mine\n")
+	r.baseMoves(t, "feature.txt", "base\n")
+	_, err := r.queue.Enqueue("main")
+	assert.NilError(t, err)
+	got, err := r.s.SyncBase(t.Context(), 1)
+	var unsafe *syncWorkspaceError
+	assert.Assert(t, errors.As(err, &unsafe), "%v", err)
+	assert.Equal(t, got.State, SyncDropped)
+	assert.Equal(t, gitOutput(t, r.wt, "show", "stash@{0}^3:feature.txt"), "mine")
 }

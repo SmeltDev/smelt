@@ -65,7 +65,7 @@ func runFactoryUpdate(ctx context.Context, streams iostream.Streams, arg string,
 	}
 	runID := factory.ParseRunID(arg)
 	session := runSession(root, runID)
-	if flags.nextRound {
+	if flags.nextRound && session != nil && !session.State.Finished() {
 		return queueNextRound(streams, session, runID, flags, smeltd.QueueSync)
 	}
 	if err := refuseActiveRun(session, runID); err != nil {

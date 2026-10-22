@@ -130,7 +130,9 @@ type Event struct {
 	Plan     *Plan
 	Findings []review.Finding
 	// Sync is the base merged at the end of Round, for EventSynced.
-	Sync *Sync
+	// Worktree is the current baseline and provenance after EventSynced.
+	Worktree *Worktree
+	Sync     *Sync
 }
 
 // Loop drives the implementer through rounds of review and validation.
@@ -346,7 +348,7 @@ func (l Loop) syncBase(ctx context.Context, steps Steps, emit func(Event), round
 // there is a turn to tell it in; conflicts always get one.
 func withSyncNote(prompt string, sync *Sync) string {
 	switch {
-	case sync == nil:
+	case sync == nil || sync.State == SyncDropped:
 		return prompt
 	case prompt == "" && len(sync.Conflicts) == 0:
 		return ""

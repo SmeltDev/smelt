@@ -440,6 +440,7 @@ func TestWithSyncNote(t *testing.T) {
 		sync   *Sync
 		want   func(string) bool
 	}{
+		{"dropped sync", "fix it", &Sync{State: SyncDropped}, func(got string) bool { return got == "fix it" }},
 		{"no sync", "fix it", nil, func(got string) bool { return got == "fix it" }},
 		{"clean sync and nothing to fix", "", clean, func(got string) bool { return got == "" }},
 		{"conflicts and nothing to fix", "", conflicted, func(got string) bool { return strings.Contains(got, "a.go") && !strings.HasSuffix(got, "\n\n") }},

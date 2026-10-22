@@ -398,7 +398,16 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
 	tm := timer{now: time.Now}
-	loop, loopPrompt := opts.newLoop(steps, keepSummary(&lastSummary, chain(tm.event, opts.OnEvent)))
+	recordEvent := func(e Event) {
+		if e.Kind == EventSynced {
+			snapshot := wt
+			e.Worktree = &snapshot
+		}
+		if opts.OnEvent != nil {
+			opts.OnEvent(e)
+		}
+	}
+	loop, loopPrompt := opts.newLoop(steps, keepSummary(&lastSummary, chain(tm.event, recordEvent)))
 	if cont != nil || integ != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
 			return rep, fmt.Errorf("bring the work already on the branch to the implementer: %w", err)
@@ -417,7 +426,12 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	rep.Outcome.Plan = steps.plan
 	rep.Timing = tm.timing
 	steps.checks = rep.Outcome.Checks
-	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block, Integrate: integ != nil}, status)
+	var unsafeSync *syncWorkspaceError
+	if errors.As(err, &unsafeSync) {
+		status(iostream.LevelWarn, fmt.Sprintf("not pulling or committing after an incomplete sync: work is preserved in %s (including git stash): %v", wt.Path, err))
+	} else {
+		concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block, Integrate: integ != nil}, status)
+	}
 	err = finishFailover(&rep, steps, err)
 	settleTiming(&rep.Timing, steps, runStart, status)
 	return rep, err

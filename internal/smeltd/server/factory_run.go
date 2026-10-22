@@ -501,8 +501,12 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt, factory.EventSynced:
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt:
 		// Recorded above.
+	case factory.EventSynced:
+		if ev.Worktree != nil && ev.Sync != nil && ev.Sync.State == factory.SyncDone {
+			updateFactoryBaseline(e.s.Factory, *ev.Worktree)
+		}
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
 		r.activityRound = ev.Round
@@ -759,6 +763,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	f.KeptSidecars = rep.KeptSidecars
 	f.Log = rep.Log
 	if rep.Started {
+		updateFactoryBaseline(f, rep.Worktree)
 		f.Timing = wireTiming(rep.Timing)
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
@@ -974,4 +979,14 @@ func (r *factoryRecorder) beforeRound(ev factory.Event) bool {
 		return true
 	}
 	return false
+}
+
+// updateFactoryBaseline keeps live status consistent with the saved record.
+func updateFactoryBaseline(f *smeltd.FactoryRun, wt factory.Worktree) {
+	if wt.Baseline != "" {
+		f.Baseline = wt.Baseline
+	}
+	if wt.UpdatedFrom != nil {
+		f.UpdatedFrom = &smeltd.UpdatedFrom{Branch: wt.UpdatedFrom.Branch, Commit: wt.UpdatedFrom.Commit}
+	}
 }

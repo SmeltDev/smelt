@@ -178,6 +178,21 @@ func TestUpdateNextRoundQueuesTheSyncOfALiveRun(t *testing.T) {
 	assert.Assert(t, strings.Contains(text, "Sync of main: queued"), text)
 }
 
+func TestUpdateNextRoundQueuesTheExplicitBase(t *testing.T) {
+	runID := liveRun(t)
+	out, _, err := runCobra(t, newFactoryUpdateCmd(), runID, "--next-round", "--base", "release", "--json")
+	assert.NilError(t, err)
+	var response smeltd.BaseSync
+	assert.NilError(t, json.Unmarshal([]byte(out), &response), out)
+	assert.Equal(t, response.Base, "release")
+	assert.Equal(t, response.State, smeltd.SyncQueued)
+	status, _, err := runCobra(t, newFactoryStatusCmd(), runID, "--json")
+	assert.NilError(t, err)
+	var got smeltd.SessionDetail
+	assert.NilError(t, json.Unmarshal([]byte(status), &got), status)
+	assert.DeepEqual(t, got.Factory.Syncs, []smeltd.BaseSync{{Base: "release", State: smeltd.SyncQueued}})
+}
+
 func TestUpdateOfALiveRunNeedsNextRound(t *testing.T) {
 	runID := liveRun(t)
 
@@ -187,9 +202,9 @@ func TestUpdateOfALiveRunNeedsNextRound(t *testing.T) {
 	assert.ErrorContains(t, err, "--push cannot be combined")
 }
 
-func TestUpdateNextRoundNeedsALiveRun(t *testing.T) {
+func TestUpdateNextRoundReportsAnUnknownRun(t *testing.T) {
 	factoryProject(t)
 	startSessionDaemon(t, fakeSessionConfig())
 	_, _, err := runCobra(t, newFactoryUpdateCmd(), "run-1", "--next-round")
-	assert.ErrorContains(t, err, "is not running")
+	assert.ErrorContains(t, err, "No factory run run-1")
 }

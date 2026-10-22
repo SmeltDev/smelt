@@ -27,7 +27,7 @@ type BaseSync struct {
 // rounds. A loop whose steps do not implement it never syncs.
 type BaseSyncer interface {
 	// SyncBase applies the oldest queued sync after round's checks, and returns
-	// it; nil when none is queued.
+	// it; nil when none is queued. A failed request is returned as dropped.
 	SyncBase(ctx context.Context, round int) (*Sync, error)
 }
 
@@ -51,8 +51,13 @@ func (s *Sidecars) SyncBase(ctx context.Context, round int) (*Sync, error) {
 	}
 	done, err := s.applySync(ctx, req, round)
 	if err != nil {
-		b.Queue.settle(i, Sync{Base: req.Base, State: SyncDropped, Reason: "failed: " + err.Error()})
-		return nil, fmt.Errorf("sync %s: %w", req.Base, err)
+		dropped := Sync{Base: req.Base, State: SyncDropped, Round: round, Reason: "failed: " + err.Error()}
+		b.Queue.settle(i, dropped)
+		var unsafe *syncWorkspaceError
+		if errors.As(err, &unsafe) {
+			return &dropped, err
+		}
+		return &dropped, nil
 	}
 	b.Queue.settle(i, done)
 	return &done, nil
@@ -66,14 +71,29 @@ func (s *Sidecars) applySync(ctx context.Context, req Sync, round int) (Sync, er
 		return Sync{}, err
 	}
 	res, mergeErr := s.mergeAndRebaseline(ctx, git, req.Base)
+	// The branch may already have moved even if sidecar setup failed. Keep
+	// the local record consistent before returning a fatal workspace error.
+	if res.changed {
+		s.moveBaselineTo(res.rec.Baseline)
+		*b.Rec = res.rec
+		b.Wt.UpdatedFrom = res.rec.UpdatedFrom
+	}
 	popped, popErr := restoreWork(ctx, git, stashed)
 	if err := errors.Join(mergeErr, popErr); err != nil {
+		if popErr != nil || res.changed {
+			return Sync{}, &syncWorkspaceError{err}
+		}
 		return Sync{}, err
+	}
+	if len(popped) > 0 {
+		if err := commitConflicts(ctx, git, req.Base, b.Rec.Branch, popped); err != nil {
+			return Sync{}, &syncWorkspaceError{err}
+		}
 	}
 	res.rec.Conflicts = unionFiles(res.rec.Conflicts, popped)
 	if res.changed {
 		if err := s.Relay.Push(ctx, []*sidecar.PoolEntry{s.Implementer.Entry}); err != nil {
-			return Sync{}, fmt.Errorf("bring the work back to the implementer: %w", err)
+			return Sync{}, &syncWorkspaceError{fmt.Errorf("bring the work back to the implementer: %w", err)}
 		}
 	}
 	if res.rec.Baseline != b.Rec.Baseline {
@@ -209,7 +229,8 @@ func stashWork(ctx context.Context, git gitexec.Runner, base string) (bool, erro
 
 // restoreWork puts the branch's files back in the worktree and the stashed
 // work on top of them. Work that does not apply cleanly is left with conflict
-// markers in the files, which it returns, and nothing staged.
+// markers in the files, which it returns, and nothing staged. The caller
+// commits those markers before resuming the run.
 func restoreWork(ctx context.Context, git gitexec.Runner, stashed bool) ([]string, error) {
 	if out, err := git.CombinedOutput(ctx, "read-tree", "-u", "--reset", "HEAD"); err != nil {
 		return nil, fmt.Errorf("put the branch's files back: %w: %s", err, strings.TrimSpace(string(out)))
@@ -266,5 +287,15 @@ func (s Sync) Note() string {
 
 // Line is the sync as the round log records it.
 func (s Sync) Line() string {
+	if s.State == SyncDropped {
+		return fmt.Sprintf("sync of %s dropped: %s", s.Base, s.Reason)
+	}
 	return fmt.Sprintf("synced %s at %s (%d files, %d conflicts)", s.Base, shortSHA(s.Commit), s.Files, len(s.Conflicts))
 }
+
+// syncWorkspaceError stops the run without pulling a partially replaced
+// implementer workspace over the recovered local work. Any unapplied work
+// remains in the worktree's stash for recovery.
+type syncWorkspaceError struct{ error }
+
+func (e *syncWorkspaceError) Unwrap() error { return e.error }
