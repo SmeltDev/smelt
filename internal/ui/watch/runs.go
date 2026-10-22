@@ -406,6 +406,8 @@ func runOutcome(s smeltd.Session) string {
 			return "blocked"
 		case smeltd.ResultNoChange:
 			return "no change"
+		case smeltd.ResultUnavailable:
+			return "unavailable"
 		}
 	}
 	if loopFailed(s) {

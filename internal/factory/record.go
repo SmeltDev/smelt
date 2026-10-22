@@ -23,6 +23,7 @@ var ErrNoRecord = errors.New("no record of the run")
 type Record struct {
 	Reason       string        `json:"reason,omitempty"`
 	ResetAt      *time.Time    `json:"reset_at,omitempty"`
+	Stop         string        `json:"stop,omitempty"`
 	HarnessSwaps []HarnessSwap `json:"harness_swaps,omitempty"`
 	Turns        []TurnAttempt `json:"turns,omitempty"`
 	RunID        string        `json:"run_id"`

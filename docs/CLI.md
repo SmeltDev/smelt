@@ -183,7 +183,7 @@ smelt
 │   ├── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
 │       --plan <file>               # Read the prompt from a file (usually a markdown spec)
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
-│       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
+│       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 10)
 │       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
 │       --integrate                 # With --from: check the finished branch against the whole spec (the prompt) and fix only what fails
 │       --against <ref>             # With --integrate: what the branch is compared with (default: the default branch)
@@ -419,7 +419,7 @@ smelt
 - **`factory build` takes defaults from the `factory` section of `.smelt/config.json`.**
   `{"factory": {"backend": "docker", "image": "smelt-sandbox:local", "maxAttempts": 5, "log": true}}`.
   Precedence, highest first: an explicitly set flag, then `factory.*`, then the built-in default
-  (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
+  (circleci, 10 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
 - **A round is plan → implement → gates → reviews.** Before round 1 the implementer writes a plan
@@ -1337,6 +1337,18 @@ and the durable run record retain `harness_swaps` (`round`, `turn`, `from`, `to`
 `kind`, `reset_at`) and per-attempt `turns` with actual harness/model attribution.
 Planning, plan reviews and notes use round zero. Logs and the `Time:` line include
 phrases such as `swapped codex → claude (rate_limited) in round 2`.
+
+A harness that is at capacity (Codex: "Selected model is at capacity") is busy, not
+failing. The turn waits and retries on the same harness after 30s, 1m, 2m and 4m,
+logging `round N implementer: codex at capacity, retrying in 1m (2 of 4)`. Then it
+moves to the next `--fallback` candidate as for a rate limit. On the last candidate it
+keeps waiting, at most 5m between tries, until `factory.capacityWait` (a Go duration,
+default `30m`; it includes the first four waits) is spent. Then the result is
+`unavailable` with reason such as `codex at capacity for 30m` and `"stop":
+"harness_unavailable"` in status JSON and the run record, so a caller can retry the
+run later. The round is not counted against `--max-attempts`. Only Codex classifies
+capacity today; Claude and grok are left out until a real capture of their messages
+exists.
 
 `--continue <run> --harness <name>` uses the requested harness and its credentials
 and model. Its fresh session receives the original request, approved plan and

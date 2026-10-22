@@ -378,6 +378,8 @@ func TestAPIResultsMatchTheFactorys(t *testing.T) {
 		{smeltd.ResultExhausted, string(factory.ResultExhausted)},
 		{smeltd.ResultStuck, string(factory.ResultStuck)},
 		{smeltd.ResultNoChange, string(factory.ResultNoChange)},
+		{smeltd.ResultUnavailable, string(factory.ResultUnavailable)},
+		{smeltd.StopHarnessUnavailable, factory.StopHarnessUnavailable},
 		{smeltd.CheckPassed, string(factory.StatusPassed)},
 		{smeltd.CheckFailed, string(factory.StatusFailed)},
 		{smeltd.CheckErrored, string(factory.StatusErrored)},
@@ -967,6 +969,7 @@ func TestFactorySessionRecordsTheImplementersToolCalls(t *testing.T) {
 	assert.DeepEqual(t, detail.Factory.Activity, []smeltd.ToolActivity{{Round: 1, Tool: "Bash", Detail: "ls /x", Outcome: "ok"}})
 }
 
+<<<<<<< HEAD
 func TestFactorySessionQueuesASyncUntilTheRunEnds(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -1054,4 +1057,22 @@ func TestFactoryRecorderSyncMovesLiveAndFinishedBaseline(t *testing.T) {
 		assert.Equal(t, f.Baseline, "new")
 		assert.DeepEqual(t, f.UpdatedFrom, &smeltd.UpdatedFrom{Branch: "main", Commit: "tip"})
 	}
+=======
+func TestFactoryRunThatStaysAtCapacityEndsUnavailableWithAStop(t *testing.T) {
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		opts.OnStart("run-1", factory.Worktree{Path: "/w"})
+		err := &factory.HarnessUnavailable{Harness: harness.Codex, Waited: 30 * time.Minute}
+		return factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultUnavailable, Reason: err.Error(), Stop: factory.StopHarnessUnavailable}}, err
+	})
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "ticket"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, detail.Factory.Result, smeltd.ResultUnavailable)
+	assert.Equal(t, detail.Factory.Stop, smeltd.StopHarnessUnavailable)
+	assert.Equal(t, detail.Factory.Reason, "codex at capacity for 30m")
+	assert.Equal(t, detail.Factory.Rounds, 0)
+	raw, err := json.Marshal(detail)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(raw), `"stop":"harness_unavailable"`), string(raw))
+>>>>>>> origin/main
 }

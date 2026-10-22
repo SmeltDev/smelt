@@ -35,10 +35,10 @@ func TestResolveFactorySettings(t *testing.T) {
 	assert.Equal(t, got.Attempts, 3)
 
 	// Built-in defaults: docker, never circleci, which is opt-in.
-	got, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{},
+	got, err = resolveFactorySettings(factorySettings{Attempts: defaultFactoryAttempts}, factoryExplicit{},
 		&config.ProjectConfig{Factory: &config.FactoryConfig{Image: "cfg:img"}})
 	assert.NilError(t, err)
-	assert.DeepEqual(t, got, factorySettings{Backend: "docker", Image: "cfg:img", Attempts: 3, ImageSource: imageFromConfig})
+	assert.DeepEqual(t, got, factorySettings{Backend: "docker", Image: "cfg:img", Attempts: defaultFactoryAttempts, ImageSource: imageFromConfig})
 
 	// With nothing configured the backend is still docker, which needs an image.
 	_, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{}, &config.ProjectConfig{})
@@ -167,4 +167,32 @@ func userMsg(err error) string {
 		return ue.msg
 	}
 	return ""
+}
+
+func TestFactoryAttemptsDefaultsTable(t *testing.T) {
+	t.Setenv(docker.EnvImage, "")
+	flag := newFactoryBuildCmd().Flags().Lookup("max-attempts")
+	assert.Equal(t, flag.DefValue, "10")
+	assert.Assert(t, strings.Contains(flag.Usage, "else 10"), flag.Usage)
+
+	withAttempts := func(n int) *config.ProjectConfig {
+		return &config.ProjectConfig{Factory: &config.FactoryConfig{Image: "cfg:img", MaxAttempts: n}}
+	}
+	for _, tc := range []struct {
+		name     string
+		flag     int
+		explicit bool
+		cfg      *config.ProjectConfig
+		want     int
+	}{
+		{name: "no flag, no config", flag: defaultFactoryAttempts, cfg: withAttempts(0), want: 10},
+		{name: "config", flag: defaultFactoryAttempts, cfg: withAttempts(5), want: 5},
+		{name: "flag beats config", flag: 3, explicit: true, cfg: withAttempts(5), want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveFactorySettings(factorySettings{Attempts: tc.flag}, factoryExplicit{Attempts: tc.explicit}, tc.cfg)
+			assert.NilError(t, err)
+			assert.Equal(t, got.Attempts, tc.want)
+		})
+	}
 }

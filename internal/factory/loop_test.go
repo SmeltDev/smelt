@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -118,6 +119,18 @@ func TestLoopStopsWhenAttemptsRunOut(t *testing.T) {
 	assert.Equal(t, out.Rounds, 2)
 	// No turn is spent on fixes that would never be checked.
 	assert.Equal(t, len(steps.prompts), 2)
+}
+
+// builtInAttempts mirrors the CLI's default round limit.
+const builtInAttempts = 10
+
+func TestLoopStopsBeforeTheDefaultLimitWhenARoundChangesNothing(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1), change(1)}, checks: [][]Check{{fail}}}
+	out, err := Loop{Attempts: builtInAttempts}.Run(context.Background(), steps, "p")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultStuck)
+	assert.Assert(t, out.Rounds < builtInAttempts, "rounds: %d", out.Rounds)
+	assert.Equal(t, steps.checked, 1)
 }
 
 func TestLoopStopsWhenImplementerChangesNothing(t *testing.T) {
@@ -353,6 +366,7 @@ func TestLoopStopsAtACancelledImplementerTurn(t *testing.T) {
 	assert.Equal(t, steps.checked, 0)
 }
 
+<<<<<<< HEAD
 // syncingSteps is fakeSteps that applies a queued sync at the end of a round.
 type syncingSteps struct {
 	fakeSteps
@@ -452,4 +466,15 @@ func TestWithSyncNote(t *testing.T) {
 		got := withSyncNote(tt.prompt, tt.sync)
 		assert.Assert(t, tt.want(got), "%s: %q", tt.name, got)
 	}
+=======
+func TestLoopStopsUnavailableWithoutSpendingARound(t *testing.T) {
+	steps := &fakeSteps{implErr: &HarnessUnavailable{Harness: "codex", Waited: 30 * time.Minute}}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
+	var unavailable *HarnessUnavailable
+	assert.Assert(t, errors.As(err, &unavailable))
+	assert.Equal(t, out.Result, ResultUnavailable)
+	assert.Equal(t, out.Reason, "codex at capacity for 30m")
+	assert.Equal(t, out.Stop, StopHarnessUnavailable)
+	assert.Equal(t, out.Rounds, 0)
+>>>>>>> origin/main
 }

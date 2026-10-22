@@ -234,6 +234,8 @@ func (Harness) RunError(ctx context.Context, timeout time.Duration, code int, ex
 
 func resultError(code int, done bool, message, stderr string) error {
 	switch {
+	case code != 0 && capacityRe.MatchString(message+"\n"+stderr):
+		return harness.AtCapacity(fmt.Errorf("codex exited %d: %s", code, harness.Tail(message+"\n"+stderr, stderrTail)))
 	case code != 0 && strings.Contains(stderr, reviewChangedTree):
 		return fmt.Errorf("codex exited %d: %s", code, harness.Tail(stderr, stderrTail))
 	case code != 0 && done:

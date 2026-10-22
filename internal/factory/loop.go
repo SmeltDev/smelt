@@ -41,12 +41,21 @@ const (
 	// ResultBlocked means the implementer finished what it could and ended its
 	// summary with a BLOCKED: line saying what it could not do.
 	ResultBlocked Result = "blocked"
+	// ResultUnavailable means the harness stayed at capacity for the whole
+	// wait. It clears by itself, so the run can be retried later.
+	ResultUnavailable Result = "unavailable"
 )
+
+// StopHarnessUnavailable is Outcome.Stop for ResultUnavailable.
+const StopHarnessUnavailable = "harness_unavailable"
 
 // Outcome is the end state of a loop.
 type Outcome struct {
-	Reason       string
-	ResetAt      *time.Time
+	Reason  string
+	ResetAt *time.Time
+	// Stop says why a run ended without a verdict on the code, for a caller
+	// that retries on its own; see smeltd.StopHarnessUnavailable.
+	Stop         string
 	HarnessSwaps []HarnessSwap
 	Turns        []TurnAttempt
 	Result       Result
@@ -171,6 +180,11 @@ type Loop struct {
 // that failed; the outcome so far is returned with it.
 func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, error) {
 	out, err := l.run(ctx, steps, prompt)
+	var unavailable *HarnessUnavailable
+	if errors.As(err, &unavailable) {
+		out.Result, out.Reason, out.Stop = ResultUnavailable, unavailable.Error(), StopHarnessUnavailable
+		return out, err
+	}
 	var exhausted *Exhaustion
 	if errors.As(err, &exhausted) {
 		out.Result, out.Reason, out.ResetAt = ResultFailed, noHarnessAvailable, exhausted.ResetAt

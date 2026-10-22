@@ -265,6 +265,9 @@ type FactoryRun struct {
 	Turns        []HarnessTurn `json:"turns,omitempty"`
 	Reason       string        `json:"reason,omitempty"`
 	ResetAt      *time.Time    `json:"reset_at,omitempty"`
+	// Stop says why a run ended without a verdict on the code, such as
+	// StopHarnessUnavailable, so a caller can retry it later.
+	Stop string `json:"stop,omitempty"`
 	// Prompt is the request. A continued run's is the earlier run's, and
 	// Guidance is what the user added to it, if anything.
 	Prompt   string `json:"prompt"`
@@ -460,7 +463,14 @@ const (
 	// ResultBlocked means the implementer ended its summary with a BLOCKED:
 	// line; FactoryRun.Blocked says why.
 	ResultBlocked = "blocked"
+	// ResultUnavailable means the harness stayed at capacity for the whole
+	// wait; the run can be retried later.
+	ResultUnavailable = "unavailable"
 )
+
+// StopHarnessUnavailable is FactoryRun.Stop when the harness stayed at
+// capacity.
+const StopHarnessUnavailable = "harness_unavailable"
 
 // How a check came out, as ReviewResult.Status and RoundCheck.Status.
 const (
