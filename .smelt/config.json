@@ -36,7 +36,7 @@
   "factory": {
     "harness": "claude",
     "backend": "docker",
-    "image": "smelt-sandbox:local",
+    "dockerfile": "Dockerfile.smelt",
     "log": true,
     "maxConcurrent": 2,
     "maxAttempts": 10
