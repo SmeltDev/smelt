@@ -112,6 +112,7 @@ const (
 	EventHarnessSwap
 	EventTurnAttempt
 	EventNoPriorWork // the work already there is empty; the request is implemented
+	EventSynced      // a base was merged between rounds; Round, Sync
 )
 
 // Event reports progress through the loop.
@@ -128,6 +129,8 @@ type Event struct {
 	// wrong with it.
 	Plan     *Plan
 	Findings []review.Finding
+	// Sync is the base merged at the end of Round, for EventSynced.
+	Sync *Sync
 }
 
 // Loop drives the implementer through rounds of review and validation.
@@ -211,6 +214,11 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 			return out, err
 		}
 		prompt = Feedback(out.Checks)
+		sync, err := l.syncBase(ctx, steps, emit, round)
+		if err != nil {
+			return out, err
+		}
+		prompt = withSyncNote(prompt, sync)
 		prompt, lead = combineLead(lead, prompt)
 	}
 }
@@ -314,6 +322,38 @@ func (l Loop) checkRound(ctx context.Context, steps Steps, emit func(Event), rou
 		return true, nil
 	}
 	return false, nil
+}
+
+// syncBase merges a base queued during the round, now that its checks are in
+// and the next implementer turn has not started. nil means none was queued.
+func (l Loop) syncBase(ctx context.Context, steps Steps, emit func(Event), round int) (*Sync, error) {
+	syncer, ok := steps.(BaseSyncer)
+	if !ok {
+		return nil, nil
+	}
+	sync, err := syncer.SyncBase(ctx, round)
+	if err != nil {
+		return nil, fmt.Errorf("round %d: %w", round, err)
+	}
+	if sync != nil {
+		emit(Event{Kind: EventSynced, Round: round, Sync: sync})
+	}
+	return sync, nil
+}
+
+// withSyncNote adds what the sync did to the next implementer prompt. A clean
+// sync changes nothing the implementer must act on, so it is told only when
+// there is a turn to tell it in; conflicts always get one.
+func withSyncNote(prompt string, sync *Sync) string {
+	switch {
+	case sync == nil:
+		return prompt
+	case prompt == "" && len(sync.Conflicts) == 0:
+		return ""
+	case prompt == "":
+		return sync.Note()
+	}
+	return sync.Note() + "\n\n" + prompt
 }
 
 func combineLead(lead, prompt string) (string, string) {

@@ -148,6 +148,27 @@ func TestFactoryStatusOfARunTheDaemonForgotShowsItsRecord(t *testing.T) {
 	assert.Equal(t, got["run_id"], "run-7")
 }
 
+func TestFactoryStatusShowsTheSyncsOfARecord(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("testdata", "factory-status-syncs.golden.json"))
+	assert.NilError(t, err)
+	project := factoryProject(t)
+	startSessionDaemon(t, fakeSessionConfig())
+	writeRecord(t, project, factory.Record{RunID: "run-8", Prompt: "p", Branch: "smelt/p/run-8", Result: factory.ResultPassed, Rounds: 2,
+		Syncs: []factory.Sync{
+			{Base: "main", State: factory.SyncDone, Round: 1, Commit: "abc123", Files: 2, Conflicts: []string{"a.txt"}},
+			{Base: "main", State: factory.SyncDropped, Reason: "the run ended before the next round"},
+		}})
+	out, _, err := runCobra(t, newFactoryStatusCmd(), "run-8", "--json")
+	assert.NilError(t, err)
+	var got struct {
+		Syncs []factory.Sync `json:"syncs"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(out), &got), out)
+	b, err := json.MarshalIndent(got.Syncs, "", "  ")
+	assert.NilError(t, err)
+	assert.Equal(t, string(b)+"\n", string(want))
+}
+
 // publishProjectAt gives the project at root a bare origin and a worktree on a
 // factory branch, as publishProject does for a fresh repository.
 func publishProjectAt(t *testing.T, root string) (factoryWorktree, string) {

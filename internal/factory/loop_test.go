@@ -352,3 +352,103 @@ func TestLoopStopsAtACancelledImplementerTurn(t *testing.T) {
 	assert.Equal(t, steps.collected, 0)
 	assert.Equal(t, steps.checked, 0)
 }
+
+// syncingSteps is fakeSteps that applies a queued sync at the end of a round.
+type syncingSteps struct {
+	fakeSteps
+	queue *SyncQueue
+	// onCheck runs after each round's checks, as a request arriving during the
+	// round would.
+	onCheck func(round int)
+	sync    Sync
+}
+
+func (s *syncingSteps) Check(ctx context.Context, round int) ([]Check, error) {
+	checks, err := s.fakeSteps.Check(ctx, round)
+	if s.onCheck != nil {
+		s.onCheck(round)
+	}
+	return checks, err
+}
+
+func (s *syncingSteps) SyncBase(_ context.Context, round int) (*Sync, error) {
+	i, req, ok := s.queue.next()
+	if !ok {
+		return nil, nil
+	}
+	done := s.sync
+	done.Base, done.State, done.Round = req.Base, SyncDone, round
+	s.queue.settle(i, done)
+	return &done, nil
+}
+
+func TestLoopTellsTheNextRoundAboutAConflictedSync(t *testing.T) {
+	q := &SyncQueue{}
+	steps := &syncingSteps{
+		fakeSteps: fakeSteps{changes: []Change{change(1), change(2)}, checks: [][]Check{{fail}, {pass}}},
+		queue:     q,
+		sync:      Sync{Commit: "0123456789abcdef", Files: 3, Conflicts: []string{"a.go", "b.go"}},
+		onCheck: func(round int) {
+			if round == 1 {
+				_, _ = q.Enqueue("main")
+			}
+		},
+	}
+	var events []Event
+	out, err := Loop{Attempts: 3, OnEvent: func(e Event) { events = append(events, e) }}.Run(context.Background(), steps, "add a flag")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+
+	next := steps.prompts[1]
+	assert.Assert(t, strings.Contains(next, "a.go, b.go"), next)
+	assert.Assert(t, strings.Contains(next, "conflict markers"), next)
+	assert.Assert(t, strings.Contains(next, "a.go:3: nil deref"), "the findings are still sent: %s", next)
+	assert.Assert(t, strings.Contains(next, "3 file(s)"), next)
+
+	var synced []Event
+	for _, e := range events {
+		if e.Kind == EventSynced {
+			synced = append(synced, e)
+		}
+	}
+	assert.Equal(t, len(synced), 1)
+	assert.Equal(t, synced[0].Round, 1)
+	assert.Equal(t, q.Snapshot()[0].State, SyncDone)
+}
+
+func TestLoopDropsASyncQueuedInTheLastRound(t *testing.T) {
+	q := &SyncQueue{}
+	steps := &syncingSteps{
+		fakeSteps: fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{pass}}},
+		queue:     q,
+		onCheck:   func(int) { _, _ = q.Enqueue("main") },
+	}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "add a flag")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+
+	// The run is over before a round boundary: the sync is dropped, and says so.
+	assert.DeepEqual(t, q.Close(), []Sync{{Base: "main", State: SyncDropped, Reason: "the run ended before the next round"}})
+}
+
+func TestWithSyncNote(t *testing.T) {
+	clean := &Sync{Base: "main", Commit: "abcdef0123456789", Files: 2}
+	conflicted := &Sync{Base: "main", Commit: "abcdef0123456789", Files: 2, Conflicts: []string{"a.go"}}
+	tests := []struct {
+		name   string
+		prompt string
+		sync   *Sync
+		want   func(string) bool
+	}{
+		{"no sync", "fix it", nil, func(got string) bool { return got == "fix it" }},
+		{"clean sync and nothing to fix", "", clean, func(got string) bool { return got == "" }},
+		{"conflicts and nothing to fix", "", conflicted, func(got string) bool { return strings.Contains(got, "a.go") && !strings.HasSuffix(got, "\n\n") }},
+		{"clean sync and a fix", "fix it", clean, func(got string) bool {
+			return strings.HasPrefix(got, "Between rounds") && strings.HasSuffix(got, "\n\nfix it")
+		}},
+	}
+	for _, tt := range tests {
+		got := withSyncNote(tt.prompt, tt.sync)
+		assert.Assert(t, tt.want(got), "%s: %q", tt.name, got)
+	}
+}

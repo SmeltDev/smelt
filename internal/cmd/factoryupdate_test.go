@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,4 +133,63 @@ func TestUpdateRunReportsAnUnknownRun(t *testing.T) {
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	assert.NilError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+// liveRun starts a daemon whose run waits to be stopped and returns its ID.
+func liveRun(t *testing.T) string {
+	t.Helper()
+	factoryProject(t)
+	started := make(chan struct{}, 1)
+	cfg := fakeSessionConfig()
+	cfg.RunFactory = blockingFactoryConfig(started)
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(os.TempDir(), fmt.Sprintf("wt-%d", os.Getpid()))) })
+	startSessionDaemon(t, cfg)
+	_, stderr, err := runFactoryBuildCmd(t, "--detach", "--json", "add a flag")
+	assert.NilError(t, err, stderr)
+	<-started
+	return "run-1"
+}
+
+func TestUpdateNextRoundQueuesTheSyncOfALiveRun(t *testing.T) {
+	// The golden is read by path: the test project becomes the working directory.
+	want, err := os.ReadFile(filepath.Join("testdata", "factory-update-next-round.golden.json"))
+	assert.NilError(t, err)
+	runID := liveRun(t)
+
+	out, _, err := runCobra(t, newFactoryUpdateCmd(), runID, "--next-round", "--json")
+	assert.NilError(t, err)
+	assert.Equal(t, out, string(want))
+
+	// Asking again changes nothing, and the status shows the one sync.
+	_, _, err = runCobra(t, newFactoryUpdateCmd(), runID, "--next-round")
+	assert.NilError(t, err)
+	status, _, err := runCobra(t, newFactoryStatusCmd(), runID, "--json")
+	assert.NilError(t, err)
+	var got struct {
+		Factory struct {
+			Syncs []smeltd.BaseSync `json:"syncs"`
+		} `json:"factory"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(status), &got), status)
+	assert.DeepEqual(t, got.Factory.Syncs, []smeltd.BaseSync{{Base: "main", State: smeltd.SyncQueued}})
+
+	text, _, err := runCobra(t, newFactoryStatusCmd(), runID)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(text, "Sync of main: queued"), text)
+}
+
+func TestUpdateOfALiveRunNeedsNextRound(t *testing.T) {
+	runID := liveRun(t)
+
+	_, _, err := runCobra(t, newFactoryUpdateCmd(), runID)
+	assert.ErrorContains(t, err, "still running")
+	_, _, err = runCobra(t, newFactoryUpdateCmd(), runID, "--next-round", "--push")
+	assert.ErrorContains(t, err, "--push cannot be combined")
+}
+
+func TestUpdateNextRoundNeedsALiveRun(t *testing.T) {
+	factoryProject(t)
+	startSessionDaemon(t, fakeSessionConfig())
+	_, _, err := runCobra(t, newFactoryUpdateCmd(), "run-1", "--next-round")
+	assert.ErrorContains(t, err, "is not running")
 }

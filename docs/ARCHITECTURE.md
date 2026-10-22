@@ -384,6 +384,13 @@ The split is in the imports, not yet everywhere at runtime:
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   project's data directory before asking the daemon, which loads it again.
   This only works while the two share a filesystem.
+- **Base syncs reach a live run through a queue.** `smelt factory update --next-round`
+  posts to the daemon's `POST /factory/{id}/sync`, which enqueues on the run's
+  `factory.SyncQueue`. The loop applies it after a round's checks (`Sidecars.SyncBase`):
+  stash the pulled work, merge as `UpdateBranch` does, re-baseline the sidecars, pop the
+  work. `factory.Run` closes the queue when the loop ends, which drops what is still
+  queued. A reviewer's history may span the merge; that only makes its downgrading of
+  repeated findings more lenient.
 
 The daemon backs `smelt watch` and runs `smelt factory build`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte

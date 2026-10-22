@@ -137,6 +137,10 @@ type Sidecars struct {
 	// round.
 	OnReviewerTree func(ReviewerTree)
 
+	// Base, when set, lets the run merge a base branch between rounds; see
+	// SyncBase.
+	Base *BaseSync
+
 	ws workspace
 	// ratchet runs the SARIF gates; Prepare measures its baseline.
 	ratchet *Ratchet

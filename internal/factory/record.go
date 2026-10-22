@@ -65,6 +65,9 @@ type Record struct {
 	// Conflicts are the files `smelt factory update` committed with conflict
 	// markers in them, until a continued run ends having resolved them.
 	Conflicts []string `json:"conflicts,omitempty"`
+	// Syncs are the base syncs asked of the run while it went, applied or
+	// dropped.
+	Syncs []Sync `json:"syncs,omitempty"`
 	// Notes are the written account of the branch's change, once the run
 	// that committed it has written them.
 	Notes *Notes `json:"notes,omitempty"`

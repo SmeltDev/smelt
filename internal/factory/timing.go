@@ -248,7 +248,7 @@ func (t *timer) event(e Event) {
 		if GatesOnlyFailed(e.Checks) {
 			t.timing.GateOnlyRounds = append(t.timing.GateOnlyRounds, e.Round)
 		}
-	case EventImplementing, EventCollected, EventChecking, EventNoPriorWork, EventHarnessSwap, EventTurnAttempt:
+	case EventImplementing, EventCollected, EventChecking, EventNoPriorWork, EventHarnessSwap, EventTurnAttempt, EventSynced:
 	}
 }
 

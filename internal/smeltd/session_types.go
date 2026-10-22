@@ -308,6 +308,9 @@ type FactoryRun struct {
 	// UpdatedFrom is the base the run's branch was updated from; Baseline is
 	// then the base's tip at that update. Absent for a run never updated.
 	UpdatedFrom *UpdatedFrom `json:"updated_from,omitempty"`
+	// Syncs are the base merges asked for while the run was live, queued, done
+	// or dropped; absent when none was.
+	Syncs []BaseSync `json:"syncs,omitempty"`
 	// Result is why the loop stopped, one of the Result values, once it has,
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
@@ -665,6 +668,30 @@ type FromRef struct {
 type UpdatedFrom struct {
 	Branch string `json:"branch"`
 	Commit string `json:"commit"`
+}
+
+// Where a BaseSync stands; the values of factory.SyncState.
+const (
+	SyncQueued  = "queued"
+	SyncDone    = "done"
+	SyncDropped = "dropped"
+)
+
+// BaseSync is a request to merge a base branch into a live run's branch at the
+// end of the current round. It mirrors factory.Sync, which smeltd cannot import.
+type BaseSync struct {
+	Base      string   `json:"base"`
+	State     string   `json:"state"`
+	Round     int      `json:"round,omitempty"`
+	Commit    string   `json:"commit,omitempty"`
+	Files     int      `json:"files,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
+	Reason    string   `json:"reason,omitempty"`
+}
+
+// SyncRequest asks a live run to merge Base at the end of its current round.
+type SyncRequest struct {
+	Base string `json:"base"`
 }
 
 // FactoryRequest starts a factory session.

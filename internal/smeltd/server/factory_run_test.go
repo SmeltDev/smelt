@@ -964,3 +964,38 @@ func TestFactorySessionRecordsTheImplementersToolCalls(t *testing.T) {
 	detail := waitForSessionEnd(t, d, sess.ID)
 	assert.DeepEqual(t, detail.Factory.Activity, []smeltd.ToolActivity{{Round: 1, Tool: "Bash", Detail: "ls /x", Outcome: "ok"}})
 }
+
+func TestFactorySessionQueuesASyncUntilTheRunEnds(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		close(started)
+		<-release
+		rep, err := run(ctx, opts)
+		// factory.Run closes the queue when its loop ends.
+		opts.Syncs.Close()
+		return rep, err
+	})
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	<-started
+	entry := d.sessions.get(sess.ID)
+
+	queued, err := entry.queueSync("main")
+	assert.NilError(t, err)
+	assert.Equal(t, queued.Base, "main")
+	assert.Equal(t, queued.State, smeltd.SyncQueued)
+	live := entry.detail().Factory.Syncs
+	assert.Equal(t, len(live), 1)
+	assert.Equal(t, live[0].State, smeltd.SyncQueued)
+
+	close(release)
+	ended := waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, len(ended.Factory.Syncs), 1)
+	assert.Equal(t, ended.Factory.Syncs[0].State, smeltd.SyncDropped)
+	assert.Assert(t, ended.Factory.Syncs[0].Reason != "")
+
+	_, err = entry.queueSync("main")
+	assert.ErrorIs(t, err, factory.ErrSyncsClosed)
+}

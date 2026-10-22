@@ -55,8 +55,7 @@ func (c *Continuation) prompt() string {
 	}
 	if len(c.From.Conflicts) > 0 {
 		base := ChooseBase("", c.From.BaseBranch, c.From.DefaultBranch)
-		fmt.Fprintf(&b, "\n\nThe branch was merged with `%s`; these files contain conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`): %s. "+
-			"Resolve each conflict so both sides' intent is kept, then remove the markers.", base, strings.Join(c.From.Conflicts, ", "))
+		b.WriteString("\n\n" + conflictNote(base, c.From.Conflicts))
 	}
 	return b.String()
 }

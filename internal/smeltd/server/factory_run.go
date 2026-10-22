@@ -257,6 +257,10 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Log:                     req.Log,
 		Verbose:                 req.Verbose,
 	}
+	opts.Syncs = &factory.SyncQueue{}
+	entry.mu.Lock()
+	entry.syncs = opts.Syncs
+	entry.mu.Unlock()
 	go d.executeFactory(ctx, entry, opts)
 	return entry.snapshot(), nil
 }
@@ -497,7 +501,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt:
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt, factory.EventSynced:
 		// Recorded above.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing

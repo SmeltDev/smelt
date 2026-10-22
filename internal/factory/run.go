@@ -87,6 +87,11 @@ type RunOptions struct {
 	// cannot be combined with Continue.
 	Integrate *IntegrateOptions
 
+	// Syncs, when set, takes requests to merge a base branch into the run's
+	// branch at the end of the current round; see Sidecars.SyncBase. Run closes
+	// it when the loop ends.
+	Syncs *SyncQueue
+
 	// Quality, when set, adds the built-in quality check to every round, with
 	// these limits. Nil turns it off.
 	Quality *quality.Config
@@ -302,6 +307,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}()
 	defer func() {
 		if rep.Started {
+			rec.Syncs = opts.Syncs.Close()
 			keepEndedRecord(dataDir, rec, rep, status)
 			cont.resolved(dataDir, status)
 		}
@@ -365,6 +371,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	steps.Acquire, steps.Release = pool.Acquire, pool.Release
 	steps.WaitReviewers = reviewersOf(pool, impl)
 	steps.Relay = NewRelay(backend, wt.Path, status)
+	steps.Base = opts.baseSync(author, &rec, &wt)
 	steps.Scout = ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}}
 	steps.Review = review.Options{
 		Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
@@ -402,6 +409,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	keepRecord(dataDir, rec, status)
 	rep.Started = true
 	rep.Outcome, err = loop.Run(ctx, steps, loopPrompt)
+	// A sync asked for now has no round left to be applied at.
+	endSyncs(&rec, opts.Syncs, rep.Outcome.Result)
+	// Syncs move the worktree's baseline.
+	rep.Worktree = wt
 	rep.Outcome.Plan = steps.plan
 	rep.Timing = tm.timing
 	steps.checks = rep.Outcome.Checks
@@ -829,4 +840,23 @@ func finishFailover(rep *Report, steps *Sidecars, err error) error {
 	}
 
 	return err
+}
+
+// baseSync is what the loop needs to apply opts.Syncs, nil for a run that
+// takes none.
+func (o RunOptions) baseSync(author config.CommitAuthor, rec *Record, wt *Worktree) *BaseSync {
+	if o.Syncs == nil {
+		return nil
+	}
+	return &BaseSync{Queue: o.Syncs, Root: o.Root, Author: author, Rec: rec, Wt: wt}
+}
+
+// endSyncs records the syncs of a run whose loop ended: those still queued have
+// no round left to be applied at. A passing run got through the markers gate,
+// so no conflicts are left to resolve.
+func endSyncs(rec *Record, syncs *SyncQueue, result Result) {
+	rec.Syncs = syncs.Close()
+	if result == ResultPassed {
+		rec.Conflicts = nil
+	}
 }

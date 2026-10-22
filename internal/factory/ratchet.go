@@ -66,6 +66,8 @@ func (r *Ratchet) MeasureBaseline(ctx context.Context, rev string, cmds []config
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rev = rev
+	// Findings kept from an earlier commit must not stand in for this one.
+	r.base = nil
 	for _, c := range SarifCommands(cmds) {
 		found, err := r.baselineInPlace(ctx, c)
 		if err != nil {
