@@ -250,6 +250,7 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
+	defer func() { opts.Syncs.Close() }()
 	runStart := time.Now()
 	rep.RunID = runStart.UTC().Format("20060102-150405")
 	cont := opts.Continue
@@ -306,8 +307,8 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		}
 	}()
 	defer func() {
+		rec.Syncs = opts.Syncs.Close()
 		if rep.Started {
-			rec.Syncs = opts.Syncs.Close()
 			keepEndedRecord(dataDir, rec, rep, status)
 			cont.resolved(dataDir, status)
 		}
@@ -357,40 +358,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		status(iostream.LevelInfo, "implementer started (reviewers still starting)")
 	}
 
-	exec := opts.Exec
-	if exec == nil {
-		exec = review.ClientExec
-	}
-	steps := opts.sidecars(request)
-	steps.Exec = exec
-	steps.Implementer = &Implementer{
-		Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
-		Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions, ContextWindow: opts.ContextWindow,
-		OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
-	}
-	steps.Acquire, steps.Release = pool.Acquire, pool.Release
-	steps.WaitReviewers = reviewersOf(pool, impl)
+	steps := opts.prepareSidecars(request, wt, pool, impl, lg)
 	steps.Relay = NewRelay(backend, wt.Path, status)
-	steps.Base = opts.baseSync(author, &rec, &wt)
 	steps.OperatorNotes = NewNoteLog(dataDir, rep.RunID)
-	steps.Scout = ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}}
-	steps.Review = review.Options{
-		Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
-		StructuredFindings: true,
-		ProgressFn:         opts.OnReviewProgress,
-	}
-	steps.Integrate = integ != nil
-	steps.Quality = opts.qualityCheck(exec, impl, status)
-	steps.Status = status
-	steps.OnCheck = opts.OnCheck
-	steps.Install = opts.Install
-	steps.OnInstallOutput = func(id, line string) {
-		status(iostream.LevelInfo, "install "+id+": "+line)
-	}
-	if opts.Verbose {
-		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }
-	}
-	configureFailover(steps, opts, status)
+	steps.Base = opts.baseSync(author, &rec, &wt)
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
 	}
@@ -398,15 +369,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
 	tm := timer{now: time.Now}
-	recordEvent := func(e Event) {
-		if e.Kind == EventSynced {
-			snapshot := wt
-			e.Worktree = &snapshot
-		}
-		if opts.OnEvent != nil {
-			opts.OnEvent(e)
-		}
-	}
+	recordEvent := baselineEvents(&wt, opts.OnEvent)
 	loop, loopPrompt := opts.newLoop(steps, keepSummary(&lastSummary, chain(tm.event, recordEvent)))
 	if cont != nil || integ != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
@@ -435,6 +398,56 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	err = finishFailover(&rep, steps, err)
 	settleTiming(&rep.Timing, steps, runStart, status)
 	return rep, err
+}
+
+// baselineEvents attaches the current worktree to sync events before forwarding them.
+func baselineEvents(wt *Worktree, next func(Event)) func(Event) {
+	return func(e Event) {
+		if e.Kind == EventSynced {
+			snapshot := *wt
+			e.Worktree = &snapshot
+		}
+		if next != nil {
+			next(e)
+		}
+	}
+}
+
+// prepareSidecars wires the run's implementer, reviewers and checks to the pool.
+func (o RunOptions) prepareSidecars(request string, wt Worktree, pool *sidecar.Pool, impl *sidecar.PoolEntry, lg *runLog) *Sidecars {
+	status := o.Status
+	exec := o.Exec
+	if exec == nil {
+		exec = review.ClientExec
+	}
+	steps := o.sidecars(request)
+	steps.Exec = exec
+	steps.Implementer = &Implementer{
+		Harness: o.Harness, Exec: exec, Entry: impl, Credential: o.Credential, BaseURL: o.BaseURL,
+		Model: o.Model, Timeout: o.ImplementTimeout, Instructions: o.ImplementerInstructions, ContextWindow: o.ContextWindow,
+		OnActivity: o.OnActivity, Gates: gateCommands(o.Commands),
+	}
+	steps.Acquire, steps.Release = pool.Acquire, pool.Release
+	steps.WaitReviewers = reviewersOf(pool, impl)
+	steps.Scout = ScoutOptions{Enabled: o.Pack.Enabled, MaxTokens: o.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}}
+	steps.Review = review.Options{
+		Harness: o.Harness, Credential: o.Credential, BaseURL: o.BaseURL, Model: o.Model, Timeout: o.ReviewTimeout,
+		StructuredFindings: true,
+		ProgressFn:         o.OnReviewProgress,
+	}
+	steps.Integrate = o.Integrate != nil
+	steps.Quality = o.qualityCheck(exec, impl, status)
+	steps.Status = status
+	steps.OnCheck = o.OnCheck
+	steps.Install = o.Install
+	steps.OnInstallOutput = func(id, line string) {
+		status(iostream.LevelInfo, "install "+id+": "+line)
+	}
+	if o.Verbose {
+		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }
+	}
+	configureFailover(steps, o, status)
+	return steps
 }
 
 // settleTiming adds what the loop's events do not report to t: the time of the

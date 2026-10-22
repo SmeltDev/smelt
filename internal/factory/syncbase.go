@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -242,7 +244,12 @@ func restoreWork(ctx context.Context, git gitexec.Runner, stashed bool) ([]strin
 	if err == nil {
 		return nil, nil
 	}
+	collisions, collisionErr := untrackedCollisions(ctx, git)
+	if collisionErr != nil {
+		return nil, collisionErr
+	}
 	conflicts, cerr := conflictedFiles(ctx, git)
+	conflicts = unionFiles(conflicts, collisions)
 	if cerr != nil || len(conflicts) == 0 {
 		return nil, fmt.Errorf("put the work back after the merge: %w: %s (the work is kept in git stash)", err, strings.TrimSpace(string(out)))
 	}
@@ -251,6 +258,47 @@ func restoreWork(ctx context.Context, git gitexec.Runner, stashed bool) ([]strin
 	}
 	if out, err := git.CombinedOutput(ctx, "stash", "drop", "--quiet"); err != nil {
 		return nil, fmt.Errorf("drop the applied stash: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return conflicts, nil
+}
+
+// untrackedCollisions preserves both versions of paths added independently by
+// the implementer and the base. Git cannot restore these from the stash's
+// untracked tree and does not produce index conflicts for them.
+func untrackedCollisions(ctx context.Context, git gitexec.Runner) ([]string, error) {
+	// A stash without untracked files has no third parent.
+	if _, err := git.Output(ctx, "rev-parse", "--verify", "stash@{0}^3"); err != nil {
+		return nil, nil
+	}
+	out, err := git.Output(ctx, "ls-tree", "-r", "--name-only", "-z", "stash@{0}^3")
+	if err != nil {
+		return nil, fmt.Errorf("list stashed untracked files: %w", err)
+	}
+	var conflicts []string
+	for _, path := range strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00") {
+		if path == "" {
+			continue
+		}
+		tracked, err := git.Output(ctx, "ls-tree", "HEAD", "--", path)
+		if err != nil {
+			return nil, fmt.Errorf("check added path %s: %w", path, err)
+		}
+		if len(tracked) == 0 {
+			continue
+		}
+		base, err := git.Output(ctx, "show", "HEAD:"+path)
+		if err != nil {
+			return nil, fmt.Errorf("read base addition %s: %w", path, err)
+		}
+		work, err := git.Output(ctx, "show", "stash@{0}^3:"+path)
+		if err != nil {
+			return nil, fmt.Errorf("read implementer addition %s: %w", path, err)
+		}
+		marked := fmt.Sprintf("<<<<<<< updated base\n%s\n=======\n%s\n>>>>>>> implementer\n", base, work)
+		if err := os.WriteFile(filepath.Join(git.Dir, path), []byte(marked), 0o644); err != nil {
+			return nil, fmt.Errorf("mark add/add conflict %s: %w", path, err)
+		}
+		conflicts = append(conflicts, path)
 	}
 	return conflicts, nil
 }

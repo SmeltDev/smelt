@@ -101,3 +101,19 @@ func TestRunSavesTheSyncsItDropped(t *testing.T) {
 	_, err = queue.Enqueue("main")
 	assert.ErrorIs(t, err, ErrSyncsClosed)
 }
+
+// Setup failures must close the queue even before a worktree or loop exists.
+func TestRunDropsSyncWhenSetupFails(t *testing.T) {
+	queue := &SyncQueue{}
+	_, err := queue.Enqueue("main")
+	assert.NilError(t, err)
+	_, err = Run(t.Context(), RunOptions{
+		Syncs: queue, From: "main", Continue: &Continuation{},
+	})
+	assert.ErrorContains(t, err, "cannot start from another ref")
+	syncs := queue.Snapshot()
+	assert.Equal(t, len(syncs), 1)
+	assert.Equal(t, syncs[0].State, SyncDropped)
+	_, err = queue.Enqueue("main")
+	assert.ErrorIs(t, err, ErrSyncsClosed)
+}

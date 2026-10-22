@@ -308,15 +308,20 @@ func TestSyncBaseWorkPushFailureStopsWithLocalWorkPreserved(t *testing.T) {
 	assert.Equal(t, r.s.Base.Wt.Baseline, tip)
 }
 
-func TestSyncBaseUntrackedCollisionStopsAndKeepsStash(t *testing.T) {
+func TestSyncBaseUntrackedCollisionCommitsMarkers(t *testing.T) {
 	r := newSyncRun(t)
 	r.implement(t, 1, "feature.txt", "mine\n")
 	r.baseMoves(t, "feature.txt", "base\n")
 	_, err := r.queue.Enqueue("main")
 	assert.NilError(t, err)
 	got, err := r.s.SyncBase(t.Context(), 1)
-	var unsafe *syncWorkspaceError
-	assert.Assert(t, errors.As(err, &unsafe), "%v", err)
-	assert.Equal(t, got.State, SyncDropped)
-	assert.Equal(t, gitOutput(t, r.wt, "show", "stash@{0}^3:feature.txt"), "mine")
+	assert.NilError(t, err)
+	assert.Equal(t, got.State, SyncDone)
+	assert.DeepEqual(t, got.Conflicts, []string{"feature.txt"})
+	marked := gitOutput(t, r.wt, "show", "HEAD:feature.txt")
+	for _, text := range []string{"<<<<<<<", "base", "=======", "mine", ">>>>>>>"} {
+		assert.Assert(t, strings.Contains(marked, text), marked)
+	}
+	assert.Assert(t, strings.Contains(got.Note(), "feature.txt"))
+	assert.Equal(t, gitOutput(t, r.wt, "stash", "list"), "")
 }
