@@ -94,6 +94,25 @@ func Classified(kind FailureKind, cause error, reset *time.Time) error {
 	return &Failure{Kind: kind, Cause: cause, ResetAt: reset}
 }
 
+// ErrAtCapacity marks an Unavailable failure as the provider being busy, which
+// clears by itself, unlike a missing binary or a crash.
+var ErrAtCapacity = errors.New("model at capacity")
+
+// capacityError keeps the provider's own wording while matching ErrAtCapacity.
+type capacityError struct{ cause error }
+
+func (e capacityError) Error() string      { return e.cause.Error() }
+func (e capacityError) Unwrap() error      { return e.cause }
+func (capacityError) Is(target error) bool { return target == ErrAtCapacity }
+
+// AtCapacity classifies cause as a transient capacity refusal.
+func AtCapacity(cause error) error {
+	return Classified(Unavailable, capacityError{cause}, nil)
+}
+
+// IsAtCapacity reports whether err is a capacity refusal worth retrying.
+func IsAtCapacity(err error) bool { return errors.Is(err, ErrAtCapacity) }
+
 // Credential is what a harness authenticates with. EnvVar is the variable the
 // CLI reads it from, so only one kind is ever sent and a stale one cannot
 // shadow another.

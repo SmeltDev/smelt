@@ -236,6 +236,9 @@ type FactoryConfig struct {
 	Fallback []string `json:"fallback,omitempty"`
 	// SwapAtUtilization is a fraction; unset defaults to 0.95.
 	SwapAtUtilization *float64 `json:"swapAtUtilization,omitempty"`
+	// CapacityWait is how long a run waits for a busy provider before it gives
+	// up, as a Go duration such as "30m"; unset defaults to 30m.
+	CapacityWait string `json:"capacityWait,omitempty"`
 	// Rounds selects whether implementer rounds reuse a session or start fresh.
 	Rounds RoundPolicy `json:"rounds,omitempty"`
 	// ContextWindow is the implementer auto-compaction threshold in tokens; zero uses the agent default.
@@ -847,6 +850,22 @@ func (f *FactoryConfig) SwapThreshold() float64 {
 	return 0.95
 }
 
+// DefaultCapacityWait is how long a run waits for a busy provider.
+const DefaultCapacityWait = 30 * time.Minute
+
+// CapacityWaitDuration is how long a run waits for a provider at capacity. A
+// value that does not parse falls back to the default; Validate rejects it.
+func (f *FactoryConfig) CapacityWaitDuration() time.Duration {
+	if f == nil || f.CapacityWait == "" {
+		return DefaultCapacityWait
+	}
+	d, err := time.ParseDuration(f.CapacityWait)
+	if err != nil || d <= 0 {
+		return DefaultCapacityWait
+	}
+	return d
+}
+
 func (f *FactoryConfig) validateFailover() error {
 	for _, name := range f.Fallback {
 		if name == "" || !ValidHarness(name) {
@@ -855,6 +874,11 @@ func (f *FactoryConfig) validateFailover() error {
 	}
 	if f.SwapAtUtilization != nil && !(*f.SwapAtUtilization > 0 && *f.SwapAtUtilization <= 1) {
 		return fmt.Errorf("factory.swapAtUtilization must be greater than 0 and at most 1")
+	}
+	if f.CapacityWait != "" {
+		if d, err := time.ParseDuration(f.CapacityWait); err != nil || d <= 0 {
+			return fmt.Errorf("factory.capacityWait must be a positive duration such as \"30m\"")
+		}
 	}
 	return nil
 }

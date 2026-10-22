@@ -253,3 +253,11 @@ func TestPublishRunBodyCarriesTheUnverifiedChecklist(t *testing.T) {
 	body := host.created[0].Body
 	assert.Assert(t, strings.Contains(body, "## Verify before merging\n\n- [ ] run it in Docker\n- [ ] check the keychain\n"), body)
 }
+
+func TestReportOutcomeUnavailable(t *testing.T) {
+	err := reportOutcome(func(iostream.Level, string) {}, smeltd.ResultUnavailable, 0, "")
+	assert.ErrorContains(t, err, "harness unavailable")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Assert(t, strings.Contains(ue.msg, "at capacity"), ue.msg)
+}

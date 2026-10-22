@@ -157,11 +157,14 @@ func (p *parser) fail(raw string) {
 		return
 	}
 	p.failure = readableError(raw)
-	if usageLimitRe.MatchString(p.failure) {
+	switch {
+	case usageLimitRe.MatchString(p.failure):
 		p.turn.RateLimit = &harness.RateLimit{Status: "limited", ResetsAt: p.resetTime(p.failure)}
 		p.err = harness.Classified(harness.RateLimited, errors.New(p.failure), p.turn.RateLimit.ResetsAt)
-	} else if credentialRejectedRe.MatchString(p.failure) {
+	case credentialRejectedRe.MatchString(p.failure):
 		p.err = harness.Classified(harness.Auth, ErrCredentialRejected, nil)
+	case capacityRe.MatchString(p.failure):
+		p.err = harness.AtCapacity(errors.New(p.failure))
 	}
 }
 
@@ -187,6 +190,9 @@ func readableError(raw string) string {
 
 var (
 	usageLimitRe = regexp.MustCompile(`(?i)usage limit|rate limit|try again`)
+	// capacityRe matches "Selected model is at capacity. Please try a
+	// different model."
+	capacityRe = regexp.MustCompile(`(?i)at capacity`)
 	// resetRe finds the time codex says the limit lifts, e.g. "try again at
 	// 2026-10-11T14:05:00Z" or "try again at Oct 11th, 2026 2:05 PM".
 	resetRe = regexp.MustCompile(`(?i)try again (?:at|after)\s+([^.\n]+)`)
