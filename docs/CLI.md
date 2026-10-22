@@ -1222,6 +1222,24 @@ working-tree check) and writes 2–4 review prompts. It runs in-process, not on 
 - `--timeout` bounds the agent's run and defaults to 30 minutes: reading a large repository takes
   longer than a review.
 
+### Telling a live run something: `factory note`
+
+`smelt factory note <run-id> [text|-] [--json]` leaves a note for a run that is still
+going (text from the argument, or stdin when it is `-` or omitted; at most 4096 bytes, not
+empty). At the start of the run's next round, the implementer's prompt and every review
+prompt of that round get the notes it has not read yet under `## Notes from the operator`,
+oldest first. Each note reaches one round only; it is not copied into the record or the PR
+notes. Notes are files in `<data dir>/factory/<run-id>.notes/`, so the daemon's runs and
+runs in their own process read them the same way.
+
+- `--json` prints `{"run_id","note_id","queued":true}`.
+- A finished run refuses a note: `Run <id> has ended; notes reach live runs only.`
+- `smelt factory status --json` lists them as `operator_notes`, each with `id`, `text`,
+  `received_at` and `delivered_round` (null until a round has read it).
+- A note left before round 1 is read in round 1. One left while the last round is checked
+  is never read, and its `delivered_round` stays null. A run that crashed leaves a record
+  that looks live, so a note to it is accepted and never read.
+
 ### Keeping a run mergeable: `factory update`
 
 Runs started together all branch from the same `main`, so once one PR merges the others

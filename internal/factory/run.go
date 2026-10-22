@@ -371,7 +371,11 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	steps.Acquire, steps.Release = pool.Acquire, pool.Release
 	steps.WaitReviewers = reviewersOf(pool, impl)
 	steps.Relay = NewRelay(backend, wt.Path, status)
+<<<<<<< HEAD
 	steps.Base = opts.baseSync(author, &rec, &wt)
+=======
+	steps.OperatorNotes = NewNoteLog(dataDir, rep.RunID)
+>>>>>>> origin/main
 	steps.Scout = ScoutOptions{Enabled: opts.Pack.Enabled, MaxTokens: opts.Pack.MaxTokens, Files: GitFiles{Git: gitexec.Runner{Dir: wt.Path}, Rev: wt.Baseline}}
 	steps.Review = review.Options{
 		Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
