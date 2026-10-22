@@ -366,7 +366,6 @@ func TestLoopStopsAtACancelledImplementerTurn(t *testing.T) {
 	assert.Equal(t, steps.checked, 0)
 }
 
-<<<<<<< HEAD
 // syncingSteps is fakeSteps that applies a queued sync at the end of a round.
 type syncingSteps struct {
 	fakeSteps
@@ -466,7 +465,8 @@ func TestWithSyncNote(t *testing.T) {
 		got := withSyncNote(tt.prompt, tt.sync)
 		assert.Assert(t, tt.want(got), "%s: %q", tt.name, got)
 	}
-=======
+}
+
 func TestLoopStopsUnavailableWithoutSpendingARound(t *testing.T) {
 	steps := &fakeSteps{implErr: &HarnessUnavailable{Harness: "codex", Waited: 30 * time.Minute}}
 	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
@@ -476,5 +476,4 @@ func TestLoopStopsUnavailableWithoutSpendingARound(t *testing.T) {
 	assert.Equal(t, out.Reason, "codex at capacity for 30m")
 	assert.Equal(t, out.Stop, StopHarnessUnavailable)
 	assert.Equal(t, out.Rounds, 0)
->>>>>>> origin/main
 }
