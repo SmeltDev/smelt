@@ -103,7 +103,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 		"started on the smelt daemon",
 		// The run ends before the first poll, so only where it ended shows,
 		// out of the default attempts.
-		"round 1/3: done — 1 of 1 checks passed",
+		fmt.Sprintf("round 1/%d: done — 1 of 1 checks passed", defaultFactoryAttempts),
 		"Preparing an implementer sidecar and 1 reviewer sidecar(s)...",
 		"implementer finished",
 		"added the flag",
