@@ -173,7 +173,7 @@ func (l *runLog) event(e Event) {
 		l.line("step", fmt.Sprintf("round %d: reviewing and validating", e.Round))
 	case EventChecked:
 		l.checked(e)
-	case EventSynced:
+	case EventSynced, EventSyncDropped:
 		l.synced(e)
 	}
 }

@@ -202,6 +202,7 @@ func TestSyncBaseMergesAtTheEndOfTheRound(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, saved.Baseline, tip)
 	assert.Equal(t, saved.OriginalBaseline, r.rec.OriginalBaseline)
+	assert.DeepEqual(t, saved.Syncs, []Sync{*got}, "the completed sync survives a daemon restart before the run ends")
 }
 
 func TestSyncBaseCommitsAConflictWithItsMarkers(t *testing.T) {

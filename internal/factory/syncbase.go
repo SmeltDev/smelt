@@ -62,6 +62,12 @@ func (s *Sidecars) SyncBase(ctx context.Context, round int) (*Sync, error) {
 		return &dropped, nil
 	}
 	b.Queue.settle(i, done)
+	// Persist the settled outcome with the moved baseline, so status can
+	// recover it from disk even if the daemon stops before the run ends.
+	b.Rec.Syncs = b.Queue.Snapshot()
+	if err := saveUpdated(b.Root, *b.Rec); err != nil {
+		return &done, fmt.Errorf("save the completed base sync: %w", err)
+	}
 	return &done, nil
 }
 

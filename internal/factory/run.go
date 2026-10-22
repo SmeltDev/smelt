@@ -384,6 +384,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	rep.Outcome, err = loop.Run(ctx, steps, loopPrompt)
 	// A sync asked for now has no round left to be applied at.
 	endSyncs(&rec, opts.Syncs, rep.Outcome.Result)
+	reportDroppedSyncs(rec.Syncs, rep.Outcome.Rounds, recordEvent)
 	// Syncs move the worktree's baseline.
 	rep.Worktree = wt
 	rep.Outcome.Plan = steps.plan
@@ -886,5 +887,14 @@ func endSyncs(rec *Record, syncs *SyncQueue, result Result) {
 	rec.Syncs = syncs.Close()
 	if result == ResultPassed {
 		rec.Conflicts = nil
+	}
+}
+
+// reportDroppedSyncs reports requests closed without reaching a round boundary.
+func reportDroppedSyncs(syncs []Sync, round int, emit func(Event)) {
+	for _, sync := range syncs {
+		if sync.State == SyncDropped && sync.Round == 0 {
+			emit(Event{Kind: EventSyncDropped, Round: round, Sync: &sync})
+		}
 	}
 }

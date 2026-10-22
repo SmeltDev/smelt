@@ -113,6 +113,7 @@ const (
 	EventTurnAttempt
 	EventNoPriorWork // the work already there is empty; the request is implemented
 	EventSynced      // a base was merged between rounds; Round, Sync
+	EventSyncDropped // a queued sync was dropped when the run ended; Round, Sync
 )
 
 // Event reports progress through the loop.
