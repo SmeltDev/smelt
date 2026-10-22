@@ -12,14 +12,13 @@ import (
 	"github.com/smeltdev/smelt/internal/review"
 )
 
-// syncedProject is a project whose origin is reached through a GitHub URL, as
-// the sidecar pool needs, and whose fetches still land on a local bare repo.
-func syncedProject(t *testing.T) (root string) {
+// syncedProject supplies the GitHub URL the sidecar pool needs for setup,
+// and a local bare remote to use once the run starts syncing.
+func syncedProject(t *testing.T) (root, origin string) {
 	t.Helper()
-	root, origin, _ := updateProject(t)
+	root, origin, _ = updateProject(t)
 	gitOutput(t, root, "remote", "set-url", "origin", "https://github.com/o/r.git")
-	gitOutput(t, root, "config", "url."+origin+".insteadOf", "https://github.com/o/r.git")
-	return root
+	return root, origin
 }
 
 // A sync queued while a run is going is applied by Run at the end of the
@@ -29,7 +28,7 @@ func TestRunAppliesAQueuedSyncBetweenRounds(t *testing.T) {
 	skipWithoutTools(t)
 	t.Setenv(config.EnvHome, t.TempDir())
 	ctx := context.Background()
-	root := syncedProject(t)
+	root, origin := syncedProject(t)
 	home := t.TempDir()
 	installFakeClaude(t, home, "if [ -f other.go ]; then echo 'package main' > b.go; else echo 'package main' > a.go; fi\n"+streamOK)
 	backend := &localBackend{dir: t.TempDir()}
@@ -45,6 +44,7 @@ func TestRunAppliesAQueuedSyncBetweenRounds(t *testing.T) {
 			if e.Kind != EventImplementing || e.Round != 1 {
 				return
 			}
+			gitOutput(t, root, "remote", "set-url", "origin", origin)
 			landOnMain(t, root, "other.go", "package main\n")
 			_, err := queue.Enqueue("main")
 			assert.NilError(t, err)
@@ -72,7 +72,7 @@ func TestRunAppliesAQueuedSyncBetweenRounds(t *testing.T) {
 func TestRunSavesTheSyncsItDropped(t *testing.T) {
 	skipWithoutTools(t)
 	t.Setenv(config.EnvHome, t.TempDir())
-	root := syncedProject(t)
+	root, _ := syncedProject(t)
 	home := t.TempDir()
 	installFakeClaude(t, home, "echo 'package main' > a.go\n"+streamOK)
 	backend := &localBackend{dir: t.TempDir()}

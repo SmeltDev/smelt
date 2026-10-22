@@ -267,6 +267,9 @@ func TestSyncQueue(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, first, again)
 	assert.Equal(t, len(q.Snapshot()), 1)
+	_, err = q.Enqueue("release")
+	assert.ErrorContains(t, err, "a sync of main is already queued")
+	assert.DeepEqual(t, q.Snapshot(), []Sync{first})
 
 	got := q.Close()
 	assert.DeepEqual(t, got, []Sync{{Base: "main", State: SyncDropped, Reason: "the run ended before the next round"}})

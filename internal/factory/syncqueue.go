@@ -2,6 +2,7 @@ package factory
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -52,7 +53,8 @@ type SyncQueue struct {
 }
 
 // Enqueue asks for base to be merged at the end of the current round. Asking
-// again for a base that is still waiting changes nothing.
+// again for a base that is still waiting changes nothing. A different base
+// must wait until the pending sync has been applied.
 func (q *SyncQueue) Enqueue(base string) (Sync, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -60,8 +62,11 @@ func (q *SyncQueue) Enqueue(base string) (Sync, error) {
 		return Sync{}, ErrSyncsClosed
 	}
 	for _, s := range q.syncs {
-		if s.State == SyncQueued && s.Base == base {
-			return s, nil
+		if s.State == SyncQueued {
+			if s.Base == base {
+				return s, nil
+			}
+			return Sync{}, fmt.Errorf("a sync of %s is already queued; wait for it before syncing %s", s.Base, base)
 		}
 	}
 	s := Sync{Base: base, State: SyncQueued}
