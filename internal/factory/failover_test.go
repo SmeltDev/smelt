@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"gotest.tools/v3/assert"
+
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/harness/codex"
-	"gotest.tools/v3/assert"
 )
 
 func failoverCandidates() []Candidate {

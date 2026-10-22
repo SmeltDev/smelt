@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smeltdev/smelt/internal/review"
 	"gotest.tools/v3/assert"
+
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 func TestBuildHandoffContainsContextWithoutDiff(t *testing.T) {
