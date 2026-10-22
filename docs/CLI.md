@@ -183,7 +183,7 @@ smelt
 │   ├── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
 │       --plan <file>               # Read the prompt from a file (usually a markdown spec)
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
-│       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
+│       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 10)
 │       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
 │       --integrate                 # With --from: check the finished branch against the whole spec (the prompt) and fix only what fails
 │       --against <ref>             # With --integrate: what the branch is compared with (default: the default branch)
@@ -419,7 +419,7 @@ smelt
 - **`factory build` takes defaults from the `factory` section of `.smelt/config.json`.**
   `{"factory": {"backend": "docker", "image": "smelt-sandbox:local", "maxAttempts": 5, "log": true}}`.
   Precedence, highest first: an explicitly set flag, then `factory.*`, then the built-in default
-  (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
+  (circleci, 10 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
 - **A round is plan → implement → gates → reviews.** Before round 1 the implementer writes a plan

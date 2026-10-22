@@ -120,6 +120,18 @@ func TestLoopStopsWhenAttemptsRunOut(t *testing.T) {
 	assert.Equal(t, len(steps.prompts), 2)
 }
 
+// builtInAttempts mirrors the CLI's default round limit.
+const builtInAttempts = 10
+
+func TestLoopStopsBeforeTheDefaultLimitWhenARoundChangesNothing(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1), change(1)}, checks: [][]Check{{fail}}}
+	out, err := Loop{Attempts: builtInAttempts}.Run(context.Background(), steps, "p")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultStuck)
+	assert.Assert(t, out.Rounds < builtInAttempts, "rounds: %d", out.Rounds)
+	assert.Equal(t, steps.checked, 1)
+}
+
 func TestLoopStopsWhenImplementerChangesNothing(t *testing.T) {
 	steps := &fakeSteps{changes: []Change{change(1), change(1)}, checks: [][]Check{{fail}}}
 	out, err := Loop{Attempts: 5}.Run(context.Background(), steps, "p")

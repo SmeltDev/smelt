@@ -325,9 +325,9 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 		wantGuidance string
 		wantAttempts int
 	}{
-		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 3},
+		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: defaultFactoryAttempts},
 		{name: "by branch, with guidance", args: []string{"--continue", "smelt/add-a-verbose-flag/run-0", "you may update the test"},
-			wantGuidance: "you may update the test", wantAttempts: 3},
+			wantGuidance: "you may update the test", wantAttempts: defaultFactoryAttempts},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project := factoryProject(t)

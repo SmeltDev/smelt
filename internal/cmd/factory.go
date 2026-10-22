@@ -288,7 +288,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 		},
 	}
 
-	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation (default: factory.maxAttempts from config, else 3)")
+	cmd.Flags().IntVar(&attempts, "max-attempts", defaultFactoryAttempts, fmt.Sprintf("maximum rounds of review and validation (default: factory.maxAttempts from config, else %d)", defaultFactoryAttempts))
 	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
 	cmd.Flags().StringVar(&from, "from", "", "start from this branch or commit (e.g. epic/x, origin/epic/x, a SHA) instead of your files; your uncommitted changes are left out and your checkout is not touched")
 	cmd.Flags().BoolVar(&integrate, "integrate", false, "check the finished work on --from against the whole spec in the prompt and fix only what fails: one broad review, one fix turn, one focused re-check")
