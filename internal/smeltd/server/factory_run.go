@@ -501,8 +501,8 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt:
-		// Recorded above.
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt, factory.EventSyncDropped:
+		// Recorded above, or kept by the sync queue.
 	case factory.EventSynced:
 		r.syncedLocked(ev)
 	case factory.EventImplementing:
