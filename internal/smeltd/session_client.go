@@ -136,3 +136,11 @@ func ListSessions(root string) ([]Session, error) {
 func CancelSession(id string) error {
 	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }
+
+// QueueSync asks the live session id to merge the remote-tracking base into
+// its branch at the end of the current round, and returns the queued sync.
+func QueueSync(id, base string) (BaseSync, error) {
+	var queued BaseSync
+	err := sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/sync", SyncRequest{Base: base}, &queued)
+	return queued, err
+}

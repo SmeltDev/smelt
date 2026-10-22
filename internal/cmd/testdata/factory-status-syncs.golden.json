@@ -1,0 +1,17 @@
+[
+  {
+    "base": "main",
+    "state": "done",
+    "round": 1,
+    "commit": "abc123",
+    "files": 2,
+    "conflicts": [
+      "a.txt"
+    ]
+  },
+  {
+    "base": "main",
+    "state": "dropped",
+    "reason": "the run ended before the next round"
+  }
+]

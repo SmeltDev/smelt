@@ -233,6 +233,9 @@ func printStatus(streams iostream.Streams, detail smeltd.SessionDetail, notes []
 		streams.Printf("  Error: %s\n", detail.Error)
 	}
 	streams.Printf("  Cost: $%.2f over %d implementer turn(s)\n", cost, turns)
+	for _, sync := range f.Syncs {
+		streams.Printf("  Sync of %s: %s\n", sync.Base, syncSummary(sync))
+	}
 	return nil
 }
 
@@ -381,4 +384,16 @@ func publishableRun(rec factory.Record) (*smeltd.FactoryRun, error) {
 func dirExists(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && info.IsDir()
+}
+
+// syncSummary says where a base sync stands, in a few words.
+func syncSummary(s smeltd.BaseSync) string {
+	switch s.State {
+	case smeltd.SyncDone:
+		return fmt.Sprintf("done after round %d (%d files, %d conflicts)", s.Round, s.Files, len(s.Conflicts))
+	case smeltd.SyncDropped:
+		return "dropped: " + s.Reason
+	default:
+		return s.State + " for the end of the round"
+	}
 }

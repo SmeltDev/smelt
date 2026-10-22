@@ -72,6 +72,8 @@ func (q *Quality) MeasureBaseline(ctx context.Context, rev string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.Baseline = rev
+	// A baseline kept from an earlier commit must not stand in for this one.
+	q.base = nil
 	m, err := q.measurer().Measure(ctx, "")
 	if err != nil {
 		q.warn(fmt.Sprintf("the baseline quality was not measured: %v (it is tried again after the first round)", err))

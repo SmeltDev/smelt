@@ -21,11 +21,13 @@ const maxRequestBytes = 64 * 1024
 //	GET  /factory[?root=<path>] list sessions (newest first), optionally one project's
 //	GET  /factory/{id}         one session with its review findings
 //	POST /factory/{id}/cancel  stop a session
+//	POST /factory/{id}/sync    queue a base merge for the end of the current round
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory", d.handleFactoryStart)
 	mux.HandleFunc("GET /factory", d.handleSessionList)
 	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
+	mux.HandleFunc("POST /factory/{id}/sync", d.handleSessionSync)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -102,4 +104,27 @@ func (d *daemon) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 	// Cancelling is idempotent: a session that already ended is not an error, so
 	// a viewer that raced the session's own end gets the same answer.
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (d *daemon) handleSessionSync(w http.ResponseWriter, r *http.Request) {
+	entry := d.sessions.get(r.PathValue("id"))
+	if entry == nil {
+		http.Error(w, "no such session", http.StatusNotFound)
+		return
+	}
+	var req smeltd.SyncRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Base == "" {
+		http.Error(w, "base required", http.StatusBadRequest)
+		return
+	}
+	queued, err := entry.queueSync(req.Base)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, queued)
 }

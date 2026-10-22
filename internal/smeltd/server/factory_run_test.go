@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 // newFactoryDaemon builds a daemon tracking a project with two review prompts
@@ -965,6 +967,95 @@ func TestFactorySessionRecordsTheImplementersToolCalls(t *testing.T) {
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 	assert.DeepEqual(t, detail.Factory.Activity, []smeltd.ToolActivity{{Round: 1, Tool: "Bash", Detail: "ls /x", Outcome: "ok"}})
+}
+
+func TestFactorySessionQueuesASyncUntilTheRunEnds(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		close(started)
+		<-release
+		rep, err := run(ctx, opts)
+		// factory.Run closes the queue when its loop ends.
+		opts.Syncs.Close()
+		return rep, err
+	})
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	<-started
+	entry := d.sessions.get(sess.ID)
+
+	queued, err := entry.queueSync("main")
+	assert.NilError(t, err)
+	assert.Equal(t, queued.Base, "main")
+	assert.Equal(t, queued.State, smeltd.SyncQueued)
+	live := entry.detail().Factory.Syncs
+	assert.Equal(t, len(live), 1)
+	assert.Equal(t, live[0].State, smeltd.SyncQueued)
+
+	close(release)
+	ended := waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, len(ended.Factory.Syncs), 1)
+	assert.Equal(t, ended.Factory.Syncs[0].State, smeltd.SyncDropped)
+	assert.Assert(t, ended.Factory.Syncs[0].Reason != "")
+
+	_, err = entry.queueSync("main")
+	assert.ErrorIs(t, err, factory.ErrSyncsClosed)
+}
+
+// Completed syncs must survive the daemon's status snapshot and JSON encoding.
+func TestFactoryStatusJSONIncludesCompletedSync(t *testing.T) {
+	root := gitrepo.SetupGitRepo(t, "o", "r")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = root
+		cmd.Env = gitrepo.GitEnv(root)
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	git("branch", "-M", "main")
+	// A local origin keeps this fixture independent of network services.
+	git("remote", "set-url", "origin", root)
+	tip := git("rev-parse", "HEAD")
+	git("branch", "-m", "smelt/run-1")
+	git("branch", "main", tip)
+	store := newSessionStore(t.Context())
+	entry, _, err := store.add(smeltd.Session{ProjectRoot: root, Factory: &smeltd.FactoryRun{RunID: "run-1"}}, 1)
+	assert.NilError(t, err)
+	entry.syncs = &factory.SyncQueue{}
+	_, err = entry.queueSync("main")
+	assert.NilError(t, err)
+	rec := factory.Record{RunID: "run-1", Worktree: root, Branch: "smelt/run-1", Baseline: tip, Head: tip}
+	wt := factory.Worktree{Path: root, Branch: rec.Branch, Baseline: tip}
+	steps := &factory.Sidecars{Base: &factory.BaseSync{Queue: entry.syncs, Root: root, Rec: &rec, Wt: &wt}}
+	synced, err := steps.SyncBase(t.Context(), 2)
+	assert.NilError(t, err)
+	assert.Equal(t, synced.State, factory.SyncDone)
+	b, err := json.Marshal(entry.detail())
+	assert.NilError(t, err)
+	var status smeltd.SessionDetail
+	assert.NilError(t, json.Unmarshal(b, &status))
+	assert.DeepEqual(t, status.Factory.Syncs, []smeltd.BaseSync{{Base: "main", State: smeltd.SyncDone, Round: 2, Commit: tip}})
+}
+
+func TestFactoryRecorderSyncMovesLiveAndFinishedBaseline(t *testing.T) {
+	store := newSessionStore(t.Context())
+	entry, _, err := store.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{Baseline: "old"}}, 1)
+	assert.NilError(t, err)
+	r := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+	wt := factory.Worktree{Baseline: "new", UpdatedFrom: &factory.UpdatedFrom{Branch: "main", Commit: "tip"}}
+	r.event(factory.Event{Kind: factory.EventSynced, Round: 1, Sync: &factory.Sync{State: factory.SyncDone}, Worktree: &wt})
+	for _, finished := range []bool{false, true} {
+		if finished {
+			r.finish(factory.Report{Started: true, Worktree: wt}, nil)
+		}
+		f := entry.detail().Factory
+		assert.Equal(t, f.Baseline, "new")
+		assert.DeepEqual(t, f.UpdatedFrom, &smeltd.UpdatedFrom{Branch: "main", Commit: "tip"})
+	}
 }
 
 func TestFactoryRunThatStaysAtCapacityEndsUnavailableWithAStop(t *testing.T) {

@@ -303,3 +303,23 @@ func TestLogShowsHowToolCallsEnded(t *testing.T) {
 		"",
 	}, "\n"))
 }
+
+func TestLogRecordsASyncAtTheEndOfARound(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	lg.event(Event{Kind: EventSynced, Round: 2, Sync: &Sync{Base: "main", State: SyncDone, Round: 2, Commit: sha, Files: 3, Conflicts: []string{"a.go"}}})
+	lg.close(Report{}, nil)
+
+	want := "round 2: synced main at " + shortSHA(sha) + " (3 files, 1 conflicts)"
+	assert.Assert(t, strings.Contains(readLog(t, path), want), readLog(t, path))
+}
+
+func TestLogRecordsSyncDroppedWhenRunEnds(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	queue := &SyncQueue{}
+	_, err := queue.Enqueue("main")
+	assert.NilError(t, err)
+	reportDroppedSyncs(queue.Close(), 1, lg.event)
+	lg.close(Report{}, nil)
+	assert.Assert(t, strings.Contains(readLog(t, path), "round 1: sync of main dropped: the run ended before the next round"))
+}

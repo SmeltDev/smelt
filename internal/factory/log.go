@@ -155,15 +155,8 @@ func (l *runLog) pack(p Pack) {
 
 func (l *runLog) event(e Event) {
 	switch e.Kind {
-	case EventHarnessSwap:
-		if e.Swap != nil {
-			l.line("harness", e.Swap.String()+" · turn "+e.Swap.Turn)
-		}
-	case EventTurnAttempt:
-		if e.Attempt != nil && e.Attempt.Error != "" {
-			l.line("harness", fmt.Sprintf("round %d %s on %s (%s): %s", e.Attempt.Round, e.Attempt.Turn, e.Attempt.Harness, e.Attempt.Kind, e.Attempt.Error))
-		}
-
+	case EventHarnessSwap, EventTurnAttempt:
+		l.harnessEvent(e)
 	case EventPlanning:
 		l.line("step", "planning")
 	case EventPlanReviewed:
@@ -175,16 +168,37 @@ func (l *runLog) event(e Event) {
 	case EventImplemented:
 		l.implemented(e)
 	case EventCollected:
-		if e.Change.Empty() {
-			l.line("info", fmt.Sprintf("round %d: no changes", e.Round))
-			return
-		}
-		l.line("info", fmt.Sprintf("round %d: change %s: %s", e.Round, shortHash(e.Change.Fingerprint), e.Change.Stat))
+		l.collected(e)
 	case EventChecking:
 		l.line("step", fmt.Sprintf("round %d: reviewing and validating", e.Round))
 	case EventChecked:
 		l.checked(e)
+	case EventSynced, EventSyncDropped:
+		l.synced(e)
 	}
+}
+
+func (l *runLog) harnessEvent(e Event) {
+	if e.Kind == EventHarnessSwap && e.Swap != nil {
+		l.line("harness", e.Swap.String()+" · turn "+e.Swap.Turn)
+	}
+	if e.Kind == EventTurnAttempt && e.Attempt != nil && e.Attempt.Error != "" {
+		l.line("harness", fmt.Sprintf("round %d %s on %s (%s): %s", e.Attempt.Round, e.Attempt.Turn, e.Attempt.Harness, e.Attempt.Kind, e.Attempt.Error))
+	}
+}
+
+func (l *runLog) synced(e Event) {
+	if e.Sync != nil {
+		l.line("info", fmt.Sprintf("round %d: %s", e.Round, e.Sync.Line()))
+	}
+}
+
+func (l *runLog) collected(e Event) {
+	if e.Change.Empty() {
+		l.line("info", fmt.Sprintf("round %d: no changes", e.Round))
+		return
+	}
+	l.line("info", fmt.Sprintf("round %d: change %s: %s", e.Round, shortHash(e.Change.Fingerprint), e.Change.Stat))
 }
 
 func (l *runLog) checked(e Event) {

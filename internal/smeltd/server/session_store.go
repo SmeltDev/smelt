@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
@@ -45,6 +47,45 @@ type sessionEntry struct {
 	// consequences.
 	loopNote   string
 	loopFailed bool
+	// syncs takes the base merges asked for while a factory run is live; nil for
+	// a session that is not a factory run.
+	syncs *factory.SyncQueue
+}
+
+// queueSync asks the run to merge base at the end of its current round.
+func (e *sessionEntry) queueSync(base string) (smeltd.BaseSync, error) {
+	e.mu.Lock()
+	syncs := e.syncs
+	e.mu.Unlock()
+	if syncs == nil {
+		return smeltd.BaseSync{}, errors.New("the session takes no base syncs")
+	}
+	select {
+	case <-e.done:
+		return smeltd.BaseSync{}, factory.ErrSyncsClosed
+	default:
+	}
+	s, err := syncs.Enqueue(base)
+	return wireSync(s), err
+}
+
+func wireSync(s factory.Sync) smeltd.BaseSync {
+	return smeltd.BaseSync{Base: s.Base, State: string(s.State), Round: s.Round, Commit: s.Commit,
+		Files: s.Files, Conflicts: s.Conflicts, Reason: s.Reason}
+}
+
+// withSyncsLocked returns s with the run's syncs, which the queue owns, filled in.
+func (e *sessionEntry) withSyncsLocked(s smeltd.Session) smeltd.Session {
+	if e.syncs == nil || s.Factory == nil {
+		return s
+	}
+	f := *s.Factory
+	f.Syncs = nil
+	for _, q := range e.syncs.Snapshot() {
+		f.Syncs = append(f.Syncs, wireSync(q))
+	}
+	s.Factory = &f
+	return s
 }
 
 func cloneSession(s smeltd.Session) smeltd.Session {
@@ -84,13 +125,13 @@ func cloneSession(s smeltd.Session) smeltd.Session {
 func (e *sessionEntry) snapshot() smeltd.Session {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return cloneSession(e.s)
+	return e.withSyncsLocked(cloneSession(e.s))
 }
 
 func (e *sessionEntry) detail() smeltd.SessionDetail {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	d := smeltd.SessionDetail{Session: cloneSession(e.s), Details: make([]smeltd.RoundDetail, len(e.details))}
+	d := smeltd.SessionDetail{Session: e.withSyncsLocked(cloneSession(e.s)), Details: make([]smeltd.RoundDetail, len(e.details))}
 	for i, rd := range e.details {
 		d.Details[i] = smeltd.RoundDetail{Number: rd.Number, Results: slices.Clone(rd.Results)}
 	}

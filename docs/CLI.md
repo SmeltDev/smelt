@@ -1275,6 +1275,28 @@ active.
   conflict marker line (`git grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)'`), so a
   half-resolved merge never passes.
 
+#### Merging into a live run: `--next-round`
+
+`smelt factory update <run-id> --next-round [--base BRANCH] [--json]` on a run that is
+still active queues the merge instead of refusing. Without the flag an active run is still
+refused. The merge is applied at the end of the current round, after its checks and before
+the next implementer turn: the work is set aside, `origin/<base>` is merged the way a
+finished run's update does, the implementer and the reviewers are put on the new baseline
+(so the next round's change excludes the base's files), and the work is put back.
+
+- **Clean merge:** it lands; the next prompt says which base the branch was updated from
+  and that those files are not part of the request.
+- **Conflicts:** committed with markers; the next prompt lists the files, and the `markers`
+  check holds until they are resolved. Work that does not apply on the merged branch is
+  left with markers in the same way.
+- The round log gets `round N: synced main at <sha> (k files, m conflicts)`.
+- `smelt factory status [--json]` shows each sync as `{"base","state","round","commit",
+  "files","conflicts","reason"}`, where `state` is `queued`, `done` or `dropped`.
+- A run that ends before a round boundary (it passed, failed or was cancelled in that
+  round) drops the queued sync (`state: "dropped"`, with the reason); status says so.
+  Asking again for a base that is still queued changes nothing.
+- `--next-round --json` prints the queued sync.
+
 Usage errors (an unknown command, the wrong number of arguments) exit with
 `ExitBadArgs` and cobra's own message.
 

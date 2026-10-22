@@ -222,6 +222,14 @@ func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*
 // steps before Prepare runs.
 func newSidecarsFixtureWith(t *testing.T, wrap func(review.Execer) review.Execer, configure func(*Sidecars)) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
 	t.Helper()
+	return newSidecarsFixtureRelaying(t, wrap, configure, func(dir string) *Relay { return newRelay(t, dir) })
+}
+
+// newSidecarsFixtureRelaying is newSidecarsFixtureWith with the relay that
+// carries files between the run's worktree, at dir, and the sidecars made by
+// relay.
+func newSidecarsFixtureRelaying(t *testing.T, wrap func(review.Execer) review.Execer, configure func(*Sidecars), relay func(dir string) *Relay) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
+	t.Helper()
 	ctx := context.Background()
 	root := setupRepo(t)
 	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
@@ -260,7 +268,7 @@ func newSidecarsFixtureWith(t *testing.T, wrap func(review.Execer) review.Execer
 		},
 		Release:   func(e *sidecar.PoolEntry) { pool <- e },
 		Reviewers: reviewers,
-		Relay:     newRelay(t, wt.Path),
+		Relay:     relay(wt.Path),
 		Request:   "make the requested change",
 		Prompts:   []review.Prompt{{Name: "bugs", Body: "find bugs"}, {Name: "style", Body: "check style"}},
 		Review: review.Options{

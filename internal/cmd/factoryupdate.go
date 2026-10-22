@@ -17,9 +17,9 @@ import (
 
 func newFactoryUpdateCmd() *cobra.Command {
 	var base string
-	var push, jsonOut bool
+	var push, jsonOut, nextRound bool
 	cmd := &cobra.Command{
-		Use:   "update <run-id> [--base BRANCH] [--push] [--json]",
+		Use:   "update <run-id> [--base BRANCH] [--next-round | --push] [--json]",
 		Short: "Merge a run's base branch into the run's branch",
 		Long: `Bring the branch of a finished factory run up to date with its base branch,
 usually main, by merging origin/<base> into it in the run's worktree. The run is
@@ -31,40 +31,93 @@ markers left in the files, and the files are listed; resolve them with
 'smelt factory build --continue <run-id> "..."', which has the implementer
 remove the markers. The 'markers' check fails while any are left.
 
+A run that is still going is refused, unless --next-round is given: that queues
+the merge for the end of the current round, before the next implementer turn,
+and returns at once. A clean merge lands; a conflict is committed with its
+markers, the next round's prompt lists the files, and the 'markers' check holds
+until they are resolved. The run's baseline moves, so its change excludes what
+the base brought in. A run that ends before the round does drops the sync;
+'smelt factory status' shows queued, done and dropped syncs.
+
 Nothing is pushed unless --push is given and the merge was clean. Only smelt/*
 branches are ever pushed, never forced.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFactoryUpdate(cmd.Context(), iostream.FromCmd(cmd), args[0], base, push, jsonOut)
+			if nextRound && push {
+				return newUserError("--push cannot be combined with --next-round.").
+					withSuggestion("Push after the run ends: smelt factory update <run-id> --push").withoutDetail()
+			}
+			return runFactoryUpdate(cmd.Context(), iostream.FromCmd(cmd), args[0], updateFlags{base: base, push: push, json: jsonOut, nextRound: nextRound})
 		},
 	}
 	cmd.Flags().StringVar(&base, "base", "", "branch to merge (default: the branch the run started from, else the default branch)")
 	cmd.Flags().BoolVar(&push, "push", false, "push the run's branch after a clean update")
+	cmd.Flags().BoolVar(&nextRound, "next-round", false, "queue the merge for the end of the current round of a run that is still going")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print the result as JSON")
 	return cmd
 }
 
-func runFactoryUpdate(ctx context.Context, streams iostream.Streams, arg, base string, push, jsonOut bool) error {
+func runFactoryUpdate(ctx context.Context, streams iostream.Streams, arg string, flags updateFlags) error {
 	root, err := sessionProjectRoot(ctx)
 	if err != nil {
 		return err
 	}
 	runID := factory.ParseRunID(arg)
-	if err := refuseActiveRun(runSession(root, runID), runID); err != nil {
+	session := runSession(root, runID)
+	if flags.nextRound && session != nil && !session.State.Finished() {
+		return queueNextRound(streams, session, runID, flags, smeltd.QueueSync)
+	}
+	if err := refuseActiveRun(session, runID); err != nil {
 		return err
 	}
 	rec, err := loadRunRecord(root, runID)
 	if err != nil {
 		return err
 	}
-	return updateRun(ctx, streams, root, rec, updateFlags{base: base, push: push, json: jsonOut})
+	return updateRun(ctx, streams, root, rec, flags)
 }
 
 // updateFlags are the options of `smelt factory update`.
 type updateFlags struct {
 	base       string
 	push, json bool
+	// nextRound queues the merge for the end of the current round of a live run.
+	nextRound bool
+}
+
+// queuedSync is what `smelt factory update --next-round --json` prints.
+type queuedSync struct {
+	RunID  string `json:"run_id"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	State  string `json:"state"`
+}
+
+// queueNextRound asks the live run in session to merge its base at the end of
+// the current round. queue is how the request reaches the daemon.
+func queueNextRound(streams iostream.Streams, session *smeltd.Session, runID string, flags updateFlags, queue func(id, base string) (smeltd.BaseSync, error)) error {
+	if session == nil || session.State.Finished() || session.Factory == nil {
+		return newUserError(fmt.Sprintf("Run %s is not running, so there is no next round to merge at.", runID)).
+			withSuggestion("Update its branch now with: smelt factory update " + runID).
+			withoutDetail()
+	}
+	f := session.Factory
+	base := factory.ChooseBase(flags.base, f.BaseBranch, f.DefaultBranch)
+	if base == "" {
+		return newUserError("Cannot tell which branch to merge: the run recorded no base branch.").
+			withSuggestion("Pass --base BRANCH").withoutDetail()
+	}
+	queued, err := queue(session.ID, base)
+	if err != nil {
+		return sessionError(err)
+	}
+	out := queuedSync{RunID: f.RunID, Branch: f.Branch, Base: queued.Base, State: queued.State}
+	if flags.json {
+		return iostream.PrintJSON(streams.Out, out)
+	}
+	streams.Printf("Queued %s/%s to be merged into %s at the end of the current round.\n", factory.DefaultRemote, out.Base, out.Branch)
+	return nil
 }
 
 // refuseActiveRun is the error for a run the daemon is still running, whose

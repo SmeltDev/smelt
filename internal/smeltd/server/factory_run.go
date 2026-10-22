@@ -258,6 +258,10 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Log:                     req.Log,
 		Verbose:                 req.Verbose,
 	}
+	opts.Syncs = &factory.SyncQueue{}
+	entry.mu.Lock()
+	entry.syncs = opts.Syncs
+	entry.mu.Unlock()
 	go d.executeFactory(ctx, entry, opts)
 	return entry.snapshot(), nil
 }
@@ -498,26 +502,16 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt:
-		// Recorded above.
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork, factory.EventHarnessSwap, factory.EventTurnAttempt, factory.EventSyncDropped:
+		// Recorded above, or kept by the sync queue.
+	case factory.EventSynced:
+		r.syncedLocked(ev)
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
 		r.activityRound = ev.Round
 		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning, Fix: r.integrate}
 	case factory.EventImplemented:
-		if impl := round.Implement; impl != nil {
-			impl.State = smeltd.ImplementApplied
-			impl.DurationMS = ev.Turn.Duration.Milliseconds()
-			impl.CostUSD = ev.Turn.CostUSD
-			impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
-			round.Harness = string(ev.Turn.Harness)
-			impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
-			impl.ContextPeak, impl.ModelCalls = ev.Turn.ContextPeak, ev.Turn.ModelCalls
-			impl.RateLimit = ev.Turn.RateLimit
-			r.recordHarnessRateLimit(ev.Turn.Harness, ev.Turn.RateLimit)
-			impl.Summary = ev.Turn.Summary
-			impl.Unproven = ev.Turn.Unproven
-		}
+		r.implementedLocked(round, ev)
 	case factory.EventCollected:
 		if impl := round.Implement; impl != nil {
 			impl.Stat = ev.Change.Stat
@@ -529,6 +523,30 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		round.State = smeltd.RoundChecking
 	case factory.EventChecked:
 		r.checkedLocked(ridx, ev)
+	}
+}
+
+// syncedLocked moves the session baseline after a successful between-round sync.
+func (r *factoryRecorder) syncedLocked(ev factory.Event) {
+	if ev.Worktree != nil && ev.Sync != nil && ev.Sync.State == factory.SyncDone {
+		updateFactoryBaseline(r.entry.s.Factory, *ev.Worktree)
+	}
+}
+
+// implementedLocked records the completed implementer turn. The entry lock is held.
+func (r *factoryRecorder) implementedLocked(round *smeltd.Round, ev factory.Event) {
+	if impl := round.Implement; impl != nil {
+		impl.State = smeltd.ImplementApplied
+		impl.DurationMS = ev.Turn.Duration.Milliseconds()
+		impl.CostUSD = ev.Turn.CostUSD
+		impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
+		round.Harness = string(ev.Turn.Harness)
+		impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
+		impl.ContextPeak, impl.ModelCalls = ev.Turn.ContextPeak, ev.Turn.ModelCalls
+		impl.RateLimit = ev.Turn.RateLimit
+		r.recordHarnessRateLimit(ev.Turn.Harness, ev.Turn.RateLimit)
+		impl.Summary = ev.Turn.Summary
+		impl.Unproven = ev.Turn.Unproven
 	}
 }
 
@@ -756,6 +774,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	f.KeptSidecars = rep.KeptSidecars
 	f.Log = rep.Log
 	if rep.Started {
+		updateFactoryBaseline(f, rep.Worktree)
 		f.Timing = wireTiming(rep.Timing)
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
@@ -971,4 +990,14 @@ func (r *factoryRecorder) beforeRound(ev factory.Event) bool {
 		return true
 	}
 	return false
+}
+
+// updateFactoryBaseline keeps live status consistent with the saved record.
+func updateFactoryBaseline(f *smeltd.FactoryRun, wt factory.Worktree) {
+	if wt.Baseline != "" {
+		f.Baseline = wt.Baseline
+	}
+	if wt.UpdatedFrom != nil {
+		f.UpdatedFrom = &smeltd.UpdatedFrom{Branch: wt.UpdatedFrom.Branch, Commit: wt.UpdatedFrom.Commit}
+	}
 }

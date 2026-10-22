@@ -62,67 +62,100 @@ func UpdateBranch(ctx context.Context, root string, rec Record, o UpdateOptions)
 	if err := checkUpdatable(ctx, git, rec); err != nil {
 		return rep, err
 	}
-	if out, err := git.CombinedOutput(ctx, "fetch", "--quiet", DefaultRemote, base); err != nil {
-		return rep, fmt.Errorf("fetch %s from %s: %w: %s", base, DefaultRemote, err, strings.TrimSpace(string(out)))
-	}
-	target := DefaultRemote + "/" + base
-	count, err := git.Output(ctx, "rev-list", "--count", "HEAD.."+target)
+	merged, err := mergeBase(ctx, git, rec.Branch, base)
+	rep.MergedCommits = merged.Commits
 	if err != nil {
-		return rep, fmt.Errorf("count the commits of %s to merge: %w", target, err)
+		return rep, err
 	}
-	if rep.MergedCommits, err = strconv.Atoi(strings.TrimSpace(string(count))); err != nil {
-		return rep, fmt.Errorf("read the commit count of %s: %w", target, err)
-	}
-	if rep.MergedCommits == 0 {
+	switch {
+	case merged.Commits == 0:
 		rep.Result = UpdateUpToDate
-		rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
+	case len(merged.Conflicts) > 0:
+		rep.Result, rep.Conflicts = UpdateConflicts, merged.Conflicts
+		rec.Conflicts = merged.Conflicts
+	default:
+		rep.Result = UpdateClean
+	}
+	moved, err := moveBaseline(ctx, git, rec, base, merged.Target)
+	if err != nil {
 		return rep, err
 	}
+	if moved.Baseline != rec.Baseline {
+		rep.Baseline = moved.Baseline
+	}
+	if moved.Baseline != rec.Baseline || len(moved.Conflicts) > 0 {
+		err = saveUpdated(root, moved)
+	}
+	return rep, err
+}
 
-	out, mergeErr := git.CombinedOutput(ctx, "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "--no-verify", target)
+// baseMerge is what mergeBase did in the worktree.
+type baseMerge struct {
+	// Target is the remote-tracking ref that was merged.
+	Target string
+	// Commits is how many commits of Target the branch lacked; 0 means nothing
+	// was merged.
+	Commits int
+	// Conflicts are the files committed with markers in them.
+	Conflicts []string
+}
+
+// mergeBase fetches base and merges it into the branch checked out in git's
+// worktree, which must be clean. A conflicted merge is committed with its
+// markers in place.
+func mergeBase(ctx context.Context, git gitexec.Runner, branch, base string) (baseMerge, error) {
+	var m baseMerge
+	if out, err := git.CombinedOutput(ctx, "fetch", "--quiet", DefaultRemote, base); err != nil {
+		return m, fmt.Errorf("fetch %s from %s: %w: %s", base, DefaultRemote, err, strings.TrimSpace(string(out)))
+	}
+	m.Target = DefaultRemote + "/" + base
+	count, err := git.Output(ctx, "rev-list", "--count", "HEAD.."+m.Target)
+	if err != nil {
+		return m, fmt.Errorf("count the commits of %s to merge: %w", m.Target, err)
+	}
+	if m.Commits, err = strconv.Atoi(strings.TrimSpace(string(count))); err != nil {
+		return m, fmt.Errorf("read the commit count of %s: %w", m.Target, err)
+	}
+	if m.Commits == 0 {
+		return m, nil
+	}
+	out, mergeErr := git.CombinedOutput(ctx, "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "--no-verify", m.Target)
 	if mergeErr == nil {
-		rep.Result = UpdateClean
-		rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
-		return rep, err
+		return m, nil
 	}
 	conflicts, err := conflictedFiles(ctx, git)
 	if err != nil || len(conflicts) == 0 {
 		_ = git.Run(context.WithoutCancel(ctx), "merge", "--abort")
-		return rep, fmt.Errorf("merge %s into %s: %w: %s", target, rec.Branch, mergeErr, strings.TrimSpace(string(out)))
+		return m, fmt.Errorf("merge %s into %s: %w: %s", m.Target, branch, mergeErr, strings.TrimSpace(string(out)))
 	}
-	if err := commitConflicts(ctx, git, base, rec.Branch, conflicts); err != nil {
-		return rep, err
+	if err := commitConflicts(ctx, git, base, branch, conflicts); err != nil {
+		return m, err
 	}
-	rep.Result, rep.Conflicts = UpdateConflicts, conflicts
-	rec.Conflicts = conflicts
-	rep.Baseline, err = moveBaseline(ctx, git, root, rec, base, target)
-	return rep, err
+	m.Conflicts = conflicts
+	return m, nil
 }
 
-// moveBaseline records the merge base of the branch and target as the run's
+// moveBaseline returns rec with the merge base of the branch and target as its
 // baseline, so a continued run measures only its own work and not what the
-// base brought in, and saves rec. It returns the new baseline, "" when it is
-// the one rec already had (the branch was never behind a base that moved).
-func moveBaseline(ctx context.Context, git gitexec.Runner, root string, rec Record, base, target string) (string, error) {
+// base brought in. rec comes back unchanged when that is the baseline it
+// already had (the branch was never behind a base that moved).
+func moveBaseline(ctx context.Context, git gitexec.Runner, rec Record, base, target string) (Record, error) {
 	out, err := git.Output(ctx, "merge-base", "HEAD", target)
 	if err != nil {
-		return "", fmt.Errorf("find the merge base of %s and %s: %w", rec.Branch, target, err)
+		return rec, fmt.Errorf("find the merge base of %s and %s: %w", rec.Branch, target, err)
 	}
 	mergeBase := strings.TrimSpace(string(out))
 	// A base behind the baseline, such as one the run's unpushed start was ahead
 	// of, would move the baseline back and make that earlier work look new.
 	if mergeBase == rec.Baseline || git.Run(ctx, "merge-base", "--is-ancestor", rec.Baseline, mergeBase) != nil {
-		if len(rec.Conflicts) == 0 {
-			return "", nil
-		}
-		return "", saveUpdated(root, rec)
+		return rec, nil
 	}
 	if rec.OriginalBaseline == "" {
 		rec.OriginalBaseline = rec.Baseline
 	}
 	rec.Baseline = mergeBase
 	rec.UpdatedFrom = &UpdatedFrom{Branch: base, Commit: mergeBase}
-	return mergeBase, saveUpdated(root, rec)
+	return rec, nil
 }
 
 // checkUpdatable refuses a worktree the merge cannot safely run in: not on the

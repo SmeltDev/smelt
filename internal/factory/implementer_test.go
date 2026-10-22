@@ -43,8 +43,10 @@ func localExec(home string) review.Execer {
 		}
 		cmd.Stdout = emit(circleci.StreamStdout)
 		cmd.Stderr = emit(circleci.StreamStderr)
-		// A killed sh can leave a child holding the output pipes open.
-		cmd.WaitDelay = 100 * time.Millisecond
+		// A killed sh can leave a child holding the output pipes open. Allow
+		// time for successful commands' descendants to close them too, even
+		// under the load of the race-enabled suite.
+		cmd.WaitDelay = 2 * time.Second
 		err := cmd.Run()
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
