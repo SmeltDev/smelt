@@ -10,7 +10,7 @@ import (
 
 // defaultFactoryAttempts is how many rounds a factory run checks when neither
 // --max-attempts nor factory.maxAttempts says.
-const defaultFactoryAttempts = 3
+const defaultFactoryAttempts = 10
 
 // factorySettings are the `smelt factory build` settings that can come from
 // either a flag or the project config.

@@ -317,7 +317,7 @@ is committed and shared with your team:
   "factory": {
     "backend": "docker",
     "dockerfile": "Dockerfile.smelt",
-    "maxAttempts": 3,
+    "maxAttempts": 10,
     "log": true
   }
 }
@@ -330,7 +330,7 @@ is committed and shared with your team:
 | `image` | An image you manage yourself. It takes precedence over `dockerfile` and is never built by smelt. |
 | `harness` | `claude` or `codex`: the coding agent runs use. Unset means ask (and fail without a terminal). |
 | `models` | Per-agent default model, e.g. `{"claude": "opus", "codex": "gpt-5-codex"}`, used when `--model` is not given |
-| `maxAttempts` | Default number of rounds (built-in: 3) |
+| `maxAttempts` | Default number of rounds (built-in: 10) |
 | `plan` | `true` (the default) has the implementer write a plan, reviewed before it implements; `false` skips it, like `--no-plan` |
 | `gatesFirst` | `true` (the default) runs the validation commands before the reviews and skips the reviews of a round whose commands failed; `false` runs them side by side |
 | `quality` | The built-in quality check: `{"enabled": true, "maxFunctionComplexity": 15, "maxErosionRise": 1.0, "minCloneLines": 15, "command": "", "exclude": [], "include": [], "defaultExcludes": true}`. Every round measures erosion, complex functions and duplicated code, in any language, before and after the change; `enabled: false` turns it off. `command` replaces lizard (see below). |
