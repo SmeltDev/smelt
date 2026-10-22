@@ -358,6 +358,10 @@ func publishableRun(rec factory.Record) (*smeltd.FactoryRun, error) {
 		from := smeltd.FromRef(*rec.From)
 		f.From = &from
 	}
+	if rec.UpdatedFrom != nil {
+		u := smeltd.UpdatedFrom(*rec.UpdatedFrom)
+		f.UpdatedFrom = &u
+	}
 	if rec.Notes != nil {
 		n := smeltd.Notes(*rec.Notes)
 		f.Notes = &n

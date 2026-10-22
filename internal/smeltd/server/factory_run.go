@@ -420,6 +420,9 @@ func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
 	if wt.From != nil {
 		f.From = &smeltd.FromRef{Ref: wt.From.Ref, Commit: wt.From.Commit}
 	}
+	if wt.UpdatedFrom != nil {
+		f.UpdatedFrom = &smeltd.UpdatedFrom{Branch: wt.UpdatedFrom.Branch, Commit: wt.UpdatedFrom.Commit}
+	}
 	// The work is on the run's branch, not the one checked out.
 	e.s.Branch = wt.Branch
 }

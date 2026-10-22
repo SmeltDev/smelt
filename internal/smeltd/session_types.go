@@ -305,6 +305,9 @@ type FactoryRun struct {
 	// From is the ref the run was started from with --from, absent when it
 	// started from the user's files.
 	From *FromRef `json:"from,omitempty"`
+	// UpdatedFrom is the base the run's branch was updated from; Baseline is
+	// then the base's tip at that update. Absent for a run never updated.
+	UpdatedFrom *UpdatedFrom `json:"updated_from,omitempty"`
 	// Result is why the loop stopped, one of the Result values, once it has,
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
@@ -654,6 +657,13 @@ const (
 // FromRef is the ref a run was started from and the commit it resolved to.
 type FromRef struct {
 	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+}
+
+// UpdatedFrom is the base branch a run's branch was updated from and the
+// commit of it the branch contains.
+type UpdatedFrom struct {
+	Branch string `json:"branch"`
 	Commit string `json:"commit"`
 }
 

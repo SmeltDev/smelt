@@ -31,8 +31,15 @@ type Record struct {
 	Prompt   string `json:"prompt"`
 	Worktree string `json:"worktree"`
 	Branch   string `json:"branch"`
-	Baseline string `json:"baseline"`
-	Head     string `json:"head"`
+	// Baseline is the commit the run's change is measured from. `smelt factory
+	// update` moves it to the base's tip it merged in, so the merged-in code is
+	// not part of the change; OriginalBaseline keeps where the run started.
+	Baseline         string `json:"baseline"`
+	OriginalBaseline string `json:"original_baseline,omitempty"`
+	Head             string `json:"head"`
+	// UpdatedFrom is the base the branch was last updated from, nil for a run
+	// that never was.
+	UpdatedFrom *UpdatedFrom `json:"updated_from,omitempty"`
 	// BaseBranch and DefaultBranch are what publishing the run's branch needs
 	// later; see Worktree. Records from before they were kept lack them.
 	BaseBranch    string `json:"base_branch,omitempty"`
@@ -69,12 +76,26 @@ type Record struct {
 	Pack *Pack `json:"pack,omitempty"`
 }
 
+// UpdatedFrom is the base branch a run's branch was updated from, and the
+// commit of it that the branch now contains.
+type UpdatedFrom struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}
+
+// Note is the sentence that tells a continued run's implementer and reviewers
+// that the base's code is not the ticket's.
+func (u UpdatedFrom) Note() string {
+	return fmt.Sprintf("This branch was updated from %s at %s; review only the changes since then made for this ticket.",
+		u.Branch, shortSHA(u.Commit))
+}
+
 // newRecord is the record of a run working in wt.
 func newRecord(runID, prompt string, wt Worktree) Record {
 	return Record{
 		RunID: runID, Prompt: prompt,
 		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, From: wt.From,
+		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, From: wt.From, UpdatedFrom: wt.UpdatedFrom,
 	}
 }
 

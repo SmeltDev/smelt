@@ -91,6 +91,9 @@ type Sidecars struct {
 	// included in every review, including rounds where the implementer is sent
 	// only feedback from the preceding checks.
 	Request string
+	// UpdateNote, when set, is added to every review's request: the branch was
+	// updated from its base, and only the ticket's own changes are under review.
+	UpdateNote string
 	// Scout makes the plan turn build a context pack; Plan sets Pack from it.
 	Scout ScoutOptions
 	// Pack, when set, is added to every review's prompt after the request.
@@ -167,10 +170,14 @@ type ScoutOptions struct {
 // reviewRequest is the request as each review is shown it: with the context
 // pack after it, when there is one.
 func (s *Sidecars) reviewRequest() string {
-	if s.Pack == nil {
-		return s.Request
+	request := s.Request
+	if s.UpdateNote != "" {
+		request = strings.TrimRight(request, "\n") + "\n\n" + s.UpdateNote
 	}
-	return packedRequest(s.Request, *s.Pack)
+	if s.Pack == nil {
+		return request
+	}
+	return packedRequest(request, *s.Pack)
 }
 
 // packedRequest is request followed by the pack's section for reviewers.

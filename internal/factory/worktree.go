@@ -40,6 +40,8 @@ type Worktree struct {
 	// did not stop the run, such as a failed fetch.
 	From        *FromRef
 	FromWarning string
+	// UpdatedFrom is the base the branch was updated from, nil when it never was.
+	UpdatedFrom *UpdatedFrom
 	// Author is who the branch's commits are attributed to; an incomplete one
 	// means smelt.
 	Author config.CommitAuthor

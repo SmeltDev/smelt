@@ -155,6 +155,9 @@ func printUpdateReport(streams iostream.Streams, r factory.UpdateReport) {
 		streams.Printf("Resolve them with:\n  smelt factory build --continue %s %q\n", r.RunID,
 			"Resolve the merge conflict markers in "+joinAnd(r.Conflicts))
 	}
+	if r.Baseline != "" {
+		streams.Printf("The run's baseline is now %s, so its change excludes what %s brought in.\n", r.Baseline[:min(len(r.Baseline), 12)], target)
+	}
 }
 
 // joinAnd writes items as "a", "a and b" or "a, b and c".

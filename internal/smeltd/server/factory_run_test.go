@@ -707,6 +707,21 @@ func TestFactoryRecorderStartedRecordsFrom(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(b), `"from":{"ref":"epic/x","commit":"abc123"}`), string(b))
 }
 
+// A run on a branch updated from its base reports where from in its status.
+func TestFactoryRecorderStartedRecordsUpdatedFrom(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.NilError(t, busy)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	rec.started("run-1", factory.Worktree{Baseline: "def456", UpdatedFrom: &factory.UpdatedFrom{Branch: "main", Commit: "def456"}})
+
+	b, err := json.Marshal(entry.snapshot().Factory)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"baseline":"def456"`), string(b))
+	assert.Assert(t, strings.Contains(string(b), `"updated_from":{"branch":"main","commit":"def456"}`), string(b))
+}
+
 func TestStartFactoryRefusesABadIntegrateRequest(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
 	base := smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "spec"}
