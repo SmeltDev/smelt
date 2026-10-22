@@ -1316,6 +1316,18 @@ and the durable run record retain `harness_swaps` (`round`, `turn`, `from`, `to`
 Planning, plan reviews and notes use round zero. Logs and the `Time:` line include
 phrases such as `swapped codex → claude (rate_limited) in round 2`.
 
+A harness that is at capacity (Codex: "Selected model is at capacity") is busy, not
+failing. The turn waits and retries on the same harness after 30s, 1m, 2m and 4m,
+logging `round N implementer: codex at capacity, retrying in 1m (2 of 4)`. Then it
+moves to the next `--fallback` candidate as for a rate limit. On the last candidate it
+keeps waiting, at most 5m between tries, until `factory.capacityWait` (a Go duration,
+default `30m`; it includes the first four waits) is spent. Then the result is
+`unavailable` with reason such as `codex at capacity for 30m` and `"stop":
+"harness_unavailable"` in status JSON and the run record, so a caller can retry the
+run later. The round is not counted against `--max-attempts`. Only Codex classifies
+capacity today; Claude and grok are left out until a real capture of their messages
+exists.
+
 `--continue <run> --harness <name>` uses the requested harness and its credentials
 and model. Its fresh session receives the original request, approved plan and
 re-anchored pack with the branch's existing work and any new guidance.

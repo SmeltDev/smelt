@@ -247,6 +247,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Fallback:                agents.Fallback,
 		InitialFailure:          agents.InitialFailure,
 		SwapAtUtilization:       cfg.Factory.SwapThreshold(),
+		CapacityWait:            cfg.Factory.CapacityWaitDuration(),
 		Credential:              auth.Credential,
 		BaseURL:                 auth.BaseURL,
 		Model:                   model,
@@ -371,7 +372,7 @@ func integrateRoundKind(n int) smeltd.RoundKind {
 // factoryResultNote says how a factory loop ended, for its stage.
 func factoryResultNote(o factory.Outcome) string {
 	switch o.Result {
-	case factory.ResultFailed:
+	case factory.ResultFailed, factory.ResultUnavailable:
 		return o.Reason
 	case factory.ResultPassed:
 		return fmt.Sprintf("all checks passed after %d round(s)", o.Rounds)
@@ -758,7 +759,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Timing = wireTiming(rep.Timing)
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
-		f.Reason, f.ResetAt = rep.Outcome.Reason, rep.Outcome.ResetAt
+		f.Reason, f.ResetAt, f.Stop = rep.Outcome.Reason, rep.Outcome.ResetAt, rep.Outcome.Stop
 		f.Blocked = rep.Outcome.Blocked
 		f.Unverified = rep.Outcome.Unverified
 		f.ContinuedFromEmpty = rep.Outcome.FromEmpty

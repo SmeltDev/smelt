@@ -875,6 +875,8 @@ func reportOutcome(status iostream.StatusFunc, result string, rounds int, blocke
 		return &userError{msg: "The implementer is blocked: " + blocked, hideDetail: true, errMsg: "blocked"}
 	case smeltd.ResultStuck:
 		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
+	case smeltd.ResultUnavailable:
+		return &userError{msg: "The harness is at capacity; retry later.", hideDetail: true, errMsg: "harness unavailable"}
 	case smeltd.ResultExhausted:
 	}
 	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", rounds), hideDetail: true, errMsg: "attempts exhausted"}

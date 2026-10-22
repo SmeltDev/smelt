@@ -28,3 +28,13 @@ func TestTimeoutError(t *testing.T) {
 		})
 	}
 }
+
+func TestAtCapacityIsOnlyTheCapacityKindOfUnavailable(t *testing.T) {
+	err := AtCapacity(errors.New("Selected model is at capacity"))
+	var f *Failure
+	assert.Assert(t, errors.As(err, &f))
+	assert.Equal(t, f.Kind, Unavailable)
+	assert.Assert(t, IsAtCapacity(err))
+	assert.Equal(t, err.Error(), "Selected model is at capacity")
+	assert.Assert(t, !IsAtCapacity(Classified(Unavailable, errors.New("missing"), nil)))
+}

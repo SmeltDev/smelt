@@ -40,6 +40,9 @@ type RunOptions struct {
 	InitialFailure    error
 	Fallback          []Candidate
 	SwapAtUtilization float64
+	// CapacityWait is how long to wait for a harness at capacity; zero means
+	// config.DefaultCapacityWait.
+	CapacityWait time.Duration
 	// Rounds selects fresh sessions or the legacy resumed session; empty defaults to fresh.
 	Rounds config.RoundPolicy
 	// ContextWindow is the implementer auto-compaction threshold; zero requests agent default.
@@ -526,6 +529,7 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 // keepEndedRecord saves rec with how the run ended and the notes it wrote.
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
 	rec.Result, rec.Rounds, rec.Notes, rec.Plan = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes, rep.Outcome.Plan
+	rec.Stop = rep.Outcome.Stop
 	rec.Reason, rec.ResetAt, rec.HarnessSwaps, rec.Turns = rep.Outcome.Reason, rep.Outcome.ResetAt, rep.Outcome.HarnessSwaps, rep.Outcome.Turns
 	for _, turn := range rep.Outcome.Turns {
 		if turn.Turn == turnImplementer {
@@ -813,6 +817,10 @@ func configureFailover(steps *Sidecars, opts RunOptions, status iostream.StatusF
 			opts.OnEvent(Event{Kind: EventHarnessSwap, Round: swap.Round, Swap: &swap})
 		}
 	})
+	steps.Failover.Configure(FailoverOptions{
+		CapacityWait: opts.CapacityWait,
+		Log:          func(msg string) { status(iostream.LevelInfo, msg) },
+	})
 	steps.onAttempt = func(a TurnAttempt) {
 		if opts.OnEvent != nil {
 			opts.OnEvent(Event{Kind: EventTurnAttempt, Round: a.Round, Attempt: &a})
@@ -827,6 +835,10 @@ func finishFailover(rep *Report, steps *Sidecars, err error) error {
 	if exhausted := steps.Failover.Exhausted(); exhausted != nil {
 		rep.Outcome.Result, rep.Outcome.Reason, rep.Outcome.ResetAt = ResultFailed, noHarnessAvailable, exhausted.ResetAt
 		err = exhausted
+	}
+	var unavailable *HarnessUnavailable
+	if errors.As(err, &unavailable) {
+		rep.Outcome.Result, rep.Outcome.Reason, rep.Outcome.Stop = ResultUnavailable, unavailable.Error(), StopHarnessUnavailable
 	}
 
 	return err
