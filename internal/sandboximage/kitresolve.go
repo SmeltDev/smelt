@@ -55,13 +55,14 @@ type lastKit struct {
 func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, error) {
 	tag, version := KitTagRef(), KitVersion
 	previous, _ := readLastKit(statePath)
+	selected := ""
 	// A refresh may select a kit newer than this CLI, but must not hold a
 	// subsequent CLI upgrade back on an older kit.
 	if previous.Selected != "" && previous.Kit >= KitVersion {
-		tag, version = previous.Selected, previous.Kit
-	}
-	selected := ""
-	if tag == previous.Selected {
+		// Refresh selects a particular manifest, not whatever its mutable tag
+		// points to on the next run. Keep its recorded version and contents
+		// together until another refresh or a CLI upgrade selects a newer kit.
+		tag, version = previous.Ref, previous.Kit
 		selected = previous.Selected
 	}
 	ref, pullErr := p.PullKit(ctx, tag)

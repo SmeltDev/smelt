@@ -28,7 +28,8 @@ passed through both build paths, and recorded in `manifest.json`.
 `smelt harness status` shows host CLI versions alongside sandbox versions from
 the manifest. To select a newer published kit without upgrading smelt, run
 `smelt harness refresh --kit-ref ghcr.io/smeltdev/smelt-kit:6`, then
-`smelt factory image`. The selection persists for future factory runs. A CLI upgrade that requires a
+`smelt factory image`. The resolved digest persists for future factory runs, even if the tag moves; run
+refresh again to select its new contents. A CLI upgrade that requires a
 newer kit replaces an older selection automatically.
 
 `smelt factory image --kit-from-source` builds this Dockerfile locally instead

@@ -48,10 +48,6 @@ func TestNoteKitOutdatedWarnsOncePerProject(t *testing.T) {
 	assert.Assert(t, noteKitOutdated(streams, n) != "")
 	assert.Equal(t, out.String(), "")
 
-	// Asking for it every time prints it again.
-	n.EveryTime = true
-	noteKitOutdated(streams, n)
-	assert.Assert(t, out.Len() > 0)
 }
 
 // Any kit section is unused now, whatever its version, so any of them is noted.
@@ -67,7 +63,7 @@ func TestNoteKitOutdatedWarnsForEveryVersionAndNotWithoutASection(t *testing.T) 
 	}
 	root := kitProject(t, "FROM x\nRUN true\n")
 	streams, out := capturedStreams()
-	assert.Equal(t, noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", EveryTime: true}), "")
+	assert.Equal(t, noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: "Dockerfile.smelt"}), "")
 	assert.Equal(t, out.String(), "")
 }
 

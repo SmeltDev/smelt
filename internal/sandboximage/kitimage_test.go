@@ -225,7 +225,7 @@ func TestRefreshSelectsNewKitWithoutCLIUpgrade(t *testing.T) {
 	assert.Equal(t, choice.Ref, "digest:new")
 	_, err = ResolveKit(t.Context(), provider, state)
 	assert.NilError(t, err)
-	assert.Equal(t, requested, tag)
+	assert.Equal(t, requested, choice.Ref, "a moving tag must not change the selected kit")
 	offline, err := ResolveKit(t.Context(), fakePuller{pullErr: errors.New("offline"), have: true}, state)
 	assert.NilError(t, err)
 	assert.Equal(t, offline.Kit, KitVersion+1)

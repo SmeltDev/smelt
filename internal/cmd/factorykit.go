@@ -20,9 +20,6 @@ const kitWarnedFile = "kit-warned"
 // kitNotice says when and how a leftover kit section is reported.
 type kitNotice struct {
 	Root, Dockerfile string
-	// EveryTime prints the note on every call; otherwise once per project, so
-	// a user who keeps the section is not nagged.
-	EveryTime bool
 }
 
 // kitWarning is the text to warn with when the committed dockerfile still has
@@ -52,7 +49,7 @@ func noteKitOutdated(streams iostream.Streams, n kitNotice) string {
 		return ""
 	}
 	stamp := kitStampPath(n.Root)
-	if !n.EveryTime && stamp != "" {
+	if stamp != "" {
 		if _, err := os.Stat(stamp); err == nil {
 			return warning
 		}

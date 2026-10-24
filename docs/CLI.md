@@ -620,7 +620,8 @@ smelt
   `harness refresh` pulls and selects the current published kit; `harness refresh --kit-ref
   ghcr.io/smeltdev/smelt-kit:6` selects another published kit without upgrading smelt. Run
   `smelt factory image` afterward to assemble it with the existing toolchain. Future factory
-  builds reuse that selection; host agents remain managed by their own installers.
+  builds reuse that digest until another refresh or a CLI upgrade requires a newer kit;
+  host agents remain managed by their own installers.
 - **`harness status` reports, it does not choose.** Codex: `account/read` and `account/rateLimits/read`
   over `codex app-server`, with the stored login's refresh token blanked in a temp `CODEX_HOME`; windows
   are named from `windowDurationMins` (300 → `5h`, 10080 → `7d`, 43200 → `30d`, else `<n>m`). Claude:

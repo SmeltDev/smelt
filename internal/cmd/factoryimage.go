@@ -292,7 +292,7 @@ Dockerfile.smelt instead.`,
 					return err
 				}
 			}
-			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: src.Path, EveryTime: true})
+			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: src.Path})
 			tag, err := readyImage(ctx, streams, root, src, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource, KeepRepair: keepRepair})
 			if err != nil {
 				return err
