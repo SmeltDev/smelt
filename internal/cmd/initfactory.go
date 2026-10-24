@@ -282,7 +282,7 @@ func initManagedImage(ctx context.Context, workDir string, streams iostream.Stre
 		streams.ErrPrintln(ui.Dim("Build it later with: smelt factory image (smelt factory build also does it)"))
 		return
 	}
-	tag, err := readyImage(ctx, streams, workDir, dockerfile, cfg, false)
+	tag, err := readyImage(ctx, streams, workDir, dockerfile, cfg, imageOptions{})
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(errorSummary(err)))
 		return

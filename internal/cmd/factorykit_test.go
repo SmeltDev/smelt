@@ -11,7 +11,6 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sandboximage"
 )
@@ -43,7 +42,7 @@ func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
 	got := noteKitOutdated(streams, n)
 	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v5"), got)
 	assert.Equal(t, strings.Count(out.String(), "Dockerfile.smelt was generated with agent kit v1"), 1)
-	assert.Assert(t, strings.Contains(out.String(), "smelt factory image --update-kit"))
+	assert.Assert(t, strings.Contains(out.String(), "smelt factory image --regenerate"))
 
 	// The same day it is still reported to the caller, but not printed again.
 	out.Reset()
@@ -86,64 +85,12 @@ func TestResolveBuildSettingsWarnsAboutAnOldKitOnceAndKeepsGoing(t *testing.T) {
 	got, err := resolveBuildSettings(ctx, streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
 	assert.Assert(t, err != nil, "Docker is unreachable here, so the build is where it stops")
 	assert.Assert(t, got.KitWarning != "")
-	assert.Equal(t, strings.Count(out.String(), "smelt factory image --update-kit"), 1)
+	assert.Equal(t, strings.Count(out.String(), "smelt factory image --regenerate"), 1)
 
 	out.Reset()
 	got, _ = resolveBuildSettings(ctx, streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
 	assert.Assert(t, got.KitWarning != "", "the run still records it")
-	assert.Assert(t, !strings.Contains(out.String(), "update-kit"), out.String())
-}
-
-func TestUpdateKitChangesOnlyTheKitSection(t *testing.T) {
-	root := kitProject(t, kitV1Dockerfile)
-	streams, out := capturedStreams()
-	assert.NilError(t, updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt", Yes: true}))
-
-	got, err := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.NilError(t, err)
-	head, _, _ := strings.Cut(kitV1Dockerfile, "# --- smelt agent kit")
-	assert.Assert(t, strings.HasPrefix(string(got), head+"# --- smelt agent kit (v5) "), string(got))
-	assert.Assert(t, strings.Contains(string(got), sandboximage.KitCodex()))
-	assert.Assert(t, strings.Contains(string(got), "smelt.kit=5"))
-	assert.Assert(t, strings.Contains(string(got), sandboximage.KitLizard()), "the update installs lizard")
-	assert.Assert(t, strings.Contains(out.String(), "+LABEL smelt.harnesses"), out.String())
-	assert.Equal(t, kitWarning(root, "Dockerfile.smelt"), "")
-
-	// Updating again changes nothing.
-	assert.NilError(t, updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt", Yes: true}))
-	again, _ := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.Equal(t, string(again), string(got))
-}
-
-func TestUpdateKitMatchesARenderedDockerfile(t *testing.T) {
-	rendered := sandboximage.Render(sandboximage.NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	head, _, _ := strings.Cut(rendered, "# --- smelt agent kit")
-	root := kitProject(t, head+"# --- smelt agent kit ---\nRUN old\n")
-	streams, _ := capturedStreams()
-	assert.NilError(t, updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt", Yes: true}))
-	got, _ := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.Equal(t, string(got), rendered)
-}
-
-func TestUpdateKitWithoutAMarkerIsRefused(t *testing.T) {
-	root := kitProject(t, "FROM x\nRUN true\n")
-	streams, _ := capturedStreams()
-	err := updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt", Yes: true})
-	assert.Equal(t, userMsg(err), "Dockerfile.smelt has no smelt agent kit section, so its kit cannot be updated in place.")
-	var ue *userError
-	assert.Assert(t, asUserError(err, &ue))
-	assert.Assert(t, strings.Contains(ue.suggestion, "--regenerate"), ue.suggestion)
-	got, _ := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.Equal(t, string(got), "FROM x\nRUN true\n")
-}
-
-func TestUpdateKitNeedsConfirmationWithoutATerminal(t *testing.T) {
-	root := kitProject(t, kitV1Dockerfile)
-	streams, _ := capturedStreams()
-	err := updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt"})
-	assert.Equal(t, userMsg(err), "Updating the agent kit needs confirmation.")
-	got, _ := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.Equal(t, string(got), kitV1Dockerfile)
+	assert.Assert(t, !strings.Contains(out.String(), "--regenerate"), out.String())
 }
 
 func TestFactoryImageRejectsRegenerateWithUpdateKit(t *testing.T) {
@@ -151,18 +98,27 @@ func TestFactoryImageRejectsRegenerateWithUpdateKit(t *testing.T) {
 	assert.Equal(t, userMsg(err), "--regenerate and --update-kit cannot be used together.")
 }
 
-// A project on kit v3 has Codex's command host but no lizard; --update-kit
-// brings in lizard and the python3 it needs.
-func TestUpdateKitBringsAV3ImageToV4(t *testing.T) {
-	current := sandboximage.Render(sandboximage.NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	head, kit, _ := strings.Cut(current, "# --- smelt agent kit")
-	v3 := head + "# --- smelt agent kit (v3) ---\n" + strings.Replace(strings.SplitN(kit, "\n", 2)[1], sandboximage.KitLizard(), "", 1)
-	v3 = strings.ReplaceAll(strings.ReplaceAll(v3, " python3 python3-venv", ""), "smelt.kit=5", "smelt.kit=3")
-	root := kitProject(t, v3)
-	assert.Assert(t, kitWarning(root, "Dockerfile.smelt") != "", "a v3 kit is outdated")
-	streams, _ := capturedStreams()
-	assert.NilError(t, updateKit(t.Context(), streams, kitUpdate{Root: root, Dockerfile: "Dockerfile.smelt", Yes: true}))
-	got, _ := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
-	assert.Equal(t, string(got), current)
-	assert.Equal(t, kitWarning(root, "Dockerfile.smelt"), "")
+func TestNoteUpdateKitRetiredSaysWhy(t *testing.T) {
+	streams, out := capturedStreams()
+	noteUpdateKitRetired(streams)
+	assert.Assert(t, strings.Contains(out.String(), "--update-kit does nothing now"), out.String())
+	assert.Assert(t, strings.Contains(out.String(), "smelt factory image"), out.String())
+}
+
+func TestFactoryImageKitFlags(t *testing.T) {
+	cmd := newFactoryImageCmd()
+	for _, name := range []string{"update-kit", "kit-from-source"} {
+		assert.Assert(t, cmd.Flags().Lookup(name) != nil, name)
+	}
+}
+
+func TestWithAgentKitLeavesADockerfileWithoutAKitSectionAlone(t *testing.T) {
+	root := kitProject(t, "FROM x\nRUN true\n")
+	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	// No kit section: the builder is never used, so nil is fine.
+	got, err := withAgentKit(t.Context(), iostream.Streams{}, nil, plan, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, got.Tag, plan.Tag)
+	assert.Equal(t, got.Context.Content, "FROM x\nRUN true\n")
 }

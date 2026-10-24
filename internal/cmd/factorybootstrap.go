@@ -286,7 +286,7 @@ func bootstrapAgentError(err error) error {
 	case errors.Is(err, claude.ErrMissing), errors.Is(err, codex.ErrMissing), errors.Is(err, grok.ErrMissing):
 		return &userError{
 			msg:        "The coding agent is not installed in the sandbox image.",
-			suggestion: "Update the Dockerfile's agent kit: smelt factory image --update-kit",
+			suggestion: "Rebuild the image with the current agent kit: smelt factory image",
 			hideDetail: true,
 			err:        err,
 		}

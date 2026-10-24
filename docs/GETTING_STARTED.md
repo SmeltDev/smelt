@@ -592,7 +592,7 @@ its team standards are taken into account. `--harness claude|codex` picks the ag
 Next to the validation commands, each round runs a built-in `quality` check in the implementer's
 sandbox: erosion, the functions over the complexity limit and duplicated code, before and after the
 run's change, in any language [lizard](https://github.com/terryyin/lizard) knows (the agent kit v4
-installs it; older images show `not measured` until `smelt factory image --update-kit`). It is
+installs it; older images show `not measured` until `smelt factory image`). It is
 reported with the checks, in the run log, in the status JSON and in the PR notes. A new or changed function above the
 limit, or erosion up by more than the allowed rise, is sent back to the implementer; duplicates are
 reported but never fail the check. Tune or disable it in `.smelt/config.json`:

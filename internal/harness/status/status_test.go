@@ -182,7 +182,7 @@ func TestUnlabeledImageIsRunOnceAndTheAnswerCached(t *testing.T) {
 	assert.Assert(t, !x.InstalledImage)
 	assert.Equal(t, c.ImageStatus, sandboximage.ImageUnlabeled)
 	assert.Assert(t, strings.Contains(c.Note, "image has no smelt.harnesses label (agent kit v1); checked by running it"), c.Note)
-	assert.Assert(t, strings.Contains(c.Note, "--update-kit"), c.Note)
+	assert.Assert(t, strings.Contains(c.Note, "smelt factory image"), c.Note)
 	assert.Equal(t, rep.Image.Describe([]string{"claude", "codex"}), "smelt-x:abc (kit v1, unlabeled; claude found, codex not)")
 
 	// The second call finds the answer in the cache.

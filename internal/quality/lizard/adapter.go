@@ -26,7 +26,7 @@ const (
 )
 
 // NotInstalledHint is what the script says when lizard is missing.
-const NotInstalledHint = "lizard is not installed in this image: run smelt factory image --update-kit"
+const NotInstalledHint = "lizard is not installed in this image: run smelt factory image"
 
 // Provider is lizard run over the files git does not ignore, less those ex
 // leaves out by default.

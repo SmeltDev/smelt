@@ -130,13 +130,23 @@ const (
 	lizardLink     = "$HOME/.local/bin/lizard"
 )
 
+// pinnedWheel is one wheel lizard needs, pinned by version and SHA-256.
+type pinnedWheel struct{ name, version, sha256 string }
+
+// lizardWheels are lizard and the wheels it needs.
+var lizardWheels = []pinnedWheel{
+	{"lizard", LizardVersion, "746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c"},
+	{"pygments", "2.21.0", "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"},
+	{"pathspec", "1.1.1", "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"},
+}
+
 // lizardRequirements are lizard and the wheels it needs, with their hashes.
 func lizardRequirements() []string {
-	return []string{
-		"lizard==" + LizardVersion + " --hash=sha256:746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c",
-		"pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
-		"pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+	out := make([]string, len(lizardWheels))
+	for i, w := range lizardWheels {
+		out[i] = w.name + "==" + w.version + " --hash=sha256:" + w.sha256
 	}
+	return out
 }
 
 // KitLizard is the Dockerfile block that installs lizard. An image without

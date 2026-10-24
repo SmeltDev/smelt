@@ -114,7 +114,7 @@ func TestParserMapsAMissingCommandHostToAHarnessError(t *testing.T) {
 	out := p.Outcome()
 	assert.Assert(t, out.Done)
 	assert.ErrorIs(t, out.Err, ErrHostMissing)
-	assert.ErrorContains(t, out.Err, "smelt factory image --update-kit")
+	assert.ErrorContains(t, out.Err, "smelt factory image")
 }
 
 func TestParserFindsAMissingHostInEachPlace(t *testing.T) {

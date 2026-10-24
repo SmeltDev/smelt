@@ -43,7 +43,7 @@ The measuring is done by a provider in a throwaway container from the
 project's image, so the numbers match a run's: lizard by default, or the
 command in factory.quality.command, which prints the metrics contract as JSON.
 An image built before agent kit v4 has no lizard; smelt factory image
---update-kit adds it. Docker is needed, as for factory runs.
+adds it. Docker is needed, as for factory runs.
 
 With --base, the tree is also compared with a revision, and the findings a
 factory run would send back to the implementer are listed. The command then
@@ -92,7 +92,7 @@ func runQuality(cmd *cobra.Command, projectDir, base string, jsonOut bool) error
 	a, err := quality.Assess(cmd.Context(), measurer, base, factory.QualityLimits(cfg.Factory))
 	if err != nil {
 		return newUserError("Could not measure the code.").wrap(err).
-			withSuggestion("Check that --base names a commit, and that the image has lizard (smelt factory image --update-kit) or factory.quality.command prints the metrics contract.")
+			withSuggestion("Check that --base names a commit, and that the image has lizard (smelt factory image) or factory.quality.command prints the metrics contract.")
 	}
 	if jsonOut {
 		enc := json.NewEncoder(streams.Out)

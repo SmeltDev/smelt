@@ -90,7 +90,7 @@ func TestUpdateKitBringsV2UpToDate(t *testing.T) {
 	for name, in := range map[string]string{"plain": head + v2, "hand patched": head + patched} {
 		t.Run(name, func(t *testing.T) {
 			assert.Check(t, KitOutdated(in))
-			assert.Check(t, cmp.Contains(KitOutdatedWarning("Dockerfile.smelt", 2), "--update-kit"))
+			assert.Check(t, cmp.Contains(KitOutdatedWarning("Dockerfile.smelt", 2), "smelt factory image --regenerate"))
 			got, err := UpdateKit(in)
 			assert.NilError(t, err)
 			assert.Equal(t, got, current)
@@ -115,7 +115,7 @@ func TestUpdateKitBringsV3UpToV4(t *testing.T) {
 	in := head + v3
 	assert.Check(t, KitOutdated(in))
 	assert.Check(t, !strings.Contains(in, "lizard"))
-	assert.Check(t, cmp.Contains(KitOutdatedWarning("Dockerfile.smelt", 3), "lizard"))
+	assert.Check(t, cmp.Contains(KitOutdatedWarning("Dockerfile.smelt", 3), "--regenerate"))
 	got, err := UpdateKit(in)
 	assert.NilError(t, err)
 	assert.Equal(t, got, current)

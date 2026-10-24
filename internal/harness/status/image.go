@@ -64,7 +64,7 @@ func (d Deps) checkImage(ctx context.Context) imageCheck {
 }
 
 // updateKitHint says how to get an image with a label.
-const updateKitHint = "update the Dockerfile's agent kit with: smelt factory image --update-kit"
+const updateKitHint = "rebuild the image with the current agent kit: smelt factory image"
 
 func (d Deps) probeUnlabeled(ctx context.Context, rep *ImageReport) imageCheck {
 	const lead = "image has no " + sandboximage.LabelHarnesses + " label (agent kit v1)"

@@ -24,14 +24,14 @@ const (
 // kitCheck proves the tools the factory's own scripts and agent need exist.
 // Codex runs every command through its host, which --version never starts.
 const kitCheck = "git --version && claude --version && codex --version && grok --version && sha256sum --version && pkill -V && " +
-	`test -x "$HOME/.local/bin/` + codexHostBinary + `"`
+	"command -v " + codexHostBinary
 
 // lizardCheck is run after the kit check and only warns: an image without
 // lizard works, it just has no code quality to report.
 const lizardCheck = "lizard --version"
 
 // lizardMissing is the warning for an image whose lizard does not run.
-const lizardMissing = "lizard is not installed in the image, so code quality will not be measured (python3 and the agent kit v4 install it: smelt factory image --update-kit)"
+const lizardMissing = "lizard is not installed in the image, so code quality will not be measured (the agent kit image installs it; rebuild with smelt factory image)"
 
 // codexSmokeTimeout bounds the one real Codex turn in the kit step; the
 // command's own timeout is the same 60 seconds.
