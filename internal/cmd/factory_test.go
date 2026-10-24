@@ -292,3 +292,26 @@ func TestFactoryIntegrateSaysMaxAttemptsIsIgnored(t *testing.T) {
 	_, stderr, _ = runFactoryBuildCmd(t, "--integrate", "--from", "epic/x", "check it")
 	assert.Assert(t, !strings.Contains(stderr, "--max-attempts is ignored"), stderr)
 }
+
+func TestBuildOverlaySelection(t *testing.T) {
+	cmd := newFactoryBuildCmd()
+	assert.Assert(t, cmd.Flags().Lookup("overlay") != nil)
+	assert.Assert(t, newFactoryImageCmd().Flags().Lookup("overlay") == nil)
+	path := filepath.Join(t.TempDir(), "overlay")
+	assert.NilError(t, os.WriteFile(path, []byte(`{"sandbox":{"dockerfile":"overlay.Dockerfile"}}`), 0o600))
+	for _, tt := range []struct {
+		flag     string
+		explicit bool
+		want     string
+	}{
+		{"", false, "overlay.Dockerfile"},
+		{"flag.Dockerfile", true, "flag.Dockerfile"},
+		{"", true, ""},
+	} {
+		got, err := buildSandboxDockerfile(tt.flag, tt.explicit, path)
+		assert.NilError(t, err)
+		assert.Equal(t, got, tt.want)
+	}
+	_, err := buildSandboxDockerfile("", false, path+"missing")
+	assert.Equal(t, userMsg(err), "Could not read the overlay file "+path+"missing.")
+}

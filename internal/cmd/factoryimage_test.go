@@ -221,3 +221,62 @@ func TestResolveBuildSettingsKeepsTheBuiltSandbox(t *testing.T) {
 	assert.Equal(t, got.Image, "sandbox:1")
 	assert.Equal(t, got.Sandbox, want)
 }
+
+func TestFactoryBuildCommandPassesOverlayDockerfileToImageBuild(t *testing.T) {
+	root := factoryProject(t)
+	t.Setenv(docker.EnvImage, "")
+	outside := t.TempDir()
+	dockerfile := filepath.Join(outside, "Toolchain.Dockerfile")
+	assert.NilError(t, os.WriteFile(dockerfile, []byte("FROM x\n"), 0o600))
+	overlay := filepath.Join(outside, "run-overlay")
+	body, err := json.Marshal(map[string]any{"sandbox": map[string]string{"dockerfile": dockerfile}})
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(overlay, body, 0o600))
+
+	// Stop at image building so the command needs neither Docker nor a daemon.
+	stop := errors.New("image build reached")
+	called := false
+	old := buildImage
+	t.Cleanup(func() { buildImage = old })
+	buildImage = func(_ context.Context, _ iostream.Streams, repo string, b imageBuild) (builtImage, error) {
+		called = true
+		assert.Equal(t, repo, root)
+		assert.Equal(t, b.Dockerfile, dockerfile)
+		assert.Equal(t, b.Kind, sandboximage.ToolchainCaller)
+		return builtImage{}, stop
+	}
+	_, _, err = runFactoryBuildCmd(t, "--backend", "docker", "--overlay", overlay, "add a flag")
+	assert.ErrorIs(t, err, stop)
+	assert.Assert(t, called, "the overlay must select a caller image build")
+}
+
+func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
+	t.Setenv(docker.EnvImage, "env:image")
+	repo, outside := t.TempDir(), t.TempDir()
+	t.Chdir(outside)
+	assert.NilError(t, os.WriteFile("Toolchain", []byte("FROM x\nCOPY go.mod /tmp/\n"), 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example\n"), 0o600))
+	assert.NilError(t, os.WriteFile("overlay", []byte(`{"sandbox":{"dockerfile":"Toolchain"}}`), 0o600))
+	selected, err := buildSandboxDockerfile("", false, "overlay")
+	assert.NilError(t, err)
+	old := buildImage
+	t.Cleanup(func() { buildImage = old })
+	buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+		assert.Equal(t, b.Kind, sandboximage.ToolchainCaller)
+		assert.Equal(t, b.Dockerfile, filepath.Join(outside, "Toolchain"))
+		plan, err := b.toolchainPlan(root)
+		assert.NilError(t, err)
+		assert.DeepEqual(t, plan.Context.Sources, []string{"go.mod"})
+		return ensureSandboxImage(ctx, streams, root, b, plan, &fakeEnsurer{fakeKits: fakeKits{ref: sandboximage.KitRegistryRepo + "@sha256:abcd"}})
+	}
+	got, err := resolveBuildSettings(t.Context(), discardStreams(), repo,
+		factorySettings{SandboxDockerfile: selected, Attempts: 3}, factoryExplicit{},
+		cfgWith(t, `{"factory":{"backend":"docker","dockerfile":"missing","image":"config:image"}}`))
+	assert.NilError(t, err)
+	assert.Equal(t, got.Sandbox.Source, smeltd.SandboxFromCaller)
+	assert.Equal(t, got.Sandbox.Dockerfile, filepath.Join(outside, "Toolchain"))
+	entries, err := os.ReadDir(repo)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 1)
+	assert.Equal(t, entries[0].Name(), "go.mod")
+}
