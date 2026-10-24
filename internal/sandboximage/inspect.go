@@ -131,7 +131,7 @@ func (b *Builder) ReadKitManifest(ctx context.Context, tag string) (KitManifest,
 		CopyFromContainer(context.Context, string, string) (io.ReadCloser, container.PathStat, error)
 	})
 	if !ok {
-		return KitManifest{}, fmt.Errorf("Docker client cannot read kit manifest")
+		return KitManifest{}, fmt.Errorf("docker client cannot read kit manifest")
 	}
 	created, err := b.cli.ContainerCreate(ctx, &container.Config{Image: tag, Cmd: []string{"/unused"}, NetworkDisabled: true}, nil, nil, nil, "")
 	if err != nil {
