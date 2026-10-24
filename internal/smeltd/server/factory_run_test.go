@@ -1088,9 +1088,13 @@ func TestFactorySessionRecordsTheSandbox(t *testing.T) {
 	detail := waitForSessionEnd(t, d, sess.ID)
 	assert.DeepEqual(t, detail.Factory.Sandbox, &sandbox)
 
-	b, err := json.Marshal(detail.Factory.Sandbox)
+	b, err := json.Marshal(detail)
 	assert.NilError(t, err)
-	assert.Equal(t, string(b), `{"dockerfile":"/data/toolchains/go.Dockerfile","source":"caller","toolchain_tag":"smelt-r-toolchain:0123456789ab","kit":"5@sha256:abc"}`)
+	var envelope map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(b, &envelope))
+	var status map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(envelope["factory"], &status))
+	assert.Equal(t, string(status["sandbox"]), `{"dockerfile":"/data/toolchains/go.Dockerfile","source":"caller","toolchain_tag":"smelt-r-toolchain:0123456789ab","kit":"5@sha256:abc"}`)
 
 	sess, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x"})
 	assert.NilError(t, err)

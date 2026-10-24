@@ -42,7 +42,7 @@ func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
 	var fallback []string
-	var orgID, image, sandboxDockerfile, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
+	var orgID, image, sandboxDockerfile, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, overlay, harnessFlag, from, against string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -157,7 +157,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).
 --sandbox-dockerfile PATH builds the toolchain from a Dockerfile anywhere on this
 machine instead. The project is still the build context, so COPY go.mod go.sum
 works, and the file is never copied into the project or the run's worktree. The
-Dockerfile comes from, in order: --sandbox-dockerfile, factory.dockerfile, the
+Dockerfile comes from, in order: --sandbox-dockerfile, sandbox.dockerfile in the
+--overlay JSON file, factory.dockerfile, the
 project's Dockerfile.smelt. It cannot be combined with --image. 'smelt factory
 status --json' reports which one a run used under factory.sandbox.`,
 		SilenceUsage: true,
@@ -174,63 +175,32 @@ status --json' reports which one a run used under factory.sandbox.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			var prompt string
-			var err error
-			// A continued run needs no prompt, so stdin is only read for one when
-			// asked for or redirected from a file.
-			if continueRun == "" || len(args) > 0 || plan != "" || redirectedFile(cmd.InOrStdin()) {
-				prompt, err = factoryPrompt(cmd.InOrStdin(), args, plan, logOn && logFile == "")
-				if err != nil {
-					return err
-				}
+			prompt, err := readBuildPrompt(cmd, args, buildPromptInput{Continue: continueRun, Plan: plan, Log: logOn, LogFile: logFile})
+			if err != nil {
+				return err
 			}
 			checks := buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub, from: from, continueRun: continueRun, integrate: integrate, against: against}
 			if err := checkBuildFlags(cmd, checks); err != nil {
 				return err
 			}
-			if err := requireLocalDaemon("smelt factory build"); err != nil {
-				return err
-			}
-			root, err := sessionProjectRoot(ctx)
-			if err != nil {
-				return err
-			}
-			cfg, err := config.LoadProjectConfig(root)
-			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
-			}
 			flags := cmd.Flags()
-			settings, err := resolveBuildSettings(ctx, streams, root,
-				factorySettings{Backend: backend, Image: image, SandboxDockerfile: sandboxDockerfile, Attempts: attempts, Log: logOn},
-				factoryExplicit{
-					Backend:  flags.Changed("backend"),
-					Image:    flags.Changed("image"),
-					Attempts: flags.Changed("max-attempts"),
-					Log:      flags.Changed("log"),
-				}, cfg)
+			prepared, err := prepareFactoryBuild(cmd, buildPreparation{
+				Settings: factorySettings{Backend: backend, Image: image, SandboxDockerfile: sandboxDockerfile, Attempts: attempts, Log: logOn},
+				Overlay:  overlay, ReviewsDir: reviewsDir, Checks: checks, NoValidate: noValidate,
+			})
 			if err != nil {
 				return err
 			}
-			// The daemon loads these itself; loading them here first explains a
-			// mistake before anything starts.
-			if err := preflightBuild(ctx, root, reviewsDir, checks, cfg, noValidate); err != nil {
-				return err
-			}
+			root, settings := prepared.Root, prepared.Settings
 			agent, fallbackList, err := resolveBuildHarness(ctx, streams, harnessChoice{
-				Root: root, Cfg: cfg, Flag: harnessFlag, Image: settings.dockerImage(), CanPrompt: canPrompt(cmd.InOrStdin(), jsonOut),
+				Root: root, Cfg: prepared.Config, Flag: harnessFlag, Image: settings.dockerImage(), CanPrompt: canPrompt(cmd.InOrStdin(), jsonOut),
 			}, fallbackChoice{Names: fallback, Explicit: flags.Changed("fallback")})
 			if err != nil {
 				return err
 			}
-			if continueRun != "" {
-				if err := checkFactoryContinue(root, continueRun); err != nil {
-					return err
-				}
-				if prompt == "" {
-					if prompt, err = askContinueGuidance(cmd.InOrStdin(), jsonOut); err != nil {
-						return err
-					}
-				}
+			prompt, err = continuedBuildPrompt(cmd, root, continueRun, prompt, jsonOut)
+			if err != nil {
+				return err
 			}
 			relReviews, err := factoryReviewsDir(root, reviewsDir)
 			if err != nil {
@@ -297,6 +267,7 @@ status --json' reports which one a run used under factory.sandbox.`,
 	}
 
 	cmd.Flags().IntVar(&attempts, "max-attempts", defaultFactoryAttempts, fmt.Sprintf("maximum rounds of review and validation (default: factory.maxAttempts from config, else %d)", defaultFactoryAttempts))
+	cmd.Flags().StringVar(&overlay, "overlay", "", "read sandbox.dockerfile from a JSON file; --sandbox-dockerfile wins (paths relative to current directory)")
 	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
 	cmd.Flags().StringVar(&from, "from", "", "start from this branch or commit (e.g. epic/x, origin/epic/x, a SHA) instead of your files; your uncommitted changes are left out and your checkout is not touched")
 	cmd.Flags().BoolVar(&integrate, "integrate", false, "check the finished work on --from against the whole spec in the prompt and fix only what fails: one broad review, one fix turn, one focused re-check")
@@ -333,6 +304,80 @@ status --json' reports which one a run used under factory.sandbox.`,
 	cmd.Flags().BoolVar(&pub.failed, "publish-failed", false, "with --push or --pr, publish a run that did not pass too (a PR is opened as a draft)")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
+}
+
+type buildPromptInput struct {
+	Continue string
+	Plan     string
+	Log      bool
+	LogFile  string
+}
+
+func readBuildPrompt(cmd *cobra.Command, args []string, input buildPromptInput) (string, error) {
+	// A continued run reads stdin only when requested or redirected from a file.
+	if input.Continue != "" && len(args) == 0 && input.Plan == "" && !redirectedFile(cmd.InOrStdin()) {
+		return "", nil
+	}
+	return factoryPrompt(cmd.InOrStdin(), args, input.Plan, input.Log && input.LogFile == "")
+}
+
+func continuedBuildPrompt(cmd *cobra.Command, root, run, prompt string, jsonOut bool) (string, error) {
+	if run == "" {
+		return prompt, nil
+	}
+	if err := checkFactoryContinue(root, run); err != nil {
+		return "", err
+	}
+	if prompt == "" {
+		return askContinueGuidance(cmd.InOrStdin(), jsonOut)
+	}
+	return prompt, nil
+}
+
+type buildPreparation struct {
+	Settings   factorySettings
+	Overlay    string
+	ReviewsDir string
+	Checks     buildChecks
+	NoValidate bool
+}
+
+type preparedFactoryBuild struct {
+	Root     string
+	Config   *config.ProjectConfig
+	Settings factorySettings
+}
+
+func prepareFactoryBuild(cmd *cobra.Command, input buildPreparation) (preparedFactoryBuild, error) {
+	if err := requireLocalDaemon("smelt factory build"); err != nil {
+		return preparedFactoryBuild{}, err
+	}
+	ctx := cmd.Context()
+	root, err := sessionProjectRoot(ctx)
+	if err != nil {
+		return preparedFactoryBuild{}, err
+	}
+	cfg, err := config.LoadProjectConfig(root)
+	if err != nil {
+		return preparedFactoryBuild{}, &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
+	}
+	flags := cmd.Flags()
+	input.Settings.SandboxDockerfile, err = buildSandboxDockerfile(input.Settings.SandboxDockerfile, flags.Changed("sandbox-dockerfile"), input.Overlay)
+	if err != nil {
+		return preparedFactoryBuild{}, err
+	}
+	settings, err := resolveBuildSettings(ctx, iostream.FromCmd(cmd), root, input.Settings, factoryExplicit{
+		Backend: flags.Changed("backend"), Image: flags.Changed("image"),
+		Attempts: flags.Changed("max-attempts"), Log: flags.Changed("log"),
+	}, cfg)
+	if err != nil {
+		return preparedFactoryBuild{}, err
+	}
+	// The daemon loads these itself; check here to explain mistakes before starting.
+	if err := preflightBuild(ctx, root, input.ReviewsDir, input.Checks, cfg, input.NoValidate); err != nil {
+		return preparedFactoryBuild{}, err
+	}
+	return preparedFactoryBuild{Root: root, Config: cfg, Settings: settings}, nil
 }
 
 // buildChecks is the flag values checkBuildFlags judges.
@@ -959,4 +1004,21 @@ func resolveFallback(primary string, choice fallbackChoice, cfg *config.FactoryC
 		}
 	}
 	return out, nil
+}
+
+// buildSandboxDockerfile adapts the run overlay to the existing caller path.
+func buildSandboxDockerfile(flag string, explicit bool, path string) (string, error) {
+	if path == "" {
+		return flag, nil
+	}
+	overlay, err := factory.ReadRunOverlay(path)
+	if err != nil {
+		return "", newUserError(fmt.Sprintf("Could not read the overlay file %s.", path)).
+			withCode("command.invalid_args").withSuggestion("Check the --overlay path and JSON sandbox.dockerfile string.").
+			withExitCode(ExitBadArgs).wrap(err)
+	}
+	if explicit {
+		return flag, nil
+	}
+	return overlay.Sandbox.Dockerfile, nil
 }

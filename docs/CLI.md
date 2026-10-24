@@ -642,7 +642,7 @@ smelt
   wildcards are rejected), never the repo. A failed build is an error pointing at `smelt factory image`.
 - **`--sandbox-dockerfile PATH` takes the toolchain Dockerfile from outside the repo.** On `factory build`
   and `factory image` (docker backend only; refused with `--image`). The Dockerfile comes from, highest
-  first, the flag (`caller`), `factory.dockerfile` (`config`), then the repo's own `Dockerfile.smelt`
+  first, the flag or build overlay (`caller`), `factory.dockerfile` (`config`), then the repo's own `Dockerfile.smelt`
   (`repo`, used only when `factory.image` and `SMELT_DOCKER_IMAGE` name no image). A relative PATH is
   taken against the current directory. The repo stays the build context, so `COPY go.mod go.sum` finds the
   repo's files; the file is sent to Docker under the reserved name `.smelt-toolchain.Dockerfile` (a COPY of
@@ -650,8 +650,12 @@ smelt
   Dockerfile text and the COPY sources as before. `factory image` never repairs or regenerates such a file
   (`--regenerate` is refused with the flag). `factory status --json` shows the choice as
   `factory.sandbox`: `{"dockerfile", "source", "toolchain_tag", "kit": "<version>@<digest>"}`; for a kit built with
-  `--kit-from-source` the digest reads `source:<image id>`. The `--overlay` `sandbox.dockerfile` key is not
-  implemented: there is no overlay mechanism yet.
+  `--kit-from-source` the digest reads `source:<image id>`. `factory build --overlay refinement/run-overlay` reads JSON such as
+  `{"sandbox":{"dockerfile":"/data/toolchains/go.Dockerfile"}}`. An explicitly supplied
+  `--sandbox-dockerfile` wins over the overlay. Both the overlay file path and its Dockerfile path
+  resolve against the invocation directory, not the overlay directory. Unrelated keys are ignored;
+  malformed JSON and incompatible field types are rejected. No overlay is discovered implicitly,
+  and `--overlay` is available only on `factory build`.
 - **`smelt init` and `smelt factory image` verify what they build.** The image runs in a throwaway
   container over a copy of the repo: first the agent kit (`git`, `claude`, `codex`, `codex-code-mode-host`, `sha256sum`, `pkill`, then `lizard --version`, which only warns;
   plus one `codex exec --skip-git-repo-check "reply ok"` with a 60-second timeout when this machine has a
