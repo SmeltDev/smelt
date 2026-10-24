@@ -146,8 +146,10 @@ smelt init
   otherwise one matched to the detected stack.
 - **Dependencies:** your lockfiles' dependencies, baked into the package
   manager's store.
-- **Agent kit:** git, the Claude Code CLI, the Codex CLI, lizard (in a venv, for code quality)
-  and a few coreutils, in a section marked `# --- smelt agent kit (vN) ---`.
+- **No agent kit.** `Dockerfile.smelt` builds your toolchain only (it needs
+  `git`, `bash`, `pkill` and `sha256sum`). smelt adds the agent kit itself
+  (the Claude Code, Codex and Grok CLIs and lizard, from a published image)
+  as a second layer on top, whatever the base image's user.
 
 **How the image is checked:** after the build, smelt verifies the image by
 running the agent kit, your install step and your cheapest check inside it. If
@@ -165,20 +167,13 @@ git commit -m "Set up smelt factory"
 and the lockfiles it copies, so when either changes, the next
 `smelt factory build` rebuilds the image automatically.
 
-**When smelt updates its agent kit:** `Dockerfile.smelt` is written once and
-never changed behind your back, so a Dockerfile from an older smelt keeps its
-older kit. `smelt factory build` and `smelt factory image` compare the kit
-version in the marker with the current one and, when it is older, warn (at most
-once a day for `factory build`) and carry on. To update it:
-
-```bash
-smelt factory image                 # pulls the current agent-kit image and rebuilds the sandbox image
-```
-
-It keeps everything above the marker as you wrote it, then builds and verifies
-the image. Pass `--yes` to skip the question. `--regenerate` instead re-runs
-detection and rewrites the whole file. A Dockerfile without the marker cannot be
-updated this way.
+**When smelt updates its agent kit:** nothing in `Dockerfile.smelt` changes.
+`smelt factory image` builds your toolchain image, then a small generated layer
+that copies in the current kit; a new kit rebuilds only that layer. A kit
+section (`# --- smelt agent kit (vN) ---`) in a `Dockerfile.smelt` from an older
+smelt is ignored: smelt says so once per project, and you can delete it.
+`--update-kit` and `--yes` are retired and do nothing. Offline, the kit pulled
+last is used; with none, pass `--kit-from-source` in a smelt checkout.
 
 ### Add review prompts (recommended)
 
@@ -301,7 +296,7 @@ the macOS keychain (read-only). Anthropic has said third-party tools should not
 call that endpoint and it can change without notice. Turn the probe off with
 `{"harness": {"claude": {"usage_probe": false}}}` in `~/.config/smelt/config.json`;
 without it, or when it fails, the last rate-limit signal a run saw is shown.
-An image built from an older Dockerfile (agent kit v1) has no
+An image built by an older smelt (agent kit v1) has no
 `smelt.harnesses` label; smelt then runs the image once to see which agents it
 has, and remembers the answer per image. `image_status` says `labeled`,
 `unlabeled` or `no_image`.

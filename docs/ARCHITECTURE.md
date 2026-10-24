@@ -750,9 +750,11 @@ installed by `pip --require-hashes`, pins in `sandboximage.lizardWheels`); the i
 `manifest.json`). The Go pins (`sandboximage.KitPins`) are the single source: `kit/build.sh` passes them
 as build args and a test keeps the Dockerfile's ARG defaults equal. The release `kit` job publishes it
 (`:<KitVersion>`, `:<KitVersion>-<smelt version>`) and signs the digest. `ResolveKit` pulls by tag,
-resolves the digest, and falls back to the last remembered digest offline; `ComposeWithKitImage` swaps
-the kit section of the Dockerfile for a `COPY --from=` layer, and the digest reaches `Context.Tag`
-through the composed content. See `kit/README.md` for bumping a tool.
+resolves the digest, and falls back to the last remembered digest offline. The sandbox image is two
+builds: `NewPlan` plans the toolchain image from the Dockerfile above any kit marker
+(`ToolchainDockerfile`), and `Plan.SandboxPlan` plans a generated layer (`SandboxDockerfile`:
+`FROM` the toolchain, `COPY --from=<kit>`, static `ENV`, labels) whose tag (`SandboxTag`) hashes the
+toolchain tag and the kit ref. `Builder.Ensure` builds the toolchain first when it is missing. See `kit/README.md` for bumping a tool.
 
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 

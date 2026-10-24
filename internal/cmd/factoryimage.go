@@ -118,7 +118,7 @@ func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root st
 	if err != nil || s.ImageSource != imageFromDockerfile {
 		return s, err
 	}
-	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile, Now: time.Now()})
+	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile})
 	s.Image, err = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: s.Dockerfile, Reason: s.Dockerfile + " changed", ReadyTimeout: flags.ReadyTimeout})
 	return s, err
 }
@@ -155,9 +155,13 @@ smelt init) if it is not on this Docker host yet. smelt factory build does the
 same before a run; use this command after editing Dockerfile.smelt by hand or
 when the build failed.
 
-The image's tag is derived from the Dockerfile and the dependency files it
-COPYs, so changing either makes the next build a new image. The Docker layer
-cache keeps unchanged layers cheap.
+The build has two stages. The toolchain image is built from the Dockerfile (and
+only the part above an old "# --- smelt agent kit" section, which is no longer
+used); its tag is derived from the Dockerfile and the dependency files it COPYs,
+so changing either makes the next build a new image. The sandbox image is built
+on top of it from a Dockerfile smelt generates, which copies in the agent kit;
+its tag is derived from the toolchain tag and the kit, so a new kit rebuilds
+only that layer. The Docker layer cache keeps unchanged layers cheap.
 
 Dockerfile.smelt is never overwritten without asking. If it is missing, it is
 generated from detection and the CI config.
@@ -168,10 +172,10 @@ writing it. It re-runs detection, so hand edits are lost.
 
 The agent CLIs (Claude, Codex, Grok) and lizard come from the agent kit image,
 ghcr.io/smeltdev/smelt-kit, which smelt pulls by tag, resolves to a digest and
-copies into the image in place of the "# --- smelt agent kit" section of
-Dockerfile.smelt; everything above that line is kept as the toolchain. When the
-pull fails, smelt says so and uses the kit it pulled last. Because the kit is
-supplied at build time, Dockerfile.smelt needs no update when it changes.
+copies into every sandbox image, whatever Dockerfile.smelt says. When the pull
+fails, smelt says so and uses the kit it pulled last; with none, it fails and
+names --kit-from-source. Dockerfile.smelt needs no update when the kit changes.
+The base image needs git, bash, pkill and sha256sum; the kit installs nothing.
 
 --kit-from-source builds the kit image from the kit/ directory of the project
 (smelt's own source tree) and uses it instead of pulling, for development and
@@ -210,7 +214,7 @@ a section to update. It exits 0 and says why.
 			if err := prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate); err != nil {
 				return err
 			}
-			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, Now: time.Now(), EveryTime: true})
+			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, EveryTime: true})
 			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource})
 			if err != nil {
 				return err
