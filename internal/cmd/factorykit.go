@@ -5,8 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
@@ -14,52 +12,50 @@ import (
 	"github.com/smeltdev/smelt/internal/ui"
 )
 
-// kitWarnedFile is the stamp, in the project's data dir, of the day the
-// outdated-kit warning was last printed.
+// kitWarnedFile is the stamp, in the project's data dir, that the unused-kit
+// note was printed for this project.
 const kitWarnedFile = "kit-warned"
 
-// kitNotice says when and how an outdated kit is reported.
+// kitNotice says when and how a leftover kit section is reported.
 type kitNotice struct {
 	Root, Dockerfile string
-	Now              time.Time
-	// EveryTime prints the warning on every call; otherwise at most once a
-	// day, so a user who keeps an old kit on purpose is not nagged.
+	// EveryTime prints the note on every call; otherwise once per project, so
+	// a user who keeps the section is not nagged.
 	EveryTime bool
 }
 
-// kitWarning is the text to warn with when the committed dockerfile carries an
-// older agent kit, "" when it is current, newer or unreadable. It is pure but
-// for reading the file.
+// kitWarning is the text to warn with when the committed dockerfile still has
+// an agent kit section, which smelt ignores, "" when it has none or is
+// unreadable. It is pure but for reading the file.
 func kitWarning(root, dockerfile string) string {
 	raw, err := os.ReadFile(filepath.Join(root, dockerfile))
 	if err != nil {
 		return ""
 	}
-	v, _ := sandboximage.KitVersionOf(string(raw))
-	if v >= sandboximage.KitVersion {
+	v, found := sandboximage.KitVersionOf(string(raw))
+	if !found {
 		return ""
 	}
 	return sandboximage.KitOutdatedWarning(dockerfile, v)
 }
 
-// noteKitOutdated prints the outdated-kit warning when it is due and returns
-// its text, whether or not it was printed, so the run can record it. It never
+// noteKitOutdated prints the unused-kit note when it is due and returns its
+// text, whether or not it was printed, so the run can record it. It never
 // fails a run.
 func noteKitOutdated(streams iostream.Streams, n kitNotice) string {
 	warning := kitWarning(n.Root, n.Dockerfile)
 	if warning == "" {
 		return ""
 	}
-	today := n.Now.Format(time.DateOnly)
 	stamp := kitStampPath(n.Root)
 	if !n.EveryTime && stamp != "" {
-		if raw, err := os.ReadFile(stamp); err == nil && strings.TrimSpace(string(raw)) == today {
+		if _, err := os.Stat(stamp); err == nil {
 			return warning
 		}
 	}
 	streams.ErrPrintln(ui.ErrWarning(warning))
 	if stamp != "" && os.MkdirAll(filepath.Dir(stamp), 0o700) == nil {
-		_ = os.WriteFile(stamp, []byte(today+"\n"), 0o644)
+		_ = os.WriteFile(stamp, []byte("1\n"), 0o644)
 	}
 	return warning
 }
@@ -72,11 +68,11 @@ func kitStampPath(root string) string {
 	return filepath.Join(dir, kitWarnedFile)
 }
 
-// noteUpdateKitRetired is all --update-kit does now: the agent kit is a
-// published image that smelt copies in at build time, so there is no section of
+// noteUpdateKitRetired is all --update-kit does now: smelt puts its agent kit
+// on every sandbox image when it builds one, so there is no section of
 // Dockerfile.smelt left to update.
 func noteUpdateKitRetired(streams iostream.Streams) {
-	streams.ErrPrintln(ui.Warning("--update-kit does nothing now and will be removed: the agent kit is an image smelt copies in when it builds, in place of the kit section of Dockerfile.smelt. Run smelt factory image to build with the current kit."))
+	streams.ErrPrintln(ui.Warning("--update-kit does nothing now and will be removed: smelt adds its agent kit itself when it builds the image, and the kit section of Dockerfile.smelt is no longer used (you can delete it). Run smelt factory image to build with the current kit."))
 }
 
 // kitSource says where the agent kit image comes from.
@@ -86,35 +82,34 @@ type kitSource struct {
 	FromSource bool
 }
 
-// withAgentKit swaps the plan's Dockerfile kit section for a copy from the kit
-// image. A Dockerfile with no kit section is left alone, and then needs no kit
-// image, so Docker is not asked for one.
-func withAgentKit(ctx context.Context, streams iostream.Streams, builder *sandboximage.Builder, plan sandboximage.Plan, src kitSource) (sandboximage.Plan, error) {
-	if _, found := sandboximage.KitVersionOf(plan.Context.Content); !found {
-		return plan, nil
-	}
-	ref, err := kitImageRef(ctx, streams, builder, src)
+// kitProvider is the part of a Builder that gets the kit image.
+type kitProvider interface {
+	PullKit(ctx context.Context, tagRef string) (string, error)
+	Exists(ctx context.Context, tag string) (bool, error)
+	BuildKit(ctx context.Context, kitDir string, opts sandboximage.BuildOptions) (string, error)
+}
+
+// withAgentKit is the sandbox plan on top of the toolchain plan: a layer that
+// copies the kit image in, whatever the Dockerfile says about a kit.
+func withAgentKit(ctx context.Context, streams iostream.Streams, kits kitProvider, toolchain sandboximage.Plan, src kitSource) (sandboximage.Plan, error) {
+	ref, err := kitImageRef(ctx, streams, kits, src)
 	if err != nil {
-		return plan, err
+		return toolchain, err
 	}
-	composed, err := plan.WithKit(ref)
-	if err != nil {
-		return plan, &userError{msg: "Could not add the agent kit to the image.", suggestion: suggestionFactoryImage, err: err}
-	}
-	return composed, nil
+	return toolchain.SandboxPlan(ref), nil
 }
 
 // kitImageRef resolves the kit image to copy from, telling the user when it is
 // the one pulled last because the registry could not be reached.
-func kitImageRef(ctx context.Context, streams iostream.Streams, builder *sandboximage.Builder, src kitSource) (string, error) {
+func kitImageRef(ctx context.Context, streams iostream.Streams, kits kitProvider, src kitSource) (string, error) {
 	if src.FromSource {
-		return buildKitFromSource(ctx, streams, builder, src.Root)
+		return buildKitFromSource(ctx, streams, kits, src.Root)
 	}
 	dir, err := config.AppData()
 	if err != nil {
 		return "", &userError{msg: "Could not find smelt's data directory.", err: err}
 	}
-	choice, err := sandboximage.ResolveKit(ctx, builder, sandboximage.KitStatePath(dir))
+	choice, err := sandboximage.ResolveKit(ctx, kits, sandboximage.KitStatePath(dir))
 	if errors.Is(err, sandboximage.ErrKitUnavailable) {
 		return "", newUserError("Could not get the agent kit image " + sandboximage.KitTagRef() + ".").
 			withCode("factory.kit_unavailable").
@@ -131,7 +126,7 @@ func kitImageRef(ctx context.Context, streams iostream.Streams, builder *sandbox
 }
 
 // buildKitFromSource builds the kit image from root/kit and returns its ID.
-func buildKitFromSource(ctx context.Context, streams iostream.Streams, builder *sandboximage.Builder, root string) (string, error) {
+func buildKitFromSource(ctx context.Context, streams iostream.Streams, kits kitProvider, root string) (string, error) {
 	kitDir := filepath.Join(root, "kit")
 	if _, err := os.Stat(filepath.Join(kitDir, "Dockerfile")); err != nil {
 		return "", newUserError("--kit-from-source needs kit/Dockerfile in the project, which smelt's own source tree has.").
@@ -141,7 +136,7 @@ func buildKitFromSource(ctx context.Context, streams iostream.Streams, builder *
 			wrap(err)
 	}
 	streams.ErrPrintf("Building the agent kit image %s from %s\n", sandboximage.KitLocalRef(), kitDir)
-	id, err := builder.BuildKit(ctx, kitDir, sandboximage.BuildOptions{
+	id, err := kits.BuildKit(ctx, kitDir, sandboximage.BuildOptions{
 		LogPath:  kitBuildLog(root),
 		Progress: func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) },
 	})

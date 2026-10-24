@@ -1,6 +1,8 @@
 package sandboximage
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -18,8 +20,6 @@ import (
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
-
-	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 func TestReadBuildStream(t *testing.T) {
@@ -48,15 +48,17 @@ func TestTailKeepsLastLines(t *testing.T) {
 
 // fakeDocker is a daemon that has some images and answers builds with a canned stream.
 type fakeDocker struct {
-	images  map[string]bool
-	stream  string
-	builds  []build.ImageBuildOptions
-	context []byte
+	images   map[string]bool
+	stream   string
+	builds   []build.ImageBuildOptions
+	context  []byte   // the last build context
+	contexts [][]byte // every build context, in order
 }
 
 func (f *fakeDocker) ImageBuild(_ context.Context, r io.Reader, o build.ImageBuildOptions) (build.ImageBuildResponse, error) {
 	f.builds = append(f.builds, o)
 	f.context, _ = io.ReadAll(r)
+	f.contexts = append(f.contexts, f.context)
 	return build.ImageBuildResponse{Body: io.NopCloser(strings.NewReader(f.stream))}, nil
 }
 
@@ -152,34 +154,142 @@ func TestBuildLive(t *testing.T) {
 	assert.Assert(t, exists)
 }
 
-// TestKitLive builds the agent kit on a real daemon and finds both agent CLIs
-// in the image. It skips without Docker, and with -short: it downloads both.
-func TestKitLive(t *testing.T) {
+// dockerfileOf is the Dockerfile of the i-th build the fake daemon ran, read
+// from the context it received.
+func (f *fakeDocker) dockerfileOf(t *testing.T, i int) string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(f.contexts[i]))
+	for {
+		h, err := tr.Next()
+		assert.NilError(t, err)
+		if h.Name == f.builds[i].Dockerfile {
+			raw, err := io.ReadAll(tr)
+			assert.NilError(t, err)
+			return string(raw)
+		}
+	}
+}
+
+func TestEnsureBuildsTheToolchainThenTheSandbox(t *testing.T) {
+	const kit = KitRegistryRepo + "@sha256:aaaa"
+	for _, fx := range fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			tool, err := planFor(t, fx.toolchain+fx.old)
+			assert.NilError(t, err)
+			plan := tool.SandboxPlan(kit)
+			f := &fakeDocker{stream: `{"stream":"ok\n"}` + "\n"}
+			var told []string
+			built, err := NewBuilder(f).Ensure(context.Background(), plan, EnsureOptions{Building: func(tag string) { told = append(told, tag) }})
+			assert.NilError(t, err)
+			assert.Assert(t, built)
+			assert.DeepEqual(t, told, []string{tool.Tag, plan.Tag})
+			assert.Equal(t, len(f.builds), 2)
+			assert.DeepEqual(t, f.builds[0].Tags, []string{tool.Tag})
+			assert.DeepEqual(t, f.builds[1].Tags, []string{plan.Tag})
+			assert.Equal(t, f.dockerfileOf(t, 0), fx.toolchain)
+			assert.Equal(t, f.dockerfileOf(t, 1), SandboxDockerfile(tool.Tag, kit))
+			assert.Equal(t, f.builds[1].Labels[LabelSandbox], plan.Slug)
+		})
+	}
+}
+
+func TestEnsureBuildsOnlyTheSandboxWhenTheToolchainExists(t *testing.T) {
+	tool := goPlan(t)
+	plan := tool.SandboxPlan(KitRegistryRepo + "@sha256:bbbb")
+	f := &fakeDocker{images: map[string]bool{tool.Tag: true}}
+	built, err := NewBuilder(f).Ensure(context.Background(), plan, EnsureOptions{})
+	assert.NilError(t, err)
+	assert.Assert(t, built)
+	assert.Equal(t, len(f.builds), 1)
+	assert.DeepEqual(t, f.builds[0].Tags, []string{plan.Tag})
+}
+
+func TestEnsureSkipsAnExistingSandboxWithoutItsToolchain(t *testing.T) {
+	plan := goPlan(t).SandboxPlan(KitRegistryRepo + "@sha256:cccc")
+	f := &fakeDocker{images: map[string]bool{plan.Tag: true}}
+	built, err := NewBuilder(f).Ensure(context.Background(), plan, EnsureOptions{})
+	assert.NilError(t, err)
+	assert.Assert(t, !built)
+	assert.Equal(t, len(f.builds), 0)
+}
+
+func TestEnsureRebuildIgnoresTheCacheForBothImages(t *testing.T) {
+	tool := goPlan(t)
+	plan := tool.SandboxPlan(KitRegistryRepo + "@sha256:dddd")
+	f := &fakeDocker{images: map[string]bool{tool.Tag: true, plan.Tag: true}}
+	_, err := NewBuilder(f).Ensure(context.Background(), plan, EnsureOptions{Rebuild: true})
+	assert.NilError(t, err)
+	assert.Equal(t, len(f.builds), 2)
+	assert.Assert(t, f.builds[0].NoCache && f.builds[1].NoCache)
+}
+
+func TestEnsureStopsWhenTheToolchainFails(t *testing.T) {
+	plan := goPlan(t).SandboxPlan(KitRegistryRepo + "@sha256:eeee")
+	f := &fakeDocker{stream: `{"error":"boom"}` + "\n"}
+	_, err := NewBuilder(f).Ensure(context.Background(), plan, EnsureOptions{})
+	var be *BuildError
+	assert.Assert(t, errors.As(err, &be), "%v", err)
+	assert.Equal(t, len(f.builds), 1)
+}
+
+// TestSandboxLayerLive builds the four fixtures, a toolchain-only Dockerfile
+// and one with an old kit section on a root (debian) and a non-root (cimg)
+// base, with the kit built from source, and runs each sandbox image: the
+// three agent CLIs answer and the user is the base's. It skips without Docker,
+// and with -short: it downloads the agent CLIs.
+func TestSandboxLayerLive(t *testing.T) {
 	if testing.Short() {
-		t.Skip("downloads both agent CLIs")
+		t.Skip("downloads the agent CLIs")
 	}
 	b, err := Connect()
 	if err != nil {
 		t.Skipf("no docker: %v", err)
 	}
 	defer func() { _ = b.Close() }()
-	if _, err := b.Exists(context.Background(), "smelt-live-probe:none"); err != nil {
+	ctx := context.Background()
+	if _, err := b.Exists(ctx, "smelt-live-probe:none"); err != nil {
 		t.Skipf("docker daemon unreachable: %v", err)
 	}
 	docker, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skip("no docker CLI to run the image with")
 	}
-	dir := writeRepo(t, map[string]string{
-		"Dockerfile.smelt": Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil)),
-	})
-	plan, err := NewPlan(dir, "Dockerfile.smelt")
+	kitDir, err := filepath.Abs(filepath.Join("..", "..", "kit"))
 	assert.NilError(t, err)
-	_, err = b.Ensure(context.Background(), plan, EnsureOptions{})
+	kitID, err := b.BuildKit(ctx, kitDir, BuildOptions{Tag: KitLocalRef()})
 	assert.NilError(t, err)
-	out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "codex --version && claude --version && test -x ~/.local/bin/codex-code-mode-host").CombinedOutput()
-	assert.NilError(t, err, string(out))
-	assert.Assert(t, strings.Contains(string(out), "codex"), string(out))
+
+	live := []struct {
+		name, toolchain, old string
+		root                 bool
+	}{
+		{"debian toolchain only", "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates procps coreutils bash && rm -rf /var/lib/apt/lists/*\n", "", true},
+		{"cimg toolchain only", "FROM cimg/base:stable\n", "", false},
+	}
+	for _, l := range live {
+		for _, old := range []string{"", "\n# --- smelt agent kit (v4) ---\nRUN false\n"} {
+			name := l.name
+			if old != "" {
+				name = strings.Replace(name, "toolchain only", "old section", 1)
+			}
+			t.Run(name, func(t *testing.T) {
+				dir := writeRepo(t, map[string]string{"Dockerfile.smelt": l.toolchain + old})
+				tool, err := NewPlan(dir, "Dockerfile.smelt")
+				assert.NilError(t, err)
+				plan := tool.SandboxPlan(kitID)
+				_, err = b.Ensure(ctx, plan, EnsureOptions{})
+				assert.NilError(t, err)
+				out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "claude --version && codex --version && grok --version && id -u").CombinedOutput()
+				assert.NilError(t, err, string(out))
+				uid := strings.TrimSpace(string(out[strings.LastIndex(strings.TrimSpace(string(out)), "\n")+1:]))
+				if l.root {
+					assert.Equal(t, uid, "0", string(out))
+				} else {
+					assert.Assert(t, uid != "0", string(out))
+				}
+			})
+		}
+	}
 }
 
 func (f *fakeDocker) ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error) {

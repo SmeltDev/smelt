@@ -140,12 +140,13 @@ func factoryImageTag(root string, f *config.FactoryConfig) string {
 		return f.Image
 	case f.Dockerfile != "":
 		if plan, err := sandboximage.NewPlan(root, f.Dockerfile); err == nil {
-			// The factory image is built from the kit pulled last, not from the
-			// raw Dockerfile, so its tag is too.
+			// The factory image is the toolchain with the kit pulled last on
+			// top; before any pull there is no image to name.
 			if dir, err := config.AppData(); err == nil {
-				plan = plan.WithLastKit(sandboximage.KitStatePath(dir))
+				if sandbox, ok := plan.LastKitSandboxPlan(sandboximage.KitStatePath(dir)); ok {
+					return sandbox.Tag
+				}
 			}
-			return plan.Tag
 		}
 	}
 	return ""

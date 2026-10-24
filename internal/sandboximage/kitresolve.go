@@ -146,35 +146,25 @@ func (b *Builder) BuildKit(ctx context.Context, kitDir string, opts BuildOptions
 	return info.ID, nil
 }
 
-// WithKit is the plan with its Dockerfile's agent-kit section replaced by a
-// copy from the kit image kitRef. The tag is computed from the composed
-// Dockerfile, so a different kit is a different image. A Dockerfile without a
-// kit section is returned unchanged.
-func (p Plan) WithKit(kitRef string) (Plan, error) {
-	if kitMarkerOffset(p.Context.Content) < 0 {
-		return p, nil
+// SandboxPlan is the plan of the sandbox image: a generated layer that copies
+// the kit kitRef into the toolchain image p. Its tag follows both, so a new kit
+// rebuilds only this layer. It is pure.
+func (p Plan) SandboxPlan(kitRef string) Plan {
+	return Plan{
+		Context:   &Context{Dockerfile: "Dockerfile", Content: SandboxDockerfile(p.Tag, kitRef)},
+		Slug:      p.Slug,
+		Tag:       SandboxTag(p.Tag, kitRef),
+		Toolchain: &p,
 	}
-	c := *p.Context
-	c.Content = ComposeWithKitImage(c.Content, kitRef)
-	tag, err := c.Tag(p.Slug)
-	if err != nil {
-		return Plan{}, err
-	}
-	return Plan{Context: &c, Slug: p.Slug, Tag: tag}, nil
 }
 
-// WithLastKit is the plan as the last build composed it: with the kit pulled
-// last (see ResolveKit) copied in. It lets the tag of the factory image be
-// known without Docker. A Dockerfile without a kit section, or no kit pulled
-// yet, leaves the plan unchanged.
-func (p Plan) WithLastKit(statePath string) Plan {
+// LastKitSandboxPlan is the sandbox plan as the last build made it, with the
+// kit pulled last (see ResolveKit). It lets the tag of the factory image be
+// known without Docker; ok is false when no kit was pulled yet.
+func (p Plan) LastKitSandboxPlan(statePath string) (Plan, bool) {
 	ref, ok := readLastKit(statePath)
 	if !ok {
-		return p
+		return Plan{}, false
 	}
-	composed, err := p.WithKit(ref)
-	if err != nil {
-		return p
-	}
-	return composed
+	return p.SandboxPlan(ref), true
 }

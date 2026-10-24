@@ -110,16 +110,25 @@ type Plan struct {
 	Context *Context
 	Slug    string
 	Tag     string
+	// Toolchain is the image this one is built FROM, built first when it is
+	// missing. Nil for the toolchain image itself.
+	Toolchain *Plan
 }
 
-// NewPlan reads dockerfile (repo-relative) in dir and computes its image tag.
+// NewPlan reads dockerfile (repo-relative) in dir and plans the toolchain image
+// it builds: the part above any agent-kit marker, which SandboxPlan then puts
+// the kit on top of.
 func NewPlan(dir, dockerfile string) (Plan, error) {
 	c, err := ReadContext(dir, dockerfile)
 	if err != nil {
 		return Plan{}, err
 	}
+	c.Content = ToolchainDockerfile(c.Content)
+	if c.Sources, err = CopySources(c.Content); err != nil {
+		return Plan{}, err
+	}
 	slug := Slug(filepath.Base(dir))
-	tag, err := c.Tag(slug)
+	tag, err := c.Tag(slug + toolchainSuffix)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -128,7 +137,8 @@ func NewPlan(dir, dockerfile string) (Plan, error) {
 
 // EnsureOptions steer Ensure.
 type EnsureOptions struct {
-	// Rebuild builds even when the tag exists, without the layer cache.
+	// Rebuild builds even when the tag exists, without the layer cache. It
+	// applies to the toolchain image too; neither build pulls anything.
 	Rebuild  bool
 	LogPath  string
 	Progress iostream.StatusFunc
@@ -136,8 +146,10 @@ type EnsureOptions struct {
 	Building func(tag string)
 }
 
-// Ensure builds the plan's image when it is missing (or Rebuild is set) and
-// reports whether it built.
+// Ensure builds the plan's image when it is missing (or Rebuild is set), its
+// toolchain image first, and reports whether it built anything. An image that
+// is present is not built from its toolchain again, so a toolchain pruned
+// since is not rebuilt for nothing.
 func (b *Builder) Ensure(ctx context.Context, p Plan, opts EnsureOptions) (bool, error) {
 	if !opts.Rebuild {
 		exists, err := b.Exists(ctx, p.Tag)
@@ -145,13 +157,21 @@ func (b *Builder) Ensure(ctx context.Context, p Plan, opts EnsureOptions) (bool,
 			return false, err
 		}
 	}
+	var builtToolchain bool
+	if p.Toolchain != nil {
+		var err error
+		if builtToolchain, err = b.Ensure(ctx, *p.Toolchain, opts); err != nil {
+			return builtToolchain, err
+		}
+	}
 	if opts.Building != nil {
 		opts.Building(p.Tag)
 	}
-	return true, b.Build(ctx, BuildOptions{
+	err := b.Build(ctx, BuildOptions{
 		Context: p.Context, Slug: p.Slug, Tag: p.Tag,
 		NoCache: opts.Rebuild, LogPath: opts.LogPath, Progress: opts.Progress,
 	})
+	return builtToolchain || err == nil, err
 }
 
 // WriteDockerfile writes content to dockerfile in dir, refusing to replace a

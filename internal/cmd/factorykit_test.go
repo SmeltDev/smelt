@@ -3,11 +3,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -33,43 +33,42 @@ func capturedStreams() (iostream.Streams, *bytes.Buffer) {
 
 const kitV1Dockerfile = "FROM base\nRUN my-toolchain\n\n# --- smelt agent kit ---\nRUN curl claude\nCMD [\"sleep\", \"infinity\"]\n"
 
-func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
+func TestNoteKitOutdatedWarnsOncePerProject(t *testing.T) {
 	root := kitProject(t, kitV1Dockerfile)
 	streams, out := capturedStreams()
-	day := time.Date(2026, 10, 12, 9, 0, 0, 0, time.Local)
-	n := kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", Now: day}
+	n := kitNotice{Root: root, Dockerfile: "Dockerfile.smelt"}
 
 	got := noteKitOutdated(streams, n)
-	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v5"), got)
-	assert.Equal(t, strings.Count(out.String(), "Dockerfile.smelt was generated with agent kit v1"), 1)
+	assert.Assert(t, strings.Contains(got, "(v1) is no longer used"), got)
+	assert.Equal(t, strings.Count(out.String(), "Dockerfile.smelt (v1) is no longer used"), 1)
 	assert.Assert(t, strings.Contains(out.String(), "smelt factory image --regenerate"))
 
-	// The same day it is still reported to the caller, but not printed again.
+	// Later it is still reported to the caller, but not printed again.
 	out.Reset()
 	assert.Assert(t, noteKitOutdated(streams, n) != "")
 	assert.Equal(t, out.String(), "")
 
-	// Another day prints it again; so does asking for it every time.
-	n.Now = day.AddDate(0, 0, 1)
-	noteKitOutdated(streams, n)
-	assert.Assert(t, out.Len() > 0)
-	out.Reset()
+	// Asking for it every time prints it again.
 	n.EveryTime = true
 	noteKitOutdated(streams, n)
 	assert.Assert(t, out.Len() > 0)
 }
 
-func TestNoteKitOutdatedSaysNothingForACurrentOrNewerKit(t *testing.T) {
+// Any kit section is unused now, whatever its version, so any of them is noted.
+func TestNoteKitOutdatedWarnsForEveryVersionAndNotWithoutASection(t *testing.T) {
 	for _, body := range []string{
 		"FROM x\n# --- smelt agent kit (v5) ---\n",
 		"FROM x\n# --- smelt agent kit (v9) ---\n",
 	} {
 		root := kitProject(t, body)
 		streams, out := capturedStreams()
-		got := noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", Now: time.Now(), EveryTime: true})
-		assert.Equal(t, got, "")
-		assert.Equal(t, out.String(), "")
+		assert.Assert(t, noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: "Dockerfile.smelt"}) != "")
+		assert.Assert(t, out.Len() > 0)
 	}
+	root := kitProject(t, "FROM x\nRUN true\n")
+	streams, out := capturedStreams()
+	assert.Equal(t, noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", EveryTime: true}), "")
+	assert.Equal(t, out.String(), "")
 }
 
 func TestResolveBuildSettingsWarnsAboutAnOldKitOnceAndKeepsGoing(t *testing.T) {
@@ -112,13 +111,81 @@ func TestFactoryImageKitFlags(t *testing.T) {
 	}
 }
 
-func TestWithAgentKitLeavesADockerfileWithoutAKitSectionAlone(t *testing.T) {
-	root := kitProject(t, "FROM x\nRUN true\n")
-	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+// fakeKits is a kitProvider with canned answers.
+type fakeKits struct {
+	ref     string
+	pullErr error
+	have    bool
+	built   int
+}
+
+func (f *fakeKits) PullKit(context.Context, string) (string, error) { return f.ref, f.pullErr }
+func (f *fakeKits) Exists(context.Context, string) (bool, error)    { return f.have, nil }
+func (f *fakeKits) BuildKit(context.Context, string, sandboximage.BuildOptions) (string, error) {
+	f.built++
+	return "sha256:built", nil
+}
+
+func TestWithAgentKitAddsTheKitWhetherOrNotTheFileHasASection(t *testing.T) {
+	const ref = sandboximage.KitRegistryRepo + "@sha256:1111"
+	for name, body := range map[string]string{
+		"no section": "FROM x\nRUN true\n",
+		"a section":  "FROM x\nRUN true\n" + kitV1Dockerfile[len("FROM base\nRUN my-toolchain\n"):],
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := kitProject(t, body)
+			toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+			assert.NilError(t, err)
+			got, err := withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
+			assert.NilError(t, err)
+			assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, ref))
+			assert.Equal(t, got.Toolchain.Tag, toolchain.Tag)
+			assert.Assert(t, strings.Contains(got.Context.Content, "COPY --from="+ref+" /opt/smelt /opt/smelt"))
+			assert.Assert(t, !strings.Contains(got.Context.Content, "agent kit"))
+		})
+	}
+}
+
+func TestWithAgentKitOffline(t *testing.T) {
+	const ref = sandboximage.KitRegistryRepo + "@sha256:2222"
+	offline := errors.New("no network")
+	root := kitProject(t, "FROM x\n")
+	toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
 	assert.NilError(t, err)
-	// No kit section: the builder is never used, so nil is fine.
-	got, err := withAgentKit(t.Context(), iostream.Streams{}, nil, plan, kitSource{Root: root})
+
+	// Nothing cached: the error names the flag that works without a registry.
+	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{pullErr: offline}, toolchain, kitSource{Root: root})
+	var ue *userError
+	assert.Assert(t, asUserError(err, &ue), "%v", err)
+	assert.Equal(t, ue.code, "factory.kit_unavailable")
+	assert.Assert(t, strings.Contains(ue.suggestion, "--kit-from-source"), ue.suggestion)
+
+	// Cached: it is used, with a note.
+	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
-	assert.Equal(t, got.Tag, plan.Tag)
-	assert.Equal(t, got.Context.Content, "FROM x\nRUN true\n")
+	streams, out := capturedStreams()
+	got, err := withAgentKit(t.Context(), streams, &fakeKits{pullErr: offline, have: true}, toolchain, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, ref))
+	assert.Assert(t, strings.Contains(out.String(), "using the kit pulled last: "+ref), out.String())
+}
+
+func TestWithAgentKitFromSource(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+
+	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{}, toolchain, kitSource{Root: root, FromSource: true})
+	var ue *userError
+	assert.Assert(t, asUserError(err, &ue), "%v", err)
+	assert.Equal(t, ue.code, "command.invalid_args")
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, "kit"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "kit", "Dockerfile"), []byte("FROM scratch\n"), 0o644))
+	kits := &fakeKits{}
+	streams, _ := capturedStreams()
+	got, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root, FromSource: true})
+	assert.NilError(t, err)
+	assert.Equal(t, kits.built, 1)
+	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, "sha256:built"))
 }

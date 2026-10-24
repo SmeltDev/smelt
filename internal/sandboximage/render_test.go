@@ -2,6 +2,7 @@ package sandboximage
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -53,90 +54,53 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
-func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
+// Render writes the toolchain only: smelt adds the kit when it builds the image.
+func TestRenderHasNoKitSection(t *testing.T) {
 	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, KitCodex()))
-	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex,grok"))
-	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
+	assert.Check(t, !strings.Contains(got, "smelt agent kit"))
+	assert.Check(t, !strings.Contains(got, "LABEL "))
+	assert.Check(t, !strings.Contains(got, "claude.ai/install.sh"))
+	assert.Check(t, cmp.Equal(ToolchainDockerfile(got), got))
 }
 
-// readDockerfileSmelt reads the committed factory sandbox recipe, which must
-// carry the kit blocks verbatim.
-func readDockerfileSmelt(t *testing.T) string {
-	t.Helper()
-	raw, err := os.ReadFile("../../Dockerfile.smelt")
+func TestGoldensHaveNoKitSection(t *testing.T) {
+	files, err := filepath.Glob("testdata/*.Dockerfile")
 	assert.NilError(t, err)
-	return string(raw)
-}
-
-func TestDockerfileSmeltCarriesTheKitsCodexBlock(t *testing.T) {
-	local := readDockerfileSmelt(t)
-	assert.Check(t, cmp.Contains(local, KitCodex()))
-	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex,grok"))
-}
-
-func TestKitInstallsAPinnedGrokForBothArchitectures(t *testing.T) {
-	kit := KitGrok()
-	assert.Check(t, cmp.Contains(kit, "https://x.ai/cli/grok-"+GrokVersion+"-linux-${arch}"))
-	assert.Check(t, cmp.Contains(kit, "x86_64) arch=x86_64; sum=2a46d9e4d7ebd7a9cff7f95716714b19dad5f21dd2a497822400b1fb128969aa"))
-	assert.Check(t, cmp.Contains(kit, "aarch64|arm64) arch=aarch64; sum=0b808a2209728788d2e37c34ea1846d460b41528a9fc7edc7698b9e7dec12fe1"))
-	assert.Check(t, cmp.Contains(kit, "sha256sum -c -"))
-	assert.Check(t, cmp.Contains(kit, `test -x "$HOME/.local/bin/grok"`))
-	assert.Check(t, cmp.Contains(Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil)), kit))
-}
-
-func TestDockerfileSmeltCarriesTheKitsGrokBlock(t *testing.T) {
-	assert.Check(t, cmp.Contains(readDockerfileSmelt(t), KitGrok()))
-}
-
-func TestDockerfileSmeltCarriesTheKitsLizardBlock(t *testing.T) {
-	local := readDockerfileSmelt(t)
-	assert.Check(t, cmp.Contains(local, KitLizard()))
-	assert.Check(t, cmp.Contains(local, "LABEL "+LabelHarnesses+"=claude,codex,grok "+LabelKit+"="+kitVersionString()))
-	assert.Check(t, cmp.Contains(local, "python3-venv"))
-}
-
-// lizard is installed from hash-pinned wheels into a venv of its own, and an
-// image without python3 skips the step.
-func TestKitInstallsAPinnedLizard(t *testing.T) {
-	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, KitLizard()))
-	assert.Check(t, cmp.Contains(got, "python3 python3-venv"))
-	assert.Check(t, cmp.Contains(got, "lizard=="+LizardVersion+" --hash=sha256:"))
-	assert.Check(t, cmp.Contains(got, "pip\" install --no-cache-dir --require-hashes"))
-	assert.Check(t, cmp.Contains(got, `python3 -m venv "$HOME/.local/share/smelt-tools"`))
-	assert.Check(t, cmp.Contains(got, `ln -sf "$HOME/.local/share/smelt-tools/bin/lizard" "$HOME/.local/bin/lizard"`))
-	assert.Check(t, cmp.Contains(got, "python3 is missing"))
-	sha := regexp.MustCompile(`--hash=sha256:[0-9a-f]{64}'`)
-	reqs := lizardRequirements()
-	assert.Check(t, cmp.Len(sha.FindAllString(KitLizard(), -1), len(reqs)))
-	for _, r := range reqs {
-		assert.Check(t, sha.MatchString(r+"'"), r)
-		assert.Check(t, cmp.Contains(r, "=="), "every requirement is pinned: %s", r)
+	assert.Check(t, len(files) > 0)
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		assert.NilError(t, err)
+		assert.Check(t, !strings.Contains(string(raw), kitMarkerPrefix), f)
 	}
 }
 
-func TestKitInstallsTheCodexCommandHost(t *testing.T) {
-	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, "(v5)"))
-	assert.Check(t, cmp.Contains(got, `name="codex-code-mode-host-${arch}-unknown-linux-musl"`))
-	assert.Check(t, cmp.Contains(got, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
-	assert.Check(t, cmp.Equal(strings.Count(got, "sha256sum -c -"), 3))
+// TestDockerfileSmeltIsToolchainOnly keeps smelt's own factory Dockerfile free
+// of the kit, which smelt adds to every sandbox.
+func TestDockerfileSmeltIsToolchainOnly(t *testing.T) {
+	raw, err := os.ReadFile("../../Dockerfile.smelt")
+	assert.NilError(t, err)
+	_, found := KitVersionOf(string(raw))
+	assert.Check(t, !found)
+	assert.Check(t, cmp.Contains(string(raw), "procps"), "pkill comes from the toolchain")
 }
 
-// The version lives in CodexVersion alone, and each asset has a full SHA-256
-// for both architectures.
+// Each codex asset has a full SHA-256 for both architectures.
 func TestCodexAssetsArePinnedForBothArchitectures(t *testing.T) {
 	sha := regexp.MustCompile(`^[0-9a-f]{64}$`)
 	seen := map[string]bool{}
 	for _, a := range []codexAsset{codexMain, codexHost} {
 		for _, sum := range []string{a.sumX86, a.sumARM} {
-			assert.Check(t, sha.MatchString(sum), "%s: %q", a.prefix, sum)
+			assert.Check(t, sha.MatchString(sum), "%q", sum)
 			assert.Check(t, !seen[sum], "duplicate checksum %s", sum)
 			seen[sum] = true
-			assert.Check(t, cmp.Contains(a.install(), sum))
 		}
-		assert.Check(t, cmp.Contains(a.install(), codexReleaseURLBase+CodexVersion+"/"))
 	}
 	assert.Check(t, cmp.Len(seen, 4))
+}
+
+func TestLizardWheelsArePinnedByHash(t *testing.T) {
+	sha := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	for _, w := range lizardWheels {
+		assert.Check(t, sha.MatchString(w.sha256), w.name)
+	}
 }

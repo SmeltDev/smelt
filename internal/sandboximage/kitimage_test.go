@@ -36,14 +36,68 @@ func TestKitRefs(t *testing.T) {
 	assert.Check(t, strings.HasSuffix(KitLocalRef(), ":"+kitVersionString()))
 }
 
-func TestComposeWithKitImage(t *testing.T) {
-	base := "FROM debian:12\nRUN apt-get update\n" + kitMarker() + "RUN old kit\n"
-	got := ComposeWithKitImage(base, "ghcr.io/x/kit@sha256:abc")
-	assert.Check(t, strings.HasPrefix(got, "FROM debian:12\nRUN apt-get update\n"))
-	assert.Check(t, cmp.Contains(got, "COPY --from=ghcr.io/x/kit@sha256:abc /opt/smelt /opt/smelt\n"))
-	assert.Check(t, !strings.Contains(got, "RUN old kit"))
-	assert.Check(t, cmp.Equal(ComposeWithKitImage(got, "other"), ComposeWithKitImage(got, "other")))
-	assert.Check(t, cmp.Equal(ComposeWithKitImage("FROM x\n", "r"), "FROM x\n"))
+func TestSandboxDockerfile(t *testing.T) {
+	for _, f := range fixtures {
+		t.Run(f.name, func(t *testing.T) {
+			tool, err := planFor(t, f.toolchain+f.old)
+			assert.NilError(t, err)
+			got := SandboxDockerfile(tool.Tag, "ghcr.io/x/kit@sha256:abc")
+			assert.Check(t, strings.HasPrefix(got, "FROM "+tool.Tag+"\n"))
+			assert.Check(t, cmp.Contains(got, "COPY --from=ghcr.io/x/kit@sha256:abc /opt/smelt /opt/smelt\n"))
+			assert.Check(t, cmp.Contains(got, "ENV SMELT_KIT=/opt/smelt\n"))
+			assert.Check(t, cmp.Contains(got, "ENV PATH=/opt/smelt/bin:$PATH\n"))
+			assert.Check(t, cmp.Contains(got, "LABEL smelt.harnesses=claude,codex,grok smelt.kit="))
+			for _, banned := range []string{"USER ", "CMD ", "RUN ", "ENTRYPOINT "} {
+				assert.Check(t, !strings.Contains(got, banned), "%q in %s", banned, got)
+			}
+		})
+	}
+}
+
+// planFor plans a toolchain image from a Dockerfile's text.
+func planFor(t *testing.T, dockerfile string) (Plan, error) {
+	t.Helper()
+	dir := writeRepo(t, map[string]string{"Dockerfile.smelt": dockerfile})
+	return NewPlan(dir, "Dockerfile.smelt")
+}
+
+// tagHash is the digest part of a tag; the repository part follows the
+// directory the fixture is written to.
+func tagHash(tag string) string { return tag[strings.LastIndex(tag, ":")+1:] }
+
+func TestTags(t *testing.T) {
+	const kitA, kitB = KitRegistryRepo + "@sha256:aaaa", KitRegistryRepo + "@sha256:bbbb"
+	a, err := planFor(t, fixtures[0].toolchain)
+	assert.NilError(t, err)
+	old, err := planFor(t, fixtures[1].toolchain+fixtures[1].old)
+	assert.NilError(t, err)
+	changed, err := planFor(t, fixtures[0].toolchain+"RUN true\n")
+	assert.NilError(t, err)
+
+	assert.Check(t, cmp.Equal(tagHash(old.Tag), tagHash(a.Tag)), "an old kit section does not change the toolchain tag")
+	assert.Check(t, strings.Contains(a.Tag, toolchainSuffix+":"))
+	sa, sb := a.SandboxPlan(kitA), a.SandboxPlan(kitB)
+	assert.Check(t, cmp.Equal(sa.Tag, SandboxTag(a.Tag, kitA)))
+	assert.Check(t, sa.Tag != sb.Tag, "a new kit changes the sandbox tag")
+	assert.Check(t, cmp.Equal(sa.Toolchain.Tag, sb.Toolchain.Tag), "and only that")
+	assert.Check(t, tagHash(a.Tag) != tagHash(changed.Tag))
+	assert.Check(t, sa.Tag != changed.SandboxPlan(kitA).Tag, "a toolchain change changes both")
+	assert.Check(t, !strings.Contains(sa.Tag, toolchainSuffix))
+	assert.Check(t, strings.HasPrefix(sa.Tag, ImageName(a.Slug)+":"))
+	assert.Check(t, cmp.Equal(sa.Slug, a.Slug))
+}
+
+// TestSandboxEnvEqualsTheKitsEnvSh keeps the ENV lines of the sandbox Dockerfile
+// equal to what kit/Dockerfile writes into env.sh.
+func TestSandboxEnvEqualsTheKitsEnvSh(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "kit", "Dockerfile"))
+	assert.NilError(t, err)
+	kit := string(raw)
+	assert.Check(t, cmp.Contains(kit, "'SMELT_KIT=${SMELT_KIT:-"+KitDir+"}'"))
+	assert.Check(t, cmp.Contains(kit, `'PATH="$SMELT_KIT/bin:$PATH"'`))
+	got := SandboxDockerfile("t:1", "k")
+	assert.Check(t, cmp.Contains(got, "ENV SMELT_KIT="+KitDir+"\n"))
+	assert.Check(t, cmp.Contains(got, "ENV PATH="+KitDir+"/bin:$PATH\n"))
 }
 
 type fakePuller struct {
@@ -86,21 +140,19 @@ func TestDigestRef(t *testing.T) {
 	assert.Check(t, !ok)
 }
 
-func TestWithLastKitMatchesTheTagOfTheBuild(t *testing.T) {
-	dir := t.TempDir()
-	df := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.smelt"), []byte(df), 0o644))
-	plan, err := NewPlan(dir, "Dockerfile.smelt")
+func TestLastKitSandboxPlanMatchesTheTagOfTheBuild(t *testing.T) {
+	plan, err := planFor(t, Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil)))
 	assert.NilError(t, err)
 
 	state := KitStatePath(t.TempDir())
-	assert.Check(t, cmp.Equal(plan.WithLastKit(state).Tag, plan.Tag), "no kit pulled yet")
+	_, ok := plan.LastKitSandboxPlan(state)
+	assert.Check(t, !ok, "no kit pulled yet")
 
 	ref := KitRegistryRepo + "@sha256:" + strings.Repeat("a", 64)
 	assert.NilError(t, saveLastKit(state, ref))
-	built, err := plan.WithKit(ref)
-	assert.NilError(t, err)
-	got := plan.WithLastKit(state)
-	assert.Check(t, cmp.Equal(got.Tag, built.Tag))
+	got, ok := plan.LastKitSandboxPlan(state)
+	assert.Check(t, ok)
+	assert.Check(t, cmp.Equal(got.Tag, plan.SandboxPlan(ref).Tag))
 	assert.Check(t, got.Tag != plan.Tag)
+	assert.Check(t, cmp.Contains(got.Context.Content, ref))
 }

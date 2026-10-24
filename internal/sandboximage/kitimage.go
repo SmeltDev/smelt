@@ -4,13 +4,13 @@ import (
 	"strings"
 
 	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/hashutil"
 )
 
 // The agent kit is also published as an image of its own, built from kit/ by
 // the release workflow. It holds one directory, KitDir, that any Linux base
 // image can COPY in: the agent CLIs, a relocatable Python with lizard, an
-// env.sh and a manifest.json. KitVersion numbers it, like the Dockerfile
-// section it replaces.
+// env.sh and a manifest.json. KitVersion numbers it.
 const (
 	// KitDir is where the kit image keeps everything, and where a sandbox image
 	// gets it.
@@ -73,30 +73,43 @@ func KitPins() []KitArg {
 	return pins
 }
 
-// kitLayerBootstrap installs the few system tools the factory's own scripts
-// use, only when the base image lacks them and has apt. The kit itself needs
-// none of it; this keeps a Debian base without git or procps working.
-const kitLayerBootstrap = `RUN missing=; for t in git pkill sha256sum bash; do command -v "$t" >/dev/null 2>&1 || missing=1; done; \
-    if [ -n "$missing" ] && command -v apt-get >/dev/null 2>&1; then \
-      apt-get update && apt-get install -y --no-install-recommends git coreutils procps ca-certificates bash \
-      && rm -rf /var/lib/apt/lists/*; \
-    fi; \
-    if command -v git >/dev/null 2>&1; then git config --system safe.directory '*'; fi
-`
+// toolchainSuffix ends the repository name of a toolchain image, which keeps
+// its tags apart from the sandbox image's.
+const toolchainSuffix = "-toolchain"
 
-// ComposeWithKitImage is dockerfile with its agent-kit section replaced by a
-// layer that copies the kit image imageRef into the image: everything above the
-// marker is kept as the toolchain. A Dockerfile with no marker is returned as it
-// is, since smelt cannot tell where its own kit would go. It is pure.
-func ComposeWithKitImage(dockerfile, imageRef string) string {
+// ToolchainDockerfile is dockerfile as the toolchain image builds it: everything
+// above the agent-kit marker of an older file, which smelt no longer uses, or
+// the whole file when it has none. It is pure.
+func ToolchainDockerfile(dockerfile string) string {
 	off := kitMarkerOffset(dockerfile)
 	if off < 0 {
 		return dockerfile
 	}
-	user := kitUser(dockerfile[off:])
-	return dockerfile[:off] + kitMarker() +
-		asUser(rootUser, user, kitLayerBootstrap) +
-		"COPY --from=" + imageRef + " " + KitDir + " " + KitDir + "\n" +
+	return strings.TrimRight(dockerfile[:off], "\n") + "\n"
+}
+
+// kitHarnessLabel tells `smelt harness status` which agent CLIs the image has
+// and which kit built it.
+func kitHarnessLabel() string {
+	return "LABEL " + LabelHarnesses + "=claude,codex,grok " + LabelKit + "=" + kitVersionString() + "\n"
+}
+
+// SandboxDockerfile is the generated Dockerfile of the sandbox image: the
+// toolchain image with the kit copied in and put on PATH. It has no USER and no
+// package manager, so the sandbox runs as the toolchain's user. The ENV lines
+// are what the kit's env.sh sets (a test keeps them equal). It is pure.
+func SandboxDockerfile(toolchainTag, kitRef string) string {
+	return "FROM " + toolchainTag + "\n" +
+		"COPY --from=" + kitRef + " " + KitDir + " " + KitDir + "\n" +
+		"ENV SMELT_KIT=" + KitDir + "\n" +
 		"ENV PATH=" + KitDir + "/bin:$PATH\n" +
-		kitHarnessLabel() + kitCmd
+		kitHarnessLabel()
+}
+
+// SandboxTag names the sandbox image built from the toolchain image
+// toolchainTag and the kit kitRef: the toolchain's repository without its
+// suffix, and a digest of both, so a new kit changes only this tag. It is pure.
+func SandboxTag(toolchainTag, kitRef string) string {
+	repo, _, _ := strings.Cut(toolchainTag, ":")
+	return strings.TrimSuffix(repo, toolchainSuffix) + ":" + hashutil.SumParts(toolchainTag, kitRef)[:tagHexLen]
 }

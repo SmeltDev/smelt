@@ -238,7 +238,7 @@ smelt
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
 │       --kit-from-source           # Build the agent kit image from kit/ here instead of pulling the published one
-│       --update-kit                # Retired: prints a notice and does nothing (the kit is a published image)
+│       --update-kit                # Retired: prints a notice and does nothing (smelt adds the kit itself)
 │       --yes                       # Retired with --update-kit; does nothing
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -649,19 +649,17 @@ smelt
 - **The docker backend runs the install step once per sidecar** (the detected `install` setup step, else
   the `install` command) after the first sync and before the agent starts, streaming its output into the
   run log. Existing `pnpm install &&` prefixes in validation commands are left alone.
-- **The agent kit is versioned (`sandboximage.KitVersion`).** The kit section of `Dockerfile.smelt` opens
-  with `# --- smelt agent kit (vN) ---` and ends with `LABEL smelt.harnesses=… smelt.kit=N`; a file
-  without the marker is v1. `factory build` (for a `factory.dockerfile` image) and `factory image` print
-  one warning when the file's kit is older than the binary's, never block, record it in the run log and
-  as `kit_outdated: true` in the `factory` section of `smelt factory status --json`. `factory build`
-  prints it at most once a day per project (a stamp in the project's data dir); `factory image` always.
-  A newer kit than the binary's is not outdated. Kit v3 adds `codex-code-mode-host`, the companion program
-  Codex runs every command through (a separate release asset, pinned by SHA-256 next to `codex` and
-  versioned by `sandboximage.CodexVersion`); a v2 image has Codex but it cannot run anything. Kit v4
-  adds `python3`/`python3-venv` and lizard (`sandboximage.LizardVersion`), installed into a venv at
-  `~/.local/share/smelt-tools` from pinned wheels with `pip --require-hashes` and linked into
-  `~/.local/bin`; without it, or without `python3`, code quality is `not measured` and nothing fails. Kit v5 adds the
-  Grok CLI.
+- **The agent kit is versioned (`sandboximage.KitVersion`) and added by smelt, not by `Dockerfile.smelt`.**
+  `Dockerfile.smelt` holds the toolchain only; `smelt init` writes no kit section. An older file's section,
+  which opens with `# --- smelt agent kit (vN) ---`, is ignored: the toolchain image is built from the text
+  above the marker. `factory build` (for a `factory.dockerfile` image) and `factory image` print one note
+  that the section is unused, once per project (a `kit-warned` stamp in the project's data dir; `factory
+  image` prints it every time), record it in the run log and as `kit_outdated: true` in the `factory`
+  section of `smelt factory status --json`, and never block. Kit v3 adds `codex-code-mode-host`, the
+  companion program Codex runs every command through (pinned by SHA-256 next to `codex`,
+  `sandboximage.CodexVersion`); a v2 image has Codex but it cannot run anything. Kit v4 adds lizard
+  (`sandboximage.LizardVersion`) on a relocatable Python; without it code quality is `not measured` and
+  nothing fails. Kit v5 adds the Grok CLI.
 - **A Codex turn that cannot start its command host fails the run.** Output saying
   `codex-code-mode-host is missing` or `command host failed to start` (agent message, failed command or
   error event) becomes `codex.ErrHostMissing`; the run ends `failed`, not `no_change`, with "Codex can't
@@ -673,19 +671,24 @@ smelt
   compares `git status --porcelain` and `git diff HEAD` before and after: a review that changed the tree
   exits non-zero and its answer is dropped. Verified on 2026-10-13: a review in the sandbox image runs in
   bypass mode with the git guard (`--sandbox read-only` is not used).
-- **The agent kit is an image, `ghcr.io/smeltdev/smelt-kit:<KitVersion>`** (built from `kit/`, published
-  and cosign-signed by the release for amd64 and arm64, also as `:<KitVersion>-<smelt version>`). It holds
-  `/opt/smelt` with `bin/` (`claude`, `codex`, `codex-code-mode-host`, `grok`, `lizard`), `env.sh` and
-  `manifest.json`. `smelt factory image` pulls it by tag, resolves the tag to a digest, remembers the digest
-  in `<data dir>/kit-image.json`, and builds the sandbox image from `Dockerfile.smelt` with everything above
-  the kit marker kept and a `COPY --from=<kit>@<digest> /opt/smelt /opt/smelt` layer in place of the kit
-  section; the digest is part of the image tag, so a new kit makes a new image. Offline, the last digest
-  pulled for the same kit version is used with a visible notice; with none, it fails and points at
-  `--kit-from-source`, which builds `kit/` on this machine (needs a smelt source checkout) instead of
-  pulling. `--update-kit` and `--yes` are retired: they print a notice and exit 0. A Dockerfile with no marker
-  (hand-written) is built as it is. <a id="updating-the-agent-kit"></a>To get the kit into such a file, add
-  the marker section from `smelt factory image --regenerate` in a scratch checkout, or copy the
-  `COPY --from=` line.
+- **The sandbox image is built in two stages.** The agent kit is an image,
+  `ghcr.io/smeltdev/smelt-kit:<KitVersion>` (built from `kit/`, published and cosign-signed by the
+  release for amd64 and arm64, also as `:<KitVersion>-<smelt version>`). It holds `/opt/smelt` with `bin/`
+  (`claude`, `codex`, `codex-code-mode-host`, `grok`, `lizard`), `env.sh` and `manifest.json`. Stage 1
+  builds the toolchain image from `Dockerfile.smelt` (everything above any kit marker) as
+  `smelt-<repo>-toolchain:<hash>`. Stage 2 builds a generated Dockerfile: `FROM` the toolchain,
+  `COPY --from=<kit>@<digest> /opt/smelt /opt/smelt`, `ENV SMELT_KIT` and `PATH`, and the
+  `smelt.harnesses`/`smelt.kit` labels, with no `USER` and no `CMD`, so the sandbox runs as the toolchain's
+  user (root or not). The sandbox tag is a hash of the toolchain tag and the kit digest: a new kit changes
+  only that tag and rebuilds only stage 2; a toolchain change changes both. This is unconditional: a
+  hand-written Dockerfile gets the kit too, and it needs `git`, `bash`, `pkill` and `sha256sum` in the base
+  (the verify step says which is missing). `smelt factory image` pulls the kit by tag, resolves it to a digest
+  and remembers it in `<data dir>/kit-image.json`. Offline, the last digest pulled is used with a visible
+  notice; with none, it fails with code `factory.kit_unavailable` and points at `--kit-from-source`, which
+  builds `kit/` on this machine (needs a smelt source checkout) instead of pulling. `--update-kit` and
+  `--yes` are retired: they print the same notice every time and do nothing. <a id="updating-the-agent-kit"></a>
+  There is nothing to update in `Dockerfile.smelt`: run `smelt factory image`, and delete a leftover kit
+  section if you like (`--regenerate` writes a file without one).
 - **`Dockerfile.smelt` is generated from detection, never overwritten silently.** The base image is the
   one every CI gate job uses (`.circleci/config.yml`), else the detected stack's image. Dependencies
   are baked as the package manager's store (pnpm, npm, yarn, uv, pip, Go, Cargo), not as an installed

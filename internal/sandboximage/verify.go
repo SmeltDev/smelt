@@ -21,9 +21,15 @@ const (
 	StepGate    = "gate"
 )
 
+// baseToolsCheck fails with a message when the toolchain image lacks a tool the
+// factory's own scripts use. The kit supplies the agent CLIs only, and installs
+// nothing, so these come from the project's Dockerfile.
+const baseToolsCheck = `for t in git bash pkill sha256sum; do command -v "$t" >/dev/null 2>&1 || ` +
+	`{ echo "the image has no $t: install it in the toolchain part of the Dockerfile (smelt adds the agent CLIs, not git, bash, procps or coreutils)" >&2; exit 1; }; done && `
+
 // kitCheck proves the tools the factory's own scripts and agent need exist.
 // Codex runs every command through its host, which --version never starts.
-const kitCheck = "git --version && claude --version && codex --version && grok --version && sha256sum --version && pkill -V && " +
+const kitCheck = baseToolsCheck + "git --version && claude --version && codex --version && grok --version && sha256sum --version && pkill -V && " +
 	"command -v " + codexHostBinary
 
 // lizardCheck is run after the kit check and only warns: an image without
@@ -31,7 +37,7 @@ const kitCheck = "git --version && claude --version && codex --version && grok -
 const lizardCheck = "lizard --version"
 
 // lizardMissing is the warning for an image whose lizard does not run.
-const lizardMissing = "lizard is not installed in the image, so code quality will not be measured (the agent kit image installs it; rebuild with smelt factory image)"
+const lizardMissing = "lizard is not installed in the image, so code quality will not be measured (the agent kit supplies it; rebuild with smelt factory image)"
 
 // codexSmokeTimeout bounds the one real Codex turn in the kit step; the
 // command's own timeout is the same 60 seconds.
