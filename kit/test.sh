@@ -26,6 +26,9 @@ for base in "${bases[@]}"; do
       git --version
       git init /tmp/runtime-check
       git -C /tmp/runtime-check status
+      # Exercise the ownership mismatch of a host-owned bind mount for both
+      # root and non-root toolchain users, even on hosts without user namespaces.
+      GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git -C /tmp/runtime-check status
       test -x "$(git --exec-path)/git-remote-https"
       bash -c "echo bash-ok"
       pkill --version

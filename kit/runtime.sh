@@ -7,11 +7,16 @@ mkdir -p "$runtime/bin" "$runtime/lib" "$runtime/git-core" "$runtime/git-core-re
 cp -L /lib/*.so* /usr/lib/*.so* "$runtime/lib/"
 cp /etc/ssl/certs/ca-certificates.crt "$runtime/ca-certificates.crt"
 cp -R /usr/share/git-core "$runtime/share"
+# Sync creates the mounted repository as the host UID, which can differ from
+# the sandbox user (including root). Keep trust inside the kit, independent
+# of the base image's /etc/gitconfig and without needing to modify it.
+printf '[safe]\n\tdirectory = *\n' > "$runtime/gitconfig"
 wrap() {
   target=$1
   binary=$2
   cat > "$target" <<WRAPPER
 #!/bin/sh
+export GIT_CONFIG_SYSTEM=$runtime/gitconfig
 export GIT_EXEC_PATH=$runtime/git-core
 export GIT_TEMPLATE_DIR=$runtime/share/templates
 export GIT_SSL_CAINFO=\${GIT_SSL_CAINFO:-$runtime/ca-certificates.crt}

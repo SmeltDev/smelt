@@ -156,3 +156,21 @@ func TestHarnessRefreshCommand(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "Selected agent kit v6: sha256:new"), out)
 	assert.Assert(t, strings.Contains(out, "smelt factory image"), out)
 }
+
+func TestFactoryImageTagUsesDefaultToolchain(t *testing.T) {
+	t.Setenv("SMELT_DOCKER_IMAGE", "")
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(root, sandboximage.DefaultDockerfile), []byte("FROM alpine:3.22\n"), 0o644))
+	cfg := &config.FactoryConfig{}
+	assert.Equal(t, factoryImageTag(root, cfg), "")
+	dir, err := config.AppData()
+	assert.NilError(t, err)
+	ref := sandboximage.KitRegistryRepo + "@sha256:abcd"
+	assert.NilError(t, sandboximage.RememberKit(sandboximage.KitStatePath(dir), ref))
+	plan, err := sandboximage.NewPlan(root, sandboximage.DefaultDockerfile)
+	assert.NilError(t, err)
+	assert.Equal(t, factoryImageTag(root, cfg), plan.SandboxPlan(ref).Tag)
+	cfg.Image = "custom:tag"
+	assert.Equal(t, factoryImageTag(root, cfg), cfg.Image)
+}

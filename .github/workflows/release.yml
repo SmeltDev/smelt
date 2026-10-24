@@ -65,4 +65,5 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@v3
       - name: Build, push and sign the kit
+        shell: bash
         run: kit/publish.sh "${GITHUB_REF_NAME#v}" | tee -a "$GITHUB_STEP_SUMMARY"

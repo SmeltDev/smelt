@@ -282,11 +282,7 @@ func initManagedImage(ctx context.Context, workDir string, streams iostream.Stre
 		streams.ErrPrintln(ui.Dim("Build it later with: smelt factory image (smelt factory build also does it)"))
 		return
 	}
-<<<<<<< HEAD
 	tag, err := readyImage(ctx, streams, workDir, sandboximage.ToolchainSource{Path: dockerfile, Kind: sandboximage.ToolchainConfig}, cfg, imageOptions{})
-=======
-	tag, err := readyImage(ctx, streams, workDir, dockerfile, cfg, imageOptions{})
->>>>>>> origin/main
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(errorSummary(err)))
 		return

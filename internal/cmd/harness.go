@@ -18,6 +18,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness/status"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sandboximage"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/ui"
 )
 
@@ -136,17 +137,22 @@ func (dockerImages) RunProbe(ctx context.Context, tag string) ([]string, error) 
 // factoryImageTag is the docker image the project's factory runs use, "" when
 // it is not known without building anything.
 func factoryImageTag(root string, f *config.FactoryConfig) string {
-	switch {
-	case f.Image != "":
+	if f.Image != "" {
 		return f.Image
-	case f.Dockerfile != "":
-		if plan, err := sandboximage.NewPlan(root, f.Dockerfile); err == nil {
-			// The factory image is the toolchain with the kit pulled last on
-			// top; before any pull there is no image to name.
-			if dir, err := config.AppData(); err == nil {
-				if sandbox, ok := plan.LastKitSandboxPlan(sandboximage.KitStatePath(dir)); ok {
-					return sandbox.Tag
-				}
+	}
+	_, err := os.Stat(filepath.Join(root, sandboximage.DefaultDockerfile))
+	src, ok := sandboximage.ResolveToolchain(sandboximage.ToolchainInputs{
+		Config: f.Dockerfile, RepoHasDefault: err == nil && os.Getenv(docker.EnvImage) == "",
+	})
+	if !ok {
+		return ""
+	}
+	if plan, err := sandboximage.NewPlan(root, src.Path); err == nil {
+		// The factory image is the toolchain with the kit pulled last on
+		// top; before any pull there is no image to name.
+		if dir, err := config.AppData(); err == nil {
+			if sandbox, ok := plan.LastKitSandboxPlan(sandboximage.KitStatePath(dir)); ok {
+				return sandbox.Tag
 			}
 		}
 	}
