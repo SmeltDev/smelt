@@ -26,6 +26,7 @@ func TestKitRuntimePackagesGitResources(t *testing.T) {
 	write("etc/ssl/certs/ca-certificates.crt", "certificate")
 	write("usr/share/git-core/templates/description", "template")
 	write("helpers/mergetools/meld", "#!/bin/sh\necho merge\n")
+	assert.NilError(t, os.Symlink("mergetools", filepath.Join(root, "helpers/merge-resources")))
 	write("helpers/git-remote-https", "\x7fELFhelper")
 	write("helpers/git-script", "#!/bin/sh\necho helper\n")
 	write("tools/git", "#!/bin/sh\nif [ \"$1\" = --exec-path ]; then echo '"+filepath.Join(root, "helpers")+"'; fi\n")
@@ -54,6 +55,7 @@ func TestKitRuntimePackagesGitResources(t *testing.T) {
 	runtime := filepath.Join(root, "opt/smelt/libexec/runtime")
 	for path, want := range map[string]string{
 		"git-core/mergetools/meld":       "#!/bin/sh\necho merge\n",
+		"git-core/merge-resources/meld":  "#!/bin/sh\necho merge\n",
 		"git-core/git-script":            "#!/bin/sh\necho helper\n",
 		"git-core-real/git-remote-https": "\x7fELFhelper",
 		"share/templates/description":    "template",
@@ -65,4 +67,11 @@ func TestKitRuntimePackagesGitResources(t *testing.T) {
 	wrapper, err := os.ReadFile(filepath.Join(runtime, "git-core/git-remote-https"))
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(wrapper), "--library-path"))
+	// Resource scripts must remain executable after copying, including when
+	// the distribution exposes their directory through a symlink.
+	for _, helper := range []string{"git-script", "mergetools/meld", "merge-resources/meld"} {
+		cmd := exec.CommandContext(t.Context(), filepath.Join(runtime, "git-core", helper))
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "%s", out)
+	}
 }
