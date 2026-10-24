@@ -1,18 +1,69 @@
 package sandboximage
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	cmp "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
+
+// TestRepositorySandboxLive exercises the actual repository toolchain and gates.
+// Run with -timeout 90m: a cold build downloads Go modules and the agent kit.
+func TestRepositorySandboxLive(t *testing.T) {
+	if testing.Short() || os.Getenv("SMELT_REPOSITORY_SANDBOX_NESTED") == "1" {
+		t.Skip("repository sandbox gates: short mode or already inside this test's sandbox")
+	}
+	b, err := Connect()
+	if err != nil {
+		t.Skipf("no docker: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Minute)
+	defer cancel()
+	if _, err := b.Exists(ctx, "smelt-live-probe:none"); err != nil {
+		t.Skipf("docker daemon unreachable: %v", err)
+	}
+	docker, err := exec.LookPath("docker")
+	assert.NilError(t, err)
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	assert.NilError(t, err)
+	cfg, err := config.LoadProjectConfig(root)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg != nil)
+	assert.Equal(t, cfg.Factory.Image, "")
+	toolchain, err := NewPlan(root, cfg.Factory.Dockerfile)
+	assert.NilError(t, err)
+	kit, err := b.BuildKit(ctx, filepath.Join(root, "kit"), BuildOptions{Tag: KitLocalRef()})
+	assert.NilError(t, err)
+	plan := toolchain.SandboxPlan(kit)
+	t.Logf("toolchain=%s kit=%s sandbox=%s", toolchain.Tag, kit, plan.Tag)
+	_, err = b.Ensure(ctx, plan, EnsureOptions{
+		LogPath:  filepath.Join(t.TempDir(), "repository-sandbox-build.log"),
+		Progress: func(_ iostream.Level, msg string) { t.Log(msg) },
+	})
+	assert.NilError(t, err)
+	// Copy inside the container so gates can write reports and caches without
+	// changing the checkout. No daemon is forwarded to nested Docker tests.
+	out, err := exec.CommandContext(ctx, docker, "run", "--rm",
+		"--env", "SMELT_REPOSITORY_SANDBOX_NESTED=1",
+		"--mount", "type=bind,src="+root+",dst=/source,readonly",
+		plan.Tag, "bash", "-euc",
+		"mkdir /tmp/smelt-gates; cp -a /source/. /tmp/smelt-gates/; cd /tmp/smelt-gates; task test; task lint").CombinedOutput()
+	t.Logf("repository gates:\n%s", out)
+	assert.NilError(t, err, string(out))
+}
 
 func TestRenderGolden(t *testing.T) {
 	env := func(stack, image, version string, setup ...envspec.Step) *envspec.Environment {
@@ -82,6 +133,35 @@ func TestDockerfileSmeltIsToolchainOnly(t *testing.T) {
 	_, found := KitVersionOf(string(raw))
 	assert.Check(t, !found)
 	assert.Check(t, cmp.Contains(string(raw), "procps"), "pkill comes from the toolchain")
+	assert.Check(t, cmp.Equal(ToolchainDockerfile(string(raw)), string(raw)))
+	for _, tool := range []string{"claude.ai/install.sh", KitDir, "lizard"} {
+		assert.Check(t, !strings.Contains(string(raw), tool), "kit tool %s belongs in the kit", tool)
+	}
+
+	root := filepath.Join("..", "..")
+	cfg, err := config.LoadProjectConfig(root)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg != nil)
+	assert.Check(t, cmp.Equal(cfg.Factory.Backend, config.BackendDocker))
+	assert.Check(t, cmp.Equal(cfg.Factory.Dockerfile, "Dockerfile.smelt"))
+	assert.Check(t, cmp.Equal(cfg.Factory.Image, ""), "an image override bypasses the managed toolchain")
+
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	assert.NilError(t, err)
+	version := regexp.MustCompile(`(?m)^go (\S+)$`).FindStringSubmatch(string(mod))
+	assert.Assert(t, cmp.Len(version, 2))
+	assert.Check(t, cmp.Contains(string(raw), "FROM cimg/go:"+version[1]+"\n"))
+
+	plan, err := NewPlan(root, cfg.Factory.Dockerfile)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(plan.Context.Content, string(raw)))
+	const kitA, kitB = KitRegistryRepo + "@sha256:aaaa", KitRegistryRepo + "@sha256:bbbb"
+	a, b := plan.SandboxPlan(kitA), plan.SandboxPlan(kitB)
+	assert.Check(t, cmp.Equal(a.Tag, SandboxTag(plan.Tag, kitA)))
+	assert.Check(t, cmp.Equal(b.Tag, SandboxTag(plan.Tag, kitB)))
+	assert.Check(t, a.Tag != b.Tag, "a kit change rebuilds the sandbox")
+	assert.Check(t, cmp.Equal(a.Toolchain.Tag, plan.Tag))
+	assert.Check(t, cmp.Equal(a.Toolchain.Tag, b.Toolchain.Tag), "a kit change reuses the toolchain")
 }
 
 // Each codex asset has a full SHA-256 for both architectures.

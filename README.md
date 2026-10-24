@@ -484,6 +484,13 @@ task acceptance-test    # acceptance tests
 task dev-install        # build and link into ~/.local/bin
 ```
 
+The repository's `.smelt/config.json` selects `Dockerfile.smelt` for Docker
+factory runs. Factory automatically builds this toolchain image and adds its
+own agent kit to produce the sandbox. The Dockerfile provides Go, gate tools,
+and warmed Go module and Python harness dependencies; agents and lizard come
+from the kit. A kit update changes the sandbox without requiring changes to
+this repository's toolchain or a manual image build.
+
 **Releasing** (maintainers): `task release VERSION=1.0.0` tags `v1.0.0` and
 pushes the tag; the Release workflow (`.github/workflows/release.yml`) runs
 goreleaser, publishes the archives, `checksums.txt` and `install.sh`, and
