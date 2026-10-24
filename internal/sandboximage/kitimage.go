@@ -115,6 +115,8 @@ func sandboxDockerfile(toolchainTag string, choice KitChoice) string {
 		"COPY --from=" + choice.Ref + " " + KitDir + " " + KitDir + "\n" +
 		"ENV SMELT_KIT=" + KitDir + "\n" +
 		"ENV PATH=" + KitDir + "/bin:$PATH\n" +
+		"ENV SSL_CERT_FILE=" + KitDir + "/libexec/runtime/ca-certificates.crt\n" +
+		"ENV NODE_EXTRA_CA_CERTS=" + KitDir + "/libexec/runtime/ca-certificates.crt\n" +
 		kitHarnessLabel(choice.Kit)
 }
 

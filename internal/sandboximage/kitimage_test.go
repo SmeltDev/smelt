@@ -99,7 +99,11 @@ func TestSandboxEnvEqualsTheKitsEnvSh(t *testing.T) {
 	kit := string(raw)
 	assert.Check(t, cmp.Contains(kit, "'SMELT_KIT=${SMELT_KIT:-"+KitDir+"}'"))
 	assert.Check(t, cmp.Contains(kit, `'PATH="$SMELT_KIT/bin:$PATH"'`))
+	assert.Check(t, cmp.Contains(kit, `'SSL_CERT_FILE="$SMELT_KIT/libexec/runtime/ca-certificates.crt"'`))
+	assert.Check(t, cmp.Contains(kit, `'NODE_EXTRA_CA_CERTS="$SSL_CERT_FILE"'`))
 	got := SandboxDockerfile("t:1", "k")
+	assert.Check(t, cmp.Contains(got, "ENV SSL_CERT_FILE="+KitDir+"/libexec/runtime/ca-certificates.crt\n"))
+	assert.Check(t, cmp.Contains(got, "ENV NODE_EXTRA_CA_CERTS="+KitDir+"/libexec/runtime/ca-certificates.crt\n"))
 	assert.Check(t, cmp.Contains(got, "ENV SMELT_KIT="+KitDir+"\n"))
 	assert.Check(t, cmp.Contains(got, "ENV PATH="+KitDir+"/bin:$PATH\n"))
 }

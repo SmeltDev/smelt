@@ -21,6 +21,8 @@ for base in "${bases[@]}"; do
     docker run --rm --user "$user" -e HOME=/tmp "smelt-kit-test:$$" sh -c '
       set -e
       . /opt/smelt/env.sh
+      test -s "$SSL_CERT_FILE"
+      test "$NODE_EXTRA_CA_CERTS" = "$SSL_CERT_FILE"
       git --version
       git init /tmp/runtime-check
       git -C /tmp/runtime-check status

@@ -46,7 +46,7 @@ ARG CLAUDE_SHA_X86_64=2ceb05e0a97b09be4c14717464a2156e8d087dea9867a399dd75d3b898
 ARG CLAUDE_SHA_AARCH64=adfd1f0ef12a3bcafa66e33491fc3e4204e41aeb4a7305ffc311c16c26793825
 ARG CLAUDE_URL_BASE=https://downloads.claude.ai/claude-code-releases
 
-RUN apk add --no-cache bash curl jq ca-certificates git procps coreutils
+RUN apk add --no-cache bash curl jq ca-certificates git procps coreutils libstdc++ libgcc
 COPY runtime.sh /work/runtime.sh
 
 # fetch URL DEST SHA256: download, then fail the build unless the checksum
@@ -107,6 +107,8 @@ RUN set -eu; . kitenv; \
     /opt/smelt/libexec/python/bin/python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r /work/requirements.txt; \
     record lizard "$LIZARD_VERSION" "$LIZARD_SHA256"
 
+RUN sh /work/runtime.sh
+
 # Wrappers: each finds the kit from its own path, so the directory can sit
 # anywhere. They are the only scripts, and need only /bin/sh.
 RUN set -eu; \
@@ -114,7 +116,7 @@ RUN set -eu; \
       printf '%s\n' '#!/bin/sh' \
         'd=$(cd "$(dirname "$0")/.." && pwd -P)' \
         'export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1' \
-        "exec \"\$d\"/lib/ld-musl-*.so.1 $2 \"\$@\"" > "/opt/smelt/bin/$1"; \
+        "exec \"\$d\"/lib/ld-musl-*.so.1 --library-path \"\$d/libexec/runtime/lib\" $2 \"\$@\"" > "/opt/smelt/bin/$1"; \
       chmod +x "/opt/smelt/bin/$1"; \
     }; \
     wrap claude '"$d/libexec/claude"'; \
@@ -124,13 +126,14 @@ RUN set -eu; \
       'SMELT_KIT=${SMELT_KIT:-/opt/smelt}' \
       'export SMELT_KIT' \
       'PATH="$SMELT_KIT/bin:$PATH"' \
-      'export PATH' > /opt/smelt/env.sh; \
+      'export PATH' \
+      'SSL_CERT_FILE="$SMELT_KIT/libexec/runtime/ca-certificates.crt"' \
+      'NODE_EXTRA_CA_CERTS="$SSL_CERT_FILE"' \
+      'export SSL_CERT_FILE NODE_EXTRA_CA_CERTS' > /opt/smelt/env.sh; \
     jq -s --arg kit "$KIT_VERSION" --arg smelt "$SMELT_VERSION" --arg arch "$(uname -m)" \
       '{kit:($kit|tonumber),smelt:$smelt,arch:$arch,tools:.}' /work/tools.ndjson > /opt/smelt/manifest.json; \
     /opt/smelt/bin/lizard --version; \
     /opt/smelt/bin/claude --version
-
-RUN sh /work/runtime.sh
 
 FROM scratch
 ARG KIT_VERSION=5
