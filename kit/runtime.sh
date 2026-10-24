@@ -32,7 +32,10 @@ done
 # native helper needs the bundled loader too; shell helpers use the base shell.
 for helper in "$(git --exec-path)"/*; do
   name=$(basename "$helper")
-  if [ "$(head -c 4 "$helper" | od -An -tx1 | tr -d ' \n')" = 7f454c46 ]; then
+  if [ -d "$helper" ]; then
+    # Git also ships shell resources such as mergetools/ here.
+    cp -RL "$helper" "$runtime/git-core/$name"
+  elif [ "$(head -c 4 "$helper" | od -An -tx1 | tr -d ' \n')" = 7f454c46 ]; then
     cp -L "$helper" "$runtime/git-core-real/$name"
     wrap "$runtime/git-core/$name" "$runtime/git-core-real/$name"
   else
