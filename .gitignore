@@ -62,3 +62,5 @@ test-fetch-on-stale-sidecar.log
 test-reports/
 
 .smelt-pilot/
+# last attempt of a failed Dockerfile repair
+Dockerfile.smelt.repair

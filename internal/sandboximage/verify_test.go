@@ -2,6 +2,10 @@ package sandboximage
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,4 +211,88 @@ func TestVerifyRunsLizardAndOnlyWarnsWhenItIsMissing(t *testing.T) {
 			assert.Assert(t, strings.Contains(strings.Join(notes, "\n"), tt.wantNote), notes)
 		})
 	}
+}
+
+// hostBackend gives the container a real host directory, as the docker
+// provider does, and runs scripts there on the host.
+type hostBackend struct {
+	fakeBackend
+	hostDir string
+}
+
+func (h *hostBackend) Create(ctx context.Context, name, image, repoPath string) (sidecar.Instance, error) {
+	inst, err := h.fakeBackend.Create(ctx, name, image, repoPath)
+	inst.HostDir = h.hostDir
+	return inst, err
+}
+
+// Sync mimics the docker provider: files without .git, then a bare git init.
+func (h *hostBackend) Sync(_ context.Context, _, _, cwd string, _ bool, _ iostream.StatusFunc) error {
+	for _, args := range [][]string{{"-C", h.hostDir, "init", "-q"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+	}
+	return os.WriteFile(filepath.Join(h.hostDir, "note.txt"), []byte("uncommitted"), 0o644)
+}
+
+func (h *hostBackend) Exec(_ context.Context, _, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+	if !strings.Contains(script, "rev-parse") {
+		return 0, nil
+	}
+	script = strings.Replace(script, "cd "+sidecar.ShellEscape(h.repoPath)+" && ", "", 1)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = h.hostDir
+	out, err := cmd.CombinedOutput()
+	onOutput(iostream.StreamStderr, out)
+	if err != nil {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func TestVerifySeedsTheBaseRefsIntoTheScratchCopy(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	for _, args := range [][]string{{"branch", "-M", "main"}, {"update-ref", "refs/remotes/origin/main", "HEAD"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = gitrepo.GitEnv(dir)
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
+	b := &hostBackend{hostDir: t.TempDir()}
+	gate := &config.Command{Name: "lint", Run: "git rev-parse --verify origin/main && git rev-parse --verify main && git status --porcelain | wc -l | grep -qx 0"}
+	res, err := Verify(context.Background(), b, VerifyOptions{Dir: dir, Image: "smelt-x:abc", Gate: gate})
+	assert.NilError(t, err)
+	assert.Assert(t, res.OK(), res.Describe())
+}
+
+func TestVerifyResultImageFault(t *testing.T) {
+	tests := []struct {
+		name string
+		res  VerifyResult
+		want bool
+	}{
+		{"passed", VerifyResult{}, false},
+		{"kit", VerifyResult{Step: StepKit, ExitCode: 1, OutputTail: "boom"}, true},
+		{"install", VerifyResult{Step: StepInstall, ExitCode: 1, OutputTail: "boom"}, true},
+		{"gate missing command", VerifyResult{Step: StepGate, ExitCode: 1, OutputTail: "sh: golangci-lint: command not found"}, true},
+		{"gate exit 127", VerifyResult{Step: StepGate, ExitCode: 127}, true},
+		{"gate dash not found", VerifyResult{Step: StepGate, ExitCode: 2, OutputTail: "sh: 1: gofmt: not found"}, true},
+		{"gate missing library", VerifyResult{Step: StepGate, ExitCode: 1, OutputTail: "x: error while loading shared libraries: libz.so.1"}, true},
+		{"gate git refs", VerifyResult{Step: StepGate, ExitCode: 1, OutputTail: "task: Command \"git rev-parse\" failed: exit status 1"}, false},
+		{"gate flaky test", VerifyResult{Step: StepGate, ExitCode: 1, OutputTail: "--- FAIL: TestX"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.res.ImageFault(), tt.want)
+		})
+	}
+}
+
+func TestFirstErrorLine(t *testing.T) {
+	r := VerifyResult{OutputTail: "\ntask: Command failed\n\n  fatal: bad revision 'origin/main'\nmore\n"}
+	assert.Equal(t, r.FirstErrorLine(), "fatal: bad revision 'origin/main'")
+	assert.Equal(t, VerifyResult{OutputTail: "task: only wrapper"}.FirstErrorLine(), "task: only wrapper")
+	assert.Equal(t, len([]rune(VerifyResult{OutputTail: strings.Repeat("x", 500)}.FirstErrorLine())), maxErrorLineRunes+1)
 }
