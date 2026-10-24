@@ -136,7 +136,7 @@ func TestWithAgentKitAddsTheKitWhetherOrNotTheFileHasASection(t *testing.T) {
 			root := kitProject(t, body)
 			toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
 			assert.NilError(t, err)
-			got, err := withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
+			got, _, err := withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
 			assert.NilError(t, err)
 			assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, ref))
 			assert.Equal(t, got.Toolchain.Tag, toolchain.Tag)
@@ -154,17 +154,17 @@ func TestWithAgentKitOffline(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Nothing cached: the error names the flag that works without a registry.
-	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{pullErr: offline}, toolchain, kitSource{Root: root})
+	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{pullErr: offline}, toolchain, kitSource{Root: root})
 	var ue *userError
 	assert.Assert(t, asUserError(err, &ue), "%v", err)
 	assert.Equal(t, ue.code, "factory.kit_unavailable")
 	assert.Assert(t, strings.Contains(ue.suggestion, "--kit-from-source"), ue.suggestion)
 
 	// Cached: it is used, with a note.
-	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
+	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
 	streams, out := capturedStreams()
-	got, err := withAgentKit(t.Context(), streams, &fakeKits{pullErr: offline, have: true}, toolchain, kitSource{Root: root})
+	got, _, err := withAgentKit(t.Context(), streams, &fakeKits{pullErr: offline, have: true}, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
 	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, ref))
 	assert.Assert(t, strings.Contains(out.String(), "using the kit pulled last: "+ref), out.String())
@@ -175,7 +175,7 @@ func TestWithAgentKitFromSource(t *testing.T) {
 	toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
 	assert.NilError(t, err)
 
-	_, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{}, toolchain, kitSource{Root: root, FromSource: true})
+	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{}, toolchain, kitSource{Root: root, FromSource: true})
 	var ue *userError
 	assert.Assert(t, asUserError(err, &ue), "%v", err)
 	assert.Equal(t, ue.code, "command.invalid_args")
@@ -184,7 +184,7 @@ func TestWithAgentKitFromSource(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(root, "kit", "Dockerfile"), []byte("FROM scratch\n"), 0o644))
 	kits := &fakeKits{}
 	streams, _ := capturedStreams()
-	got, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root, FromSource: true})
+	got, _, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root, FromSource: true})
 	assert.NilError(t, err)
 	assert.Equal(t, kits.built, 1)
 	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, "sha256:built"))

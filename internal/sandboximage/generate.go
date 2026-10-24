@@ -123,6 +123,22 @@ func NewPlan(dir, dockerfile string) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	return toolchainPlan(dir, c)
+}
+
+// NewPlanFromFile is NewPlan for a Dockerfile at an absolute path anywhere on
+// the machine; dir is still the build context.
+func NewPlanFromFile(dir, path string) (Plan, error) {
+	c, err := ReadContextFile(dir, path)
+	if err != nil {
+		return Plan{}, err
+	}
+	return toolchainPlan(dir, c)
+}
+
+// toolchainPlan trims c to the toolchain part and tags it.
+func toolchainPlan(dir string, c *Context) (Plan, error) {
+	var err error
 	c.Content = ToolchainDockerfile(c.Content)
 	if c.Sources, err = CopySources(c.Content); err != nil {
 		return Plan{}, err

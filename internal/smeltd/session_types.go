@@ -342,6 +342,9 @@ type FactoryRun struct {
 	// KitOutdated reports that the sandbox Dockerfile has an older agent kit
 	// than this smelt's.
 	KitOutdated bool `json:"kit_outdated,omitempty"`
+	// Sandbox says which Dockerfile the run's toolchain image was built from.
+	// It is nil when the image is user-managed (--image, factory.image).
+	Sandbox *FactorySandbox `json:"sandbox,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
 	// Stat is the committed work's diff stat against Baseline, "" when there
@@ -760,6 +763,9 @@ type FactoryRequest struct {
 	// KitWarning is set by the client when the project's Dockerfile has an older
 	// agent kit than this smelt's; the run records and logs it.
 	KitWarning string `json:"kit_warning,omitempty"`
+	// Sandbox is set by the client when it built the run's image from a
+	// Dockerfile; the run records it.
+	Sandbox *FactorySandbox `json:"sandbox,omitempty"`
 	// Log is where the run keeps a plain-text log of its full context: an
 	// absolute path, factory.LogDefault, or empty for none. Verbose adds more
 	// to it and implies it; see factory.RunOptions.
@@ -802,4 +808,26 @@ type HarnessTurn struct {
 	Error        string              `json:"error,omitempty"`
 	ResetAt      *time.Time          `json:"reset_at,omitempty"`
 	RateLimit    *harness.RateLimit  `json:"rate_limit,omitempty"`
+}
+
+// The places a FactorySandbox's Dockerfile can come from.
+const (
+	// SandboxFromCaller is a Dockerfile the caller named, outside the repository.
+	SandboxFromCaller = "caller"
+	// SandboxFromConfig is factory.dockerfile.
+	SandboxFromConfig = "config"
+	// SandboxFromRepo is the repository's own Dockerfile.smelt.
+	SandboxFromRepo = "repo"
+)
+
+// FactorySandbox is where a run's toolchain came from.
+type FactorySandbox struct {
+	// Dockerfile is the absolute path for SandboxFromCaller, else repo-relative.
+	Dockerfile string `json:"dockerfile"`
+	// Source is SandboxFromCaller, SandboxFromConfig or SandboxFromRepo.
+	Source string `json:"source"`
+	// ToolchainTag is the toolchain image built from Dockerfile.
+	ToolchainTag string `json:"toolchain_tag"`
+	// Kit is "<version>@<digest>" of the agent kit copied into the sandbox image.
+	Kit string `json:"kit"`
 }
