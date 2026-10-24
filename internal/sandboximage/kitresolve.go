@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,13 +55,19 @@ type lastKit struct {
 func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, error) {
 	tag, version := KitTagRef(), KitVersion
 	previous, _ := readLastKit(statePath)
-	if previous.Selected != "" {
+	// A refresh may select a kit newer than this CLI, but must not hold a
+	// subsequent CLI upgrade back on an older kit.
+	if previous.Selected != "" && previous.Kit >= KitVersion {
 		tag, version = previous.Selected, previous.Kit
+	}
+	selected := ""
+	if tag == previous.Selected {
+		selected = previous.Selected
 	}
 	ref, pullErr := p.PullKit(ctx, tag)
 	if pullErr == nil {
 		// Remembering is best effort: the build does not depend on it.
-		_ = writeLastKit(statePath, lastKit{Kit: version, Ref: ref, Selected: previous.Selected})
+		_ = writeLastKit(statePath, lastKit{Kit: version, Ref: ref, Selected: selected})
 		return KitChoice{Ref: ref, Kit: version}, nil
 	}
 	last, ok := readLastKit(statePath)
@@ -120,7 +125,9 @@ func (b *Builder) PullKit(ctx context.Context, tagRef string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("pull %s: %w", tagRef, err)
 	}
-	_, err = io.Copy(io.Discard, rc)
+	// Docker can report registry failures in the JSON stream after returning
+	// HTTP 200. Do not inspect a stale local tag as though the pull succeeded.
+	err = readBuildStream(rc, func(string) {})
 	_ = rc.Close()
 	if err != nil {
 		return "", fmt.Errorf("pull %s: %w", tagRef, err)

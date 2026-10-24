@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -229,4 +232,47 @@ func TestRefreshSelectsNewKitWithoutCLIUpgrade(t *testing.T) {
 	last, ok := readLastKit(state)
 	assert.Assert(t, ok)
 	assert.Equal(t, last.Selected, tag)
+}
+
+func TestUpgradeReplacesOlderRefreshSelection(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	old := lastKit{Kit: KitVersion - 1, Ref: "cached:old", Selected: KitRegistryRepo + ":4"}
+	assert.NilError(t, writeLastKit(state, old))
+	var requested string
+	choice, err := ResolveKit(t.Context(), fakePuller{ref: "digest:current", requested: &requested}, state)
+	assert.NilError(t, err)
+	assert.Equal(t, requested, KitTagRef())
+	assert.Equal(t, choice.Kit, KitVersion)
+	last, ok := readLastKit(state)
+	assert.Assert(t, ok)
+	assert.Equal(t, last.Selected, "")
+	assert.Equal(t, last.Ref, choice.Ref)
+}
+
+func TestPullKitStreamErrorUsesOfflineFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errorDetail":{"message":"registry unavailable"},"error":"registry unavailable"}` + "\n"))
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			assert.Equal(t, r.URL.Path, "/v1.47/images/cached-kit/json")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cached-kit"}`))
+		default:
+			t.Errorf("unexpected Docker call: %s %s", r.Method, r.URL)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.47"))
+	assert.NilError(t, err)
+	defer func() { _ = cli.Close() }()
+	state := KitStatePath(t.TempDir())
+	assert.NilError(t, RememberKit(state, "cached-kit"))
+	choice, err := ResolveKit(t.Context(), NewBuilder(cli), state)
+	assert.NilError(t, err)
+	assert.Assert(t, choice.Offline)
+	assert.Equal(t, choice.Ref, "cached-kit")
+	assert.ErrorContains(t, choice.PullErr, "registry unavailable")
 }

@@ -230,7 +230,7 @@ ghcr.io/smeltdev/smelt-kit, which smelt pulls by tag, resolves to a digest and
 copies into every sandbox image, whatever Dockerfile.smelt says. When the pull
 fails, smelt says so and uses the kit it pulled last; with none, it fails and
 names --kit-from-source. Dockerfile.smelt needs no update when the kit changes.
-The base image needs git, bash, pkill and sha256sum; the kit installs nothing.
+The kit also bundles git, bash, pkill and sha256sum; it needs no package installs.
 
 --kit-from-source builds the kit image from the kit/ directory of the project
 (smelt's own source tree) and uses it instead of pulling, for development and
