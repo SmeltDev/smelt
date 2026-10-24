@@ -18,7 +18,7 @@ import (
 )
 
 // ErrMissing is returned when a sidecar has no grok binary.
-var ErrMissing = errors.New("grok is not installed in this image: run `" + brand.Command + " factory image --update-kit`")
+var ErrMissing = errors.New("grok is not installed in this image: run `" + brand.Command + " factory image`")
 
 // ErrCredentialRejected is returned when xAI rejects the credential, which for
 // a subscription login mostly means its access token expired during the run.

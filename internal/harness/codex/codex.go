@@ -21,7 +21,7 @@ var ErrMissing = errors.New("codex is not installed on the sidecar")
 
 // msgHostMissing is a user-facing sentence, so it starts with the product
 // name's capital. Tooling that watches runs can key off ErrHostMissing.
-const msgHostMissing = "Codex can't run commands in this sandbox image: rebuild it with `" + brand.Command + " factory image --update-kit`"
+const msgHostMissing = "Codex can't run commands in this sandbox image: rebuild it with `" + brand.Command + " factory image`"
 
 // ErrHostMissing is returned when Codex reports that its command host,
 // codex-code-mode-host, is missing or would not start: every command it tries

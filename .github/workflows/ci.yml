@@ -30,3 +30,57 @@ jobs:
         run: task test
       - name: Stress sidecar pool tests
         run: task test:stress
+
+  # Builds the agent kit and runs it on glibc and musl bases (kit/test.sh), then
+  # checks a tampered download fails the build.
+  kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@v3
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the kit and test it across distros
+        run: task test:kit
+
+  # Pushes the kit to a throwaway local registry and pulls it back by tag, to
+  # check what smelt resolves to a digest is what the release publishes.
+  kit-registry:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports: ['5000:5000']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+      - uses: sigstore/cosign-installer@v3
+      - name: Publish a test tag the way a release does, and verify it
+        env:
+          KIT_REPO: localhost:5000/smelt-kit
+          COSIGN_PASSWORD: ''
+          COSIGN_ARGS: --key cosign.key --tlog-upload=false
+        run: |
+          set -euo pipefail
+          cosign generate-key-pair
+          kit=$(go run ./kit/pins | sed -n 's/^KIT_VERSION=//p')
+          kit/publish.sh 0.0.0-ci linux/amd64
+          a=$(docker buildx imagetools inspect "$KIT_REPO:$kit" --format '{{ .Manifest.Digest }}')
+          b=$(docker buildx imagetools inspect "$KIT_REPO:$kit-0.0.0-ci" --format '{{ .Manifest.Digest }}')
+          test -n "$a" && test "$a" = "$b"
+          cosign verify --key cosign.pub --insecure-ignore-tlog "$KIT_REPO@$a" >/dev/null
+          docker pull "$KIT_REPO:$kit"
+          docker image inspect "$KIT_REPO:$kit" --format '{{ index .RepoDigests 0 }}'
+          id=$(docker create "$KIT_REPO:$kit" /opt/smelt/bin/grok)
+          docker cp "$id:/opt/smelt/manifest.json" - | tar -xO | jq -e '.tools | length >= 5'

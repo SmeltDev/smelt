@@ -172,7 +172,7 @@ version in the marker with the current one and, when it is older, warn (at most
 once a day for `factory build`) and carry on. To update it:
 
 ```bash
-smelt factory image --update-kit    # replace only the agent-kit section, show the diff, ask
+smelt factory image                 # pulls the current agent-kit image and rebuilds the sandbox image
 ```
 
 It keeps everything above the marker as you wrote it, then builds and verifies
@@ -243,7 +243,7 @@ smelt factory update <run-id>        # merge the run's base branch into its bran
 smelt factory clean [run-id]         # remove finished runs' worktrees, branches and records
 smelt factory image [--rebuild]      # build or rebuild and verify the sandbox image
 smelt factory image --regenerate     # re-detect and rewrite Dockerfile.smelt (asks first)
-smelt factory image --update-kit     # replace only the agent-kit section of Dockerfile.smelt (asks first)
+smelt factory image --kit-from-source  # build the agent kit from kit/ instead of pulling it
 smelt factory author ["Name <email>"]  # show or set who factory commits are attributed to
 smelt refresh                        # log in to Claude again (and restart the daemon)
 smelt refresh codex                  # log in to Codex again
@@ -361,7 +361,7 @@ Python, Ruby, PHP, Swift, Kotlin, Scala, Go, Rust, Lua, Erlang and more. Set `fa
 to a command that prints the contract on stdout (it runs in the sandbox, from the repo root) to use
 your own; output that is not the contract fails the check with the parse error. Code in a language
 nothing measures is `not measured`, and so is everything in an image built before kit v4 until
-`smelt factory image --update-kit`; neither fails anything. Complexity is counted per language and
+`smelt factory image`; neither fails anything. Complexity is counted per language and
 tool, so numbers are only comparable within one project over time. `minCloneLines` counts lines.
 
 Left out by default: what git ignores, `vendor/`, `node_modules/`, `third_party/`, `testdata/`, test

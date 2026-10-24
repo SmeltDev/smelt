@@ -70,7 +70,7 @@ func TestVerify(t *testing.T) {
 	}{
 		{"all pass", "", "", 4},
 		{"kit fails first", "claude --version", StepKit, 1},
-		{"kit fails without the codex command host", `test -x "$HOME/.local/bin/codex-code-mode-host"`, StepKit, 1},
+		{"kit fails without the codex command host", "command -v codex-code-mode-host", StepKit, 1},
 		{"install fails before gate", "pnpm install", StepInstall, 3},
 		{"gate fails", "pnpm lint", StepGate, 4},
 	}
@@ -133,7 +133,7 @@ func TestPickGate(t *testing.T) {
 }
 
 func TestKitCheckTestsTheCodexCommandHost(t *testing.T) {
-	assert.Assert(t, strings.Contains(kitCheck, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
+	assert.Assert(t, strings.Contains(kitCheck, "command -v codex-code-mode-host"))
 	assert.Assert(t, strings.Contains(kitCheck, "grok --version"))
 }
 

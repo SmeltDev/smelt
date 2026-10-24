@@ -7,9 +7,11 @@ import (
 	"strings"
 )
 
-// KitVersion numbers the agent-kit section of the rendered Dockerfile. Bump it
-// whenever that section changes, so projects whose committed Dockerfile has an
-// older kit are told. Version 1 is a Dockerfile without a marker (Claude only);
+// KitVersion numbers the agent kit: the section of the rendered Dockerfile, and
+// the kit image built from kit/ and published under this number as its tag (see
+// kitimage.go). Bump it whenever the kit's contents change, so projects whose
+// committed Dockerfile has an older kit are told, and a new kit image is
+// published. Version 1 is a Dockerfile without a marker (Claude only);
 // 2 adds Codex and the harness label; 3 adds codex-code-mode-host, which Codex
 // runs every command through; 4 adds python3 and lizard, which measures code
 // quality in any language; 5 adds the Grok CLI.
@@ -132,6 +134,6 @@ func StaleImageWarning(tag string, info ImageInfo, inspectErr error, dockerfile 
 func KitOutdatedWarning(name string, have int) string {
 	return name + " was generated with agent kit v" + strconv.Itoa(have) +
 		"; the current kit is v" + kitVersionString() + "\n" +
-		"  (adds lizard, without which code quality is not measured, and Codex's command host, " + codexHost.installAs + ", without which Codex cannot run commands, and the Grok CLI). Update it with:\n" +
-		"    smelt factory image --update-kit"
+		"  (smelt builds the image with the kit image in place of that section, so this file needs no change;\n" +
+		"  smelt factory image --regenerate drops the section for good)"
 }

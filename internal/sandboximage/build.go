@@ -65,6 +65,8 @@ type BuildOptions struct {
 	Tag     string
 	// NoCache rebuilds every layer.
 	NoCache bool
+	// BuildArgs are the Dockerfile's ARG values.
+	BuildArgs map[string]*string
 	// LogPath receives the full build log; empty keeps none.
 	LogPath string
 	// Progress receives each build step line.
@@ -109,6 +111,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) error {
 		Dockerfile: opts.Context.Dockerfile,
 		Labels:     map[string]string{LabelSandbox: opts.Slug},
 		NoCache:    opts.NoCache,
+		BuildArgs:  opts.BuildArgs,
 		Remove:     true,
 	})
 	if err != nil {

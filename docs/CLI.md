@@ -237,8 +237,9 @@ smelt
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
-│       --update-kit                # Replace only the agent-kit section with the current one (exclusive with --regenerate)
-│       --yes                       # With --update-kit, write without asking
+│       --kit-from-source           # Build the agent kit image from kit/ here instead of pulling the published one
+│       --update-kit                # Retired: prints a notice and does nothing (the kit is a published image)
+│       --yes                       # Retired with --update-kit; does nothing
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -582,7 +583,7 @@ smelt
   when it is not given. The daemon refuses a harness with no credential before starting anything, with
   the login hint, and a run needs only its own harness's credential. The run-start line shows
   `harness=… model=…`. An image labelled `smelt.harnesses` that lacks the chosen agent is refused with a
-  pointer to `smelt factory image --update-kit`; an image without the label is not checked.
+  pointer to `smelt factory image`; an image without the label is not checked.
 - **Codex credentials never carry a refresh token into a container.** `auth login codex` runs
   `codex login` with `CODEX_HOME` set to a private temp directory (so `~/.codex` is untouched), keeps the
   whole `auth.json` in the keychain (`smelt:codex:chatgpt`), and deletes the directory. A run gets a copy
@@ -626,7 +627,7 @@ smelt
   or `no_image` (not on the host; `installed_image` is false, with a note to run `smelt factory image`).
   An unlabeled image is run once (`sh -c 'command -v claude …'`, `--rm`, no network, 20 s timeout) and
   the answer cached per image ID in `~/.local/share/smelt/harness/images.json`; the note says `image has
-  no smelt.harnesses label (agent kit v1); checked by running it` and points at `--update-kit`. A probe
+  no smelt.harnesses label (agent kit v1); checked by running it` and points at `smelt factory image`. A probe
   that fails or times out gives `installed_image: false` and a note saying so. The human output has an
   `image:` line, e.g. `image: smelt-x:f81c… (kit v1, unlabeled; claude found, codex not)`.
 - **The docker backend's image is resolved, highest first, from `--image`, `factory.image`,
@@ -664,7 +665,7 @@ smelt
 - **A Codex turn that cannot start its command host fails the run.** Output saying
   `codex-code-mode-host is missing` or `command host failed to start` (agent message, failed command or
   error event) becomes `codex.ErrHostMissing`; the run ends `failed`, not `no_change`, with "Codex can't
-  run commands in this sandbox image: rebuild it with `smelt factory image --update-kit`". That error and
+  run commands in this sandbox image: rebuild it with `smelt factory image`". That error and
   message are the stable hook for tooling (pilot) that wants to stop using Codex for the session.
 - **Codex reviews run in bypass mode and are held read-only by a check.** `--sandbox read-only` needs
   bubblewrap and user namespaces on Linux, which containers often lack, so the review script uses
@@ -672,12 +673,19 @@ smelt
   compares `git status --porcelain` and `git diff HEAD` before and after: a review that changed the tree
   exits non-zero and its answer is dropped. Verified on 2026-10-13: a review in the sandbox image runs in
   bypass mode with the git guard (`--sandbox read-only` is not used).
-- **`smelt factory image --update-kit` replaces only the kit section** (from the marker to the end of the
-  file), keeps everything above it, shows the diff, asks (`--yes` skips), writes, then builds and
-  verifies as `factory image` does. It is exclusive with `--regenerate`. A Dockerfile with no marker
-  (hand-written) is refused with a pointer to `--regenerate`. <a id="updating-the-agent-kit"></a>To add
-  the kit to such a file by hand, copy the section from a freshly generated `Dockerfile.smelt`
-  (`smelt factory image --regenerate` in a scratch checkout, or any project initialised by this smelt).
+- **The agent kit is an image, `ghcr.io/smeltdev/smelt-kit:<KitVersion>`** (built from `kit/`, published
+  and cosign-signed by the release for amd64 and arm64, also as `:<KitVersion>-<smelt version>`). It holds
+  `/opt/smelt` with `bin/` (`claude`, `codex`, `codex-code-mode-host`, `grok`, `lizard`), `env.sh` and
+  `manifest.json`. `smelt factory image` pulls it by tag, resolves the tag to a digest, remembers the digest
+  in `<data dir>/kit-image.json`, and builds the sandbox image from `Dockerfile.smelt` with everything above
+  the kit marker kept and a `COPY --from=<kit>@<digest> /opt/smelt /opt/smelt` layer in place of the kit
+  section; the digest is part of the image tag, so a new kit makes a new image. Offline, the last digest
+  pulled for the same kit version is used with a visible notice; with none, it fails and points at
+  `--kit-from-source`, which builds `kit/` on this machine (needs a smelt source checkout) instead of
+  pulling. `--update-kit` and `--yes` are retired: they print a notice and exit 0. A Dockerfile with no marker
+  (hand-written) is built as it is. <a id="updating-the-agent-kit"></a>To get the kit into such a file, add
+  the marker section from `smelt factory image --regenerate` in a scratch checkout, or copy the
+  `COPY --from=` line.
 - **`Dockerfile.smelt` is generated from detection, never overwritten silently.** The base image is the
   one every CI gate job uses (`.circleci/config.yml`), else the detected stack's image. Dependencies
   are baked as the package manager's store (pnpm, npm, yarn, uv, pip, Go, Cargo), not as an installed
@@ -1050,7 +1058,7 @@ synced into the container, so uncommitted work is measured.
 
 - Any language the provider knows. The default provider is lizard, installed
   by agent kit v4: an image built before it shows `not measured` until
-  `smelt factory image --update-kit`. `factory.quality.command` replaces it
+  `smelt factory image`. `factory.quality.command` replaces it
   with a command that prints the metrics contract as JSON (see
   `internal/quality/contract.go`); output that is not the contract is an error.
 - A measurement that cannot be made (provider missing, exit 127, output that is

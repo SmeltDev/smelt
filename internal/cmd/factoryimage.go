@@ -40,6 +40,9 @@ type imageBuild struct {
 	Rebuild bool
 	// ReadyTimeout bounds the wait for Docker to start; zero is the default.
 	ReadyTimeout time.Duration
+	// KitFromSource builds the agent kit image from the repo's kit/ instead of
+	// pulling the published one.
+	KitFromSource bool
 }
 
 // buildSandboxImage builds the image for b.Dockerfile unless its tag is already
@@ -70,6 +73,10 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 		return "", dockerUnreachable(err)
 	}
 	defer func() { _ = builder.Close() }()
+	plan, err = withAgentKit(ctx, streams, builder, plan, kitSource{Root: root, FromSource: b.KitFromSource})
+	if err != nil {
+		return "", err
+	}
 
 	_, err = builder.Ensure(ctx, plan, sandboximage.EnsureOptions{
 		Rebuild: rebuild,
@@ -139,7 +146,7 @@ func noteStaleImage(ctx context.Context, streams iostream.Streams, tag string, c
 }
 
 func newFactoryImageCmd() *cobra.Command {
-	var rebuild, regenerate, updateKitFlag, yes bool
+	var rebuild, regenerate, updateKitFlag, kitFromSource, yes bool
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build the Docker image factory runs execute in",
@@ -158,17 +165,27 @@ generated from detection and the CI config.
 --rebuild builds even when the tag exists, without the layer cache.
 --regenerate renders Dockerfile.smelt again, shows the diff and asks before
 writing it. It re-runs detection, so hand edits are lost.
---update-kit replaces only the agent-kit section of Dockerfile.smelt (from its
-"# --- smelt agent kit" line to the end) with the current one, keeps everything
-above it, shows the diff and asks before writing; --yes skips the question.
-The two are mutually exclusive.`,
+
+The agent CLIs (Claude, Codex, Grok) and lizard come from the agent kit image,
+ghcr.io/smeltdev/smelt-kit, which smelt pulls by tag, resolves to a digest and
+copies into the image in place of the "# --- smelt agent kit" section of
+Dockerfile.smelt; everything above that line is kept as the toolchain. When the
+pull fails, smelt says so and uses the kit it pulled last. Because the kit is
+supplied at build time, Dockerfile.smelt needs no update when it changes.
+
+--kit-from-source builds the kit image from the kit/ directory of the project
+(smelt's own source tree) and uses it instead of pulling, for development and
+air-gapped machines.
+--update-kit does nothing now and is kept for one release: the kit is no longer
+a section to update. It exits 0 and says why.
+--regenerate and --update-kit are mutually exclusive.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if regenerate && updateKitFlag {
 				return newUserError("--regenerate and --update-kit cannot be used together.").
 					withCode("command.invalid_args").
-					withSuggestion("Use --update-kit to replace only the agent kit, or --regenerate to render the whole Dockerfile again.").
+					withSuggestion("Drop --update-kit: it does nothing now. --regenerate renders the whole Dockerfile again.").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
@@ -187,15 +204,14 @@ The two are mutually exclusive.`,
 				dockerfile = cfg.Factory.Dockerfile
 			}
 			if updateKitFlag {
-				err = updateKit(ctx, streams, kitUpdate{Root: root, Dockerfile: dockerfile, Yes: yes})
-			} else {
-				err = prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate)
+				noteUpdateKitRetired(streams)
+				return nil
 			}
-			if err != nil {
+			if err := prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate); err != nil {
 				return err
 			}
 			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, Now: time.Now(), EveryTime: true})
-			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, rebuild)
+			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource})
 			if err != nil {
 				return err
 			}
@@ -205,8 +221,9 @@ The two are mutually exclusive.`,
 	}
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "build even when the image exists, without the layer cache")
 	cmd.Flags().BoolVar(&regenerate, "regenerate", false, "render the Dockerfile again from detection, show the diff and confirm before writing")
-	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "replace only the agent-kit section of the Dockerfile with the current one, show the diff and confirm before writing")
-	cmd.Flags().BoolVar(&yes, "yes", false, "with --update-kit, write without asking")
+	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "deprecated: does nothing, the agent kit is supplied as an image at build time")
+	cmd.Flags().BoolVar(&kitFromSource, "kit-from-source", false, "build the agent kit image from kit/ in the project instead of pulling it")
+	cmd.Flags().BoolVar(&yes, "yes", false, "deprecated: does nothing")
 	return cmd
 }
 
@@ -279,10 +296,18 @@ type imageAttempt struct {
 	Failure string
 }
 
+// imageOptions steer readyImage and attemptImage.
+type imageOptions struct {
+	// Rebuild builds even when the tag exists, without the layer cache.
+	Rebuild bool
+	// KitFromSource builds the agent kit image from kit/ instead of pulling it.
+	KitFromSource bool
+}
+
 // attemptImage builds the image and verifies it. A failed build or verification
 // is reported in the result; only a problem with Docker itself is an error.
-func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, rebuild bool) (imageAttempt, error) {
-	tag, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Reason: dockerfile + " changed", Rebuild: rebuild})
+func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions) (imageAttempt, error) {
+	tag, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource})
 	var buildErr *sandboximage.BuildError
 	if errors.As(err, &buildErr) {
 		return imageAttempt{Failure: "docker build failed:\n" + buildErr.LogTail}, nil
@@ -335,8 +360,8 @@ func codexSmoke() *sandboximage.CodexSmoke {
 // readyImage builds and verifies the image. When that fails in a terminal with
 // claude installed, it offers to let Claude repair Dockerfile.smelt, up to
 // sandboximage.MaxRepairAttempts times.
-func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, rebuild bool) (string, error) {
-	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, rebuild)
+func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions) (string, error) {
+	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, opts)
 	if err != nil || first.Failure == "" {
 		return first.Tag, err
 	}
@@ -353,12 +378,12 @@ func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile 
 	if sandboximage.DecideRepair(state) != sandboximage.RepairAttempt {
 		return "", failed
 	}
-	return repairImage(ctx, streams, root, dockerfile, cfg, first.Failure, failed)
+	return repairImage(ctx, streams, root, dockerfile, cfg, opts, first.Failure, failed)
 }
 
 // repairImage runs the repair loop and reports the outcome. failed is the
 // error to return when the repair does not work.
-func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, failure string, failed error) (string, error) {
+func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions, failure string, failed error) (string, error) {
 	original, err := os.ReadFile(filepath.Join(root, dockerfile))
 	if err != nil {
 		return "", &userError{msg: "Could not read " + dockerfile + ".", err: err}
@@ -373,7 +398,7 @@ func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile
 		Fixer:     sandboximage.ClaudeFixer{Token: token},
 		OnAttempt: func(n int) { streams.ErrPrintf("Repair attempt %d of %d...\n", n, sandboximage.MaxRepairAttempts) },
 		Retry: func(ctx context.Context) (string, error) {
-			final, err = attemptImage(ctx, streams, root, dockerfile, cfg, false)
+			final, err = attemptImage(ctx, streams, root, dockerfile, cfg, imageOptions{KitFromSource: opts.KitFromSource})
 			return final.Failure, err
 		},
 	})
