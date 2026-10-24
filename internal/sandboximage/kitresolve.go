@@ -28,6 +28,8 @@ var ErrKitUnavailable = errors.New("agent kit image unavailable")
 type KitChoice struct {
 	// Ref names the image by digest, so a new kit makes a new image tag.
 	Ref string
+	// Kit is the actual version selected, including an older offline fallback.
+	Kit int
 	// Offline is set when the pull failed and the last pulled kit stands in;
 	// PullErr is why.
 	Offline bool
@@ -42,32 +44,43 @@ type kitPuller interface {
 
 // lastKit is what the state file holds.
 type lastKit struct {
-	Kit int    `json:"kit"`
-	Ref string `json:"ref"`
+	Kit      int    `json:"kit"`
+	Ref      string `json:"ref"`
+	Selected string `json:"selected,omitempty"`
 }
 
 // ResolveKit pulls the kit image for this smelt's KitVersion, resolves its tag
 // to a digest and remembers it in statePath. When the pull fails it falls back
-// to the digest pulled last time for the same kit version, provided that image
+// to the digest pulled last time including across CLI upgrades, provided that image
 // is still on the Docker host, and says so in the result.
 func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, error) {
-	ref, pullErr := p.PullKit(ctx, KitTagRef())
+	tag, version := KitTagRef(), KitVersion
+	previous, _ := readLastKit(statePath)
+	if previous.Selected != "" {
+		tag, version = previous.Selected, previous.Kit
+	}
+	ref, pullErr := p.PullKit(ctx, tag)
 	if pullErr == nil {
 		// Remembering is best effort: the build does not depend on it.
-		_ = saveLastKit(statePath, ref)
-		return KitChoice{Ref: ref}, nil
+		_ = writeLastKit(statePath, lastKit{Kit: version, Ref: ref, Selected: previous.Selected})
+		return KitChoice{Ref: ref, Kit: version}, nil
 	}
 	last, ok := readLastKit(statePath)
 	if ok {
-		if have, err := p.Exists(ctx, last); err == nil && have {
-			return KitChoice{Ref: last, Offline: true, PullErr: pullErr}, nil
+		if have, err := p.Exists(ctx, last.Ref); err == nil && have {
+			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr}, nil
 		}
 	}
-	return KitChoice{}, fmt.Errorf("%w: %s: %w", ErrKitUnavailable, KitTagRef(), pullErr)
+	return KitChoice{}, fmt.Errorf("%w: %s: %w", ErrKitUnavailable, tag, pullErr)
 }
 
-func saveLastKit(path, ref string) error {
-	raw, err := json.Marshal(lastKit{Kit: KitVersion, Ref: ref})
+// RememberKit records a locally built kit for offline reuse.
+func RememberKit(path, ref string) error {
+	return writeLastKit(path, lastKit{Kit: KitVersion, Ref: ref})
+}
+
+func writeLastKit(path string, state lastKit) error {
+	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
@@ -77,16 +90,16 @@ func saveLastKit(path, ref string) error {
 	return os.WriteFile(path, raw, 0o644)
 }
 
-func readLastKit(path string) (string, bool) {
+func readLastKit(path string) (lastKit, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", false
+		return lastKit{}, false
 	}
 	var k lastKit
-	if json.Unmarshal(raw, &k) != nil || k.Kit != KitVersion || k.Ref == "" {
-		return "", false
+	if json.Unmarshal(raw, &k) != nil || k.Kit <= 0 || k.Ref == "" {
+		return lastKit{}, false
 	}
-	return k.Ref, true
+	return k, true
 }
 
 // digestRef picks the entry of repoDigests ("repo@sha256:...") that belongs to
@@ -150,12 +163,7 @@ func (b *Builder) BuildKit(ctx context.Context, kitDir string, opts BuildOptions
 // the kit kitRef into the toolchain image p. Its tag follows both, so a new kit
 // rebuilds only this layer. It is pure.
 func (p Plan) SandboxPlan(kitRef string) Plan {
-	return Plan{
-		Context:   &Context{Dockerfile: "Dockerfile", Content: SandboxDockerfile(p.Tag, kitRef)},
-		Slug:      p.Slug,
-		Tag:       SandboxTag(p.Tag, kitRef),
-		Toolchain: &p,
-	}
+	return p.SandboxPlanWithKit(KitChoice{Ref: kitRef, Kit: KitVersion})
 }
 
 // LastKitSandboxPlan is the sandbox plan as the last build made it, with the
@@ -166,5 +174,38 @@ func (p Plan) LastKitSandboxPlan(statePath string) (Plan, bool) {
 	if !ok {
 		return Plan{}, false
 	}
-	return p.SandboxPlan(ref), true
+	return p.SandboxPlanWithKit(KitChoice{Ref: ref.Ref, Kit: ref.Kit}), true
+}
+
+// KitRefresher pulls and reads a published kit without running its agents.
+type KitRefresher interface {
+	PullKit(context.Context, string) (string, error)
+	ReadKitManifest(context.Context, string) (KitManifest, error)
+}
+
+// RefreshKit selects a published kit for future builds, independently of the CLI release.
+func RefreshKit(ctx context.Context, p KitRefresher, statePath, tag string) (KitChoice, error) {
+	ref, err := p.PullKit(ctx, tag)
+	if err != nil {
+		return KitChoice{}, fmt.Errorf("refresh kit: %w", err)
+	}
+	manifest, err := p.ReadKitManifest(ctx, ref)
+	if err != nil {
+		return KitChoice{}, err
+	}
+	if manifest.Kit <= 0 {
+		return KitChoice{}, fmt.Errorf("kit manifest has no valid version")
+	}
+	if err := writeLastKit(statePath, lastKit{Kit: manifest.Kit, Ref: ref, Selected: tag}); err != nil {
+		return KitChoice{}, fmt.Errorf("save selected kit: %w", err)
+	}
+	return KitChoice{Ref: ref, Kit: manifest.Kit}, nil
+}
+
+// SandboxPlanWithKit plans an image with the selected kit's actual version.
+func (p Plan) SandboxPlanWithKit(choice KitChoice) Plan {
+	return Plan{
+		Context: &Context{Dockerfile: "Dockerfile", Content: sandboxDockerfile(p.Tag, choice)},
+		Slug:    p.Slug, Tag: SandboxTag(p.Tag, choice.Ref), Toolchain: &p, Kit: choice.Kit,
+	}
 }

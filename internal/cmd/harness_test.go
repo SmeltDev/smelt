@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,7 +15,9 @@ import (
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/status"
+	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 )
 
 func TestHarnessStatusJSONReflectsThePersistedSignal(t *testing.T) {
@@ -129,4 +133,26 @@ func TestHarnessStatusGrokHumanAndJSON(t *testing.T) {
 			assert.Assert(t, !strings.Contains(out, "secret"))
 		})
 	}
+}
+
+func TestHarnessStatusPrintsHostAndSandboxVersions(t *testing.T) {
+	var out bytes.Buffer
+	printHarnessStatus(iostream.Streams{Out: &out}, status.Report{Harnesses: []status.Entry{{Name: harness.Claude, HostVersion: "host-123", ImageVersion: "sandbox-456"}}})
+	assert.Assert(t, strings.Contains(out.String(), "host-123 on this machine, sandbox-456 in the image"), out.String())
+}
+
+func TestHarnessRefreshCommand(t *testing.T) {
+	previous := refreshAgentKit
+	t.Cleanup(func() { refreshAgentKit = previous })
+	called := false
+	refreshAgentKit = func(_ context.Context, ref string) (sandboximage.KitChoice, error) {
+		called = true
+		assert.Equal(t, ref, sandboximage.KitRegistryRepo+":6")
+		return sandboximage.KitChoice{Ref: "sha256:new", Kit: 6}, nil
+	}
+	out, err := runRoot(t, "harness", "refresh", "--kit-ref", sandboximage.KitRegistryRepo+":6")
+	assert.NilError(t, err, out)
+	assert.Assert(t, called)
+	assert.Assert(t, strings.Contains(out, "Selected agent kit v6: sha256:new"), out)
+	assert.Assert(t, strings.Contains(out, "smelt factory image"), out)
 }

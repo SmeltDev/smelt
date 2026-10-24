@@ -2,6 +2,7 @@ package sandboximage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -101,13 +102,19 @@ func TestSandboxEnvEqualsTheKitsEnvSh(t *testing.T) {
 }
 
 type fakePuller struct {
-	ref     string
-	pullErr error
-	have    bool
+	ref       string
+	pullErr   error
+	have      bool
+	requested *string
 }
 
-func (f fakePuller) PullKit(context.Context, string) (string, error) { return f.ref, f.pullErr }
-func (f fakePuller) Exists(context.Context, string) (bool, error)    { return f.have, nil }
+func (f fakePuller) PullKit(_ context.Context, ref string) (string, error) {
+	if f.requested != nil {
+		*f.requested = ref
+	}
+	return f.ref, f.pullErr
+}
+func (f fakePuller) Exists(context.Context, string) (bool, error) { return f.have, nil }
 
 func TestResolveKit(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "kit-image.json")
@@ -116,7 +123,9 @@ func TestResolveKit(t *testing.T) {
 	_, err := ResolveKit(context.Background(), fakePuller{pullErr: errors.New("no network")}, state)
 	assert.Check(t, errors.Is(err, ErrKitUnavailable), "offline with nothing remembered")
 
-	c, err := ResolveKit(context.Background(), fakePuller{ref: ref}, state)
+	var requested string
+	c, err := ResolveKit(context.Background(), fakePuller{ref: ref, requested: &requested}, state)
+	assert.Equal(t, requested, KitTagRef())
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(c.Ref, ref))
 	assert.Check(t, !c.Offline)
@@ -149,10 +158,75 @@ func TestLastKitSandboxPlanMatchesTheTagOfTheBuild(t *testing.T) {
 	assert.Check(t, !ok, "no kit pulled yet")
 
 	ref := KitRegistryRepo + "@sha256:" + strings.Repeat("a", 64)
-	assert.NilError(t, saveLastKit(state, ref))
+	assert.NilError(t, RememberKit(state, ref))
 	got, ok := plan.LastKitSandboxPlan(state)
 	assert.Check(t, ok)
 	assert.Check(t, cmp.Equal(got.Tag, plan.SandboxPlan(ref).Tag))
 	assert.Check(t, got.Tag != plan.Tag)
 	assert.Check(t, cmp.Contains(got.Context.Content, ref))
+}
+
+func TestOfflineKitAcrossUpgrade(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	old := lastKit{Kit: KitVersion - 1, Ref: KitRegistryRepo + "@sha256:old"}
+	raw, err := json.Marshal(old)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(state, raw, 0o600))
+	choice, err := ResolveKit(t.Context(), fakePuller{pullErr: errors.New("offline"), have: true}, state)
+	assert.NilError(t, err)
+	assert.Assert(t, choice.Offline)
+	assert.Equal(t, choice.Kit, old.Kit)
+	assert.Equal(t, choice.Ref, old.Ref)
+	plan := (Plan{Tag: "tool:1"}).SandboxPlanWithKit(choice)
+	assert.Assert(t, strings.Contains(plan.Context.Content, "smelt.kit=4"))
+	cached, ok := plan.Toolchain.LastKitSandboxPlan(state)
+	assert.Assert(t, ok)
+	assert.Equal(t, cached.Kit, old.Kit)
+	assert.Equal(t, cached.Tag, plan.Tag)
+}
+
+func TestPlanningIgnoresOldKitCopySources(t *testing.T) {
+	dir := writeRepo(t, map[string]string{"Dockerfile.smelt": "FROM debian:12\n# --- smelt agent kit ---\nCOPY agents/*.sh /opt/agents/\nCOPY ../outside /outside\n"})
+	relative, err := NewPlan(dir, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	absolute, err := NewPlanFromFile(dir, filepath.Join(dir, "Dockerfile.smelt"))
+	assert.NilError(t, err)
+	assert.Equal(t, relative.Tag, absolute.Tag)
+	assert.Equal(t, relative.Context.Content, "FROM debian:12\n")
+	assert.Equal(t, len(relative.Context.Sources), 0)
+}
+
+type refreshingKit struct {
+	fakePuller
+	manifest    KitManifest
+	manifestErr error
+}
+
+func (f refreshingKit) ReadKitManifest(context.Context, string) (KitManifest, error) {
+	return f.manifest, f.manifestErr
+}
+
+func TestRefreshSelectsNewKitWithoutCLIUpgrade(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	tag := KitRegistryRepo + ":next"
+	var requested string
+	provider := refreshingKit{fakePuller: fakePuller{ref: "digest:new", requested: &requested}, manifest: KitManifest{Kit: KitVersion + 1}}
+	choice, err := RefreshKit(t.Context(), provider, state, tag)
+	assert.NilError(t, err)
+	assert.Equal(t, requested, tag)
+	assert.Equal(t, choice.Kit, KitVersion+1)
+	assert.Equal(t, choice.Ref, "digest:new")
+	_, err = ResolveKit(t.Context(), provider, state)
+	assert.NilError(t, err)
+	assert.Equal(t, requested, tag)
+	offline, err := ResolveKit(t.Context(), fakePuller{pullErr: errors.New("offline"), have: true}, state)
+	assert.NilError(t, err)
+	assert.Equal(t, offline.Kit, KitVersion+1)
+	assert.Equal(t, offline.Ref, choice.Ref)
+	provider.manifestErr = errors.New("invalid manifest")
+	_, err = RefreshKit(t.Context(), provider, state, "bad:kit")
+	assert.ErrorContains(t, err, "invalid manifest")
+	last, ok := readLastKit(state)
+	assert.Assert(t, ok)
+	assert.Equal(t, last.Selected, tag)
 }

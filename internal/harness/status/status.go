@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,10 +43,12 @@ type Report struct {
 
 // ImageReport is what is known about the sandbox image.
 type ImageReport struct {
-	Tag    string                   `json:"tag"`
-	ID     string                   `json:"id,omitempty"`
-	Status sandboximage.ImageStatus `json:"status"`
-	Kit    int                      `json:"kit,omitempty"`
+	// Versions maps agent names to versions recorded in the kit manifest.
+	Versions map[string]string        `json:"versions,omitempty"`
+	Tag      string                   `json:"tag"`
+	ID       string                   `json:"id,omitempty"`
+	Status   sandboximage.ImageStatus `json:"status"`
+	Kit      int                      `json:"kit,omitempty"`
 	// Found are the agents in the image, from the label or from running it.
 	Found []string `json:"found,omitempty"`
 	// Probed reports that the image was run to find them, or the cache of that.
@@ -54,6 +57,8 @@ type ImageReport struct {
 
 // Entry is one harness.
 type Entry struct {
+	HostVersion    string       `json:"host_version,omitempty"`
+	ImageVersion   string       `json:"image_version,omitempty"`
 	Name           harness.Name `json:"name"`
 	InstalledHost  bool         `json:"installed_host"`
 	InstalledImage bool         `json:"installed_image"`
@@ -73,6 +78,10 @@ type Entry struct {
 // Deps are the outside world Build looks at. Every field has a working
 // default, so tests replace only what they fake.
 type Deps struct {
+	// Manifest reads the sandbox kit manifest; nil skips it.
+	Manifest func(context.Context, string) (sandboximage.KitManifest, error)
+	// Version probes a host binary; the default runs --version with a timeout.
+	Version func(context.Context, string) (string, error)
 	// Default is factory.harness.
 	Default string
 	// ImageTag is the sandbox image to look the agents up in; empty skips it.
@@ -127,7 +136,20 @@ func Build(ctx context.Context, d Deps) Report {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rep.Harnesses[i] = probe(ctx)
+			e := probe(ctx)
+			if e.InstalledHost {
+				binary, err := d.LookPath(string(e.Name))
+				if err == nil {
+					version := d.Version
+					if version == nil {
+						version = hostVersion
+					}
+					probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					e.HostVersion, _ = version(probeCtx, binary)
+					cancel()
+				}
+			}
+			rep.Harnesses[i] = e
 		}()
 	}
 	wg.Wait()
@@ -138,6 +160,7 @@ func (d Deps) base(name harness.Name, binary string) Entry {
 	_, err := d.LookPath(binary)
 	e := Entry{Name: name, InstalledHost: err == nil, RateLimits: []harness.Window{}}
 	if d.image.report != nil {
+		e.ImageVersion = d.image.report.Versions[string(name)]
 		e.ImageStatus = d.image.report.Status
 		e.InstalledImage = slices.Contains(d.image.report.Found, string(name))
 		e.Note = d.image.note
@@ -314,4 +337,12 @@ func Dir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(data, "harness"), nil
+}
+
+func hostVersion(ctx context.Context, binary string) (string, error) {
+	out, err := exec.CommandContext(ctx, binary, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

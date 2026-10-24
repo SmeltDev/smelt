@@ -263,7 +263,7 @@ func TestSandboxLayerLive(t *testing.T) {
 		name, toolchain, old string
 		root                 bool
 	}{
-		{"debian toolchain only", "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates procps coreutils bash && rm -rf /var/lib/apt/lists/*\n", "", true},
+		{"debian toolchain only", "FROM debian:bookworm-slim\n", "", true},
 		{"cimg toolchain only", "FROM cimg/base:stable\n", "", false},
 	}
 	for _, l := range live {
@@ -279,7 +279,7 @@ func TestSandboxLayerLive(t *testing.T) {
 				plan := tool.SandboxPlan(kitID)
 				_, err = b.Ensure(ctx, plan, EnsureOptions{})
 				assert.NilError(t, err)
-				out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "claude --version && codex --version && grok --version && id -u").CombinedOutput()
+				out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", kitCheck+" && git init /tmp/runtime-check && git -C /tmp/runtime-check status && bash -c 'echo bash-ok' && id -u").CombinedOutput()
 				assert.NilError(t, err, string(out))
 				uid := strings.TrimSpace(string(out[strings.LastIndex(strings.TrimSpace(string(out)), "\n")+1:]))
 				if l.root {

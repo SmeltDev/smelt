@@ -73,8 +73,10 @@ smelt
 │       --force                     # Overwrite existing configuration without confirmation
 │
 ├── harness
-│   └── status                      # Per agent: installed here and in the image, login state, plan and usage windows
-│       --json                      # Output as JSON
+│   ├── status                      # Per agent: host and sandbox versions, installation, login, plan and usage
+│   │   --json                      # Output as JSON
+│   └── refresh                     # Pull and select sandbox agents without upgrading smelt
+│       --kit-ref <image:tag>        # Published kit to select (default: this CLI's kit tag)
 │
 ├── skill
 │   ├── install                     # Install all skills
@@ -613,6 +615,12 @@ smelt
   the working tree fails. Kit v5 installs the pinned `grok` (`sandboximage.GrokVersion`, SHA-256 per
   architecture) into `~/.local/bin`. Unverified: grok itself, `grok models` renewing the token, and a
   token expiring mid-run could not be exercised in the sandbox.
+- **Agent versions and refresh.** `harness status` reports `host_version` from each host CLI's
+  `--version` and `image_version` from `/opt/smelt/manifest.json` in the sandbox, in text and JSON.
+  `harness refresh` pulls and selects the current published kit; `harness refresh --kit-ref
+  ghcr.io/smeltdev/smelt-kit:6` selects another published kit without upgrading smelt. Run
+  `smelt factory image` afterward to assemble it with the existing toolchain. Future factory
+  builds reuse that selection; host agents remain managed by their own installers.
 - **`harness status` reports, it does not choose.** Codex: `account/read` and `account/rateLimits/read`
   over `codex app-server`, with the stored login's refresh token blanked in a temp `CODEX_HOME`; windows
   are named from `windowDurationMins` (300 → `5h`, 10080 → `7d`, 43200 → `30d`, else `<n>m`). Claude:

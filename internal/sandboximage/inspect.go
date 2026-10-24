@@ -1,11 +1,15 @@
 package sandboximage
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -106,4 +110,50 @@ func (b *Builder) RunProbe(ctx context.Context, tag string) ([]string, error) {
 		return nil, fmt.Errorf("read probe output: %w", err)
 	}
 	return strings.Fields(out.String()), nil
+}
+
+// KitManifest describes the tools shipped in an agent kit.
+type KitManifest struct {
+	Kit   int       `json:"kit"`
+	Tools []KitTool `json:"tools"`
+}
+
+// KitTool is one pinned tool recorded at kit build time.
+type KitTool struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+}
+
+// ReadKitManifest reads the installed kit manifest without network access.
+func (b *Builder) ReadKitManifest(ctx context.Context, tag string) (KitManifest, error) {
+	copier, ok := b.cli.(interface {
+		CopyFromContainer(context.Context, string, string) (io.ReadCloser, container.PathStat, error)
+	})
+	if !ok {
+		return KitManifest{}, fmt.Errorf("Docker client cannot read kit manifest")
+	}
+	created, err := b.cli.ContainerCreate(ctx, &container.Config{Image: tag, Cmd: []string{"/unused"}, NetworkDisabled: true}, nil, nil, nil, "")
+	if err != nil {
+		return KitManifest{}, fmt.Errorf("create manifest container: %w", err)
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = b.cli.ContainerRemove(cleanup, created.ID, container.RemoveOptions{Force: true})
+	}()
+	reader, _, err := copier.CopyFromContainer(ctx, created.ID, KitDir+"/manifest.json")
+	if err != nil {
+		return KitManifest{}, fmt.Errorf("copy kit manifest: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	archive := tar.NewReader(reader)
+	if _, err := archive.Next(); err != nil {
+		return KitManifest{}, fmt.Errorf("read manifest archive: %w", err)
+	}
+	var manifest KitManifest
+	if err := json.NewDecoder(archive).Decode(&manifest); err != nil {
+		return KitManifest{}, fmt.Errorf("read kit manifest: %w", err)
+	}
+	return manifest, nil
 }

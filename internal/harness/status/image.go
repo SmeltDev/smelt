@@ -58,6 +58,19 @@ func (d Deps) checkImage(ctx context.Context) imageCheck {
 		return imageCheck{report: rep, note: fmt.Sprintf("sandbox image %s is not built; run smelt factory image", d.ImageTag)}
 	case info.Status == sandboximage.ImageLabeled:
 		rep.Found = info.Harnesses
+		if d.Manifest != nil {
+			probeCtx, stop := context.WithTimeout(ctx, DefaultProbeTimeout)
+			defer stop()
+			manifest, err := d.Manifest(probeCtx, info.ID)
+			if err != nil {
+				return imageCheck{report: rep, note: "could not read kit manifest: " + err.Error()}
+			}
+			rep.Kit = manifest.Kit
+			rep.Versions = make(map[string]string, len(manifest.Tools))
+			for _, tool := range manifest.Tools {
+				rep.Versions[tool.Name] = tool.Version
+			}
+		}
 		return imageCheck{report: rep}
 	}
 	return d.probeUnlabeled(ctx, rep)

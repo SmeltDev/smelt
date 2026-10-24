@@ -22,10 +22,9 @@ const (
 )
 
 // baseToolsCheck fails with a message when the toolchain image lacks a tool the
-// factory's own scripts use. The kit supplies the agent CLIs only, and installs
-// nothing, so these come from the project's Dockerfile.
+// factory's own scripts use. The kit bundles these alongside the agents.
 const baseToolsCheck = `for t in git bash pkill sha256sum; do command -v "$t" >/dev/null 2>&1 || ` +
-	`{ echo "the image has no $t: install it in the toolchain part of the Dockerfile (smelt adds the agent CLIs, not git, bash, procps or coreutils)" >&2; exit 1; }; done && `
+	`{ echo "the image has no $t: rebuild the sandbox with smelt factory image to install the runtime tools" >&2; exit 1; }; done && `
 
 // kitCheck proves the tools the factory's own scripts and agent need exist.
 // Codex runs every command through its host, which --version never starts.

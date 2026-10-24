@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -133,7 +134,7 @@ func ensureSandboxImage(ctx context.Context, streams iostream.Streams, root stri
 		Dockerfile:   dockerfile,
 		Source:       string(b.Kind),
 		ToolchainTag: plan.Toolchain.Tag,
-		Kit:          sandboximage.KitLabel(sandboximage.KitVersionLabel(), kitRef),
+		Kit:          sandboximage.KitLabel(strconv.Itoa(plan.Kit), kitRef),
 	}}, nil
 }
 

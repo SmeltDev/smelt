@@ -12,6 +12,7 @@
 #   - claude and python (for lizard) are linked to musl, so the kit ships musl's
 #     loader in lib/ and the wrappers in bin/ start them through it. That runs
 #     on glibc and musl bases alike, with no gcompat and no apk or apt.
+#   - git, bash, procps and coreutils use the same loader and bundled libraries.
 # Kept free of heredocs and BuildKit-only syntax so the classic builder that
 # --kit-from-source uses builds it too.
 
@@ -40,14 +41,13 @@ ARG PYGMENTS_VERSION=2.21.0
 ARG PYGMENTS_SHA256=2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
 ARG PATHSPEC_VERSION=1.1.1
 ARG PATHSPEC_SHA256=a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
-# Claude has no checksum pin: its release channel publishes one per version,
-# which is checked, and the resolved version is recorded in manifest.json. Set
-# CLAUDE_VERSION to pin a version, and CLAUDE_SHA256 to override the checksum.
-ARG CLAUDE_VERSION=latest
-ARG CLAUDE_SHA256=
+ARG CLAUDE_VERSION=2.1.310
+ARG CLAUDE_SHA_X86_64=2ceb05e0a97b09be4c14717464a2156e8d087dea9867a399dd75d3b898ca4824
+ARG CLAUDE_SHA_AARCH64=adfd1f0ef12a3bcafa66e33491fc3e4204e41aeb4a7305ffc311c16c26793825
 ARG CLAUDE_URL_BASE=https://downloads.claude.ai/claude-code-releases
 
-RUN apk add --no-cache bash curl jq ca-certificates
+RUN apk add --no-cache bash curl jq ca-certificates git procps coreutils
+COPY runtime.sh /work/runtime.sh
 
 # fetch URL DEST SHA256: download, then fail the build unless the checksum
 # matches. kitenv sets $a (x86_64|aarch64) and $k (X86_64|AARCH64) for this
@@ -89,9 +89,7 @@ RUN set -eu; . kitenv; \
 RUN set -eu; . kitenv; \
     case "$a" in x86_64) p=linux-x64-musl ;; *) p=linux-arm64-musl ;; esac; \
     v="$CLAUDE_VERSION"; \
-    if [ "$v" = latest ]; then v=$(curl -fsSL --retry 3 "$CLAUDE_URL_BASE/latest"); fi; \
-    sha="$CLAUDE_SHA256"; \
-    if [ -z "$sha" ]; then sha=$(curl -fsSL --retry 3 "$CLAUDE_URL_BASE/$v/manifest.json" | jq -r --arg p "$p" '.platforms[$p].checksum // empty'); fi; \
+    sha=$(printenv "CLAUDE_SHA_$k"); \
     fetch "$CLAUDE_URL_BASE/$v/$p/claude" /opt/smelt/libexec/claude "$sha"; \
     chmod +x /opt/smelt/libexec/claude; \
     record claude "$v" "$sha"
@@ -131,6 +129,8 @@ RUN set -eu; \
       '{kit:($kit|tonumber),smelt:$smelt,arch:$arch,tools:.}' /work/tools.ndjson > /opt/smelt/manifest.json; \
     /opt/smelt/bin/lizard --version; \
     /opt/smelt/bin/claude --version
+
+RUN sh /work/runtime.sh
 
 FROM scratch
 ARG KIT_VERSION=5

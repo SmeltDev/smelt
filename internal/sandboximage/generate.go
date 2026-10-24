@@ -107,6 +107,8 @@ func (b *Builder) imageUser(ctx context.Context, ref string) (string, error) {
 
 // Plan is a Dockerfile resolved to the image it builds.
 type Plan struct {
+	// Kit is the selected kit version for an assembled sandbox.
+	Kit     int
 	Context *Context
 	Slug    string
 	Tag     string
@@ -119,7 +121,7 @@ type Plan struct {
 // it builds: the part above any agent-kit marker, which SandboxPlan then puts
 // the kit on top of.
 func NewPlan(dir, dockerfile string) (Plan, error) {
-	c, err := ReadContext(dir, dockerfile)
+	c, err := readToolchainContext(dir, filepath.Join(dir, dockerfile), dockerfile)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -129,11 +131,19 @@ func NewPlan(dir, dockerfile string) (Plan, error) {
 // NewPlanFromFile is NewPlan for a Dockerfile at an absolute path anywhere on
 // the machine; dir is still the build context.
 func NewPlanFromFile(dir, path string) (Plan, error) {
-	c, err := ReadContextFile(dir, path)
+	c, err := readToolchainContext(dir, path, OutsideDockerfileName)
 	if err != nil {
 		return Plan{}, err
 	}
 	return toolchainPlan(dir, c)
+}
+
+func readToolchainContext(dir, path, name string) (*Context, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return &Context{Dockerfile: name, Content: ToolchainDockerfile(string(raw)), dir: dir}, nil
 }
 
 // toolchainPlan trims c to the toolchain part and tags it.

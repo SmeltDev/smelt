@@ -21,6 +21,13 @@ for base in "${bases[@]}"; do
     docker run --rm --user "$user" -e HOME=/tmp "smelt-kit-test:$$" sh -c '
       set -e
       . /opt/smelt/env.sh
+      git --version
+      git init /tmp/runtime-check
+      git -C /tmp/runtime-check status
+      test -x "$(git --exec-path)/git-remote-https"
+      bash -c "echo bash-ok"
+      pkill --version
+      sha256sum --version
       claude --version
       codex --version
       command -v codex-code-mode-host

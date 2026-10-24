@@ -188,4 +188,10 @@ func TestWithAgentKitFromSource(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, kits.built, 1)
 	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, "sha256:built"))
+	kits.pullErr, kits.have = errors.New("offline"), true
+	reused, _, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, reused.Tag, got.Tag)
+	assert.Equal(t, kits.built, 1)
+
 }
