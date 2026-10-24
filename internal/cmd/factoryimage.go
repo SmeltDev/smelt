@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/all"

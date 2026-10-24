@@ -142,8 +142,11 @@ func TestRunRepairReportsEachAttemptsDiffAndTheLastDockerfile(t *testing.T) {
 	var diffs []int
 	res, err := RunRepair(context.Background(), RepairOptions{
 		Dir: dir, Dockerfile: "Dockerfile.smelt", Fixer: &fakeFixer{edit: editDockerfile},
-		Retry:  func(context.Context) (string, error) { return "nope", nil },
-		OnDiff: func(n int, diff string) { assert.Assert(t, strings.Contains(diff, "+# attempt")); diffs = append(diffs, n) },
+		Retry: func(context.Context) (string, error) { return "nope", nil },
+		OnDiff: func(n int, diff string) {
+			assert.Assert(t, strings.Contains(diff, "+# attempt"))
+			diffs = append(diffs, n)
+		},
 	})
 	assert.NilError(t, err)
 	assert.DeepEqual(t, diffs, []int{1, 2, 3})
