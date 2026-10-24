@@ -264,10 +264,12 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
-// poolGitignoreEntries are machine-local pool state files under .smelt/.
+// poolGitignoreEntries are machine-local files: pool state under .smelt/ and
+// the last attempt of a failed Dockerfile repair.
 // config.json and other project config must stay tracked.
 var poolGitignoreEntries = []string{
 	".smelt/*-pool.json",
+	brand.Dockerfile + brand.RepairSuffix,
 }
 
 // ensureGitignoreEntries appends validate pool patterns to .gitignore if they

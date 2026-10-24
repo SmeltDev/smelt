@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/smeltdev/smelt/internal/codexauth"
+	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/all"
@@ -139,7 +140,7 @@ func noteStaleImage(ctx context.Context, streams iostream.Streams, tag string, c
 }
 
 func newFactoryImageCmd() *cobra.Command {
-	var rebuild, regenerate, updateKitFlag, yes bool
+	var rebuild, regenerate, updateKitFlag, yes, keepRepair bool
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build the Docker image factory runs execute in",
@@ -161,7 +162,16 @@ writing it. It re-runs detection, so hand edits are lost.
 --update-kit replaces only the agent-kit section of Dockerfile.smelt (from its
 "# --- smelt agent kit" line to the end) with the current one, keeps everything
 above it, shows the diff and asks before writing; --yes skips the question.
-The two are mutually exclusive.`,
+The two are mutually exclusive.
+
+The image is verified in a container over a copy of the repo that has its git
+history and remote refs, like a factory run. A gate that fails for a reason
+other than the image (git refs, the network, a flaky test) is reported as a
+warning and the command still succeeds. When the image itself fails, Claude may
+be asked to repair Dockerfile.smelt. Each attempt's diff is shown; after a
+failed repair Dockerfile.smelt is restored to what it was and the last attempt
+is saved as Dockerfile.smelt.repair. --keep-repair leaves the last attempt in
+Dockerfile.smelt instead.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -195,7 +205,7 @@ The two are mutually exclusive.`,
 				return err
 			}
 			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, Now: time.Now(), EveryTime: true})
-			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, rebuild)
+			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, imageOptions{Rebuild: rebuild, KeepRepair: keepRepair})
 			if err != nil {
 				return err
 			}
@@ -206,6 +216,7 @@ The two are mutually exclusive.`,
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "build even when the image exists, without the layer cache")
 	cmd.Flags().BoolVar(&regenerate, "regenerate", false, "render the Dockerfile again from detection, show the diff and confirm before writing")
 	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "replace only the agent-kit section of the Dockerfile with the current one, show the diff and confirm before writing")
+	cmd.Flags().BoolVar(&keepRepair, "keep-repair", false, "leave the last repair attempt in the Dockerfile when the repair fails, instead of restoring it")
 	cmd.Flags().BoolVar(&yes, "yes", false, "with --update-kit, write without asking")
 	return cmd
 }
@@ -307,10 +318,21 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfil
 	if err != nil {
 		return imageAttempt{}, &userError{msg: "Could not verify the factory image.", suggestion: suggestionFactoryImage, err: err}
 	}
-	if !res.OK() {
-		return imageAttempt{Tag: tag, Failure: res.Describe()}, nil
+	return judgeVerification(streams, tag, res), nil
+}
+
+// judgeVerification turns a verification result into an attempt. A gate that
+// failed for a reason that is not the image's is a warning, not a failure: the
+// image is ready, and repairing the Dockerfile would not help.
+func judgeVerification(streams iostream.Streams, tag string, res sandboximage.VerifyResult) imageAttempt {
+	switch {
+	case res.OK():
+		return imageAttempt{Tag: tag}
+	case res.ImageFault():
+		return imageAttempt{Tag: tag, Failure: res.Describe()}
 	}
-	return imageAttempt{Tag: tag}, nil
+	streams.ErrPrintln(ui.Warning(fmt.Sprintf("the image is ready; the gate %s failed in verification: %s", res.Gate, res.FirstErrorLine())))
+	return imageAttempt{Tag: tag}
 }
 
 // codexSmoke is the Codex turn the kit check runs when this machine already has
@@ -332,11 +354,20 @@ func codexSmoke() *sandboximage.CodexSmoke {
 	return &sandboximage.CodexSmoke{Harness: h, Credential: cred}
 }
 
+// imageOptions steer readyImage.
+type imageOptions struct {
+	// Rebuild builds even when the image exists, without the layer cache.
+	Rebuild bool
+	// KeepRepair leaves the last repair attempt in the Dockerfile when the
+	// repair fails, instead of restoring the original.
+	KeepRepair bool
+}
+
 // readyImage builds and verifies the image. When that fails in a terminal with
 // claude installed, it offers to let Claude repair Dockerfile.smelt, up to
 // sandboximage.MaxRepairAttempts times.
-func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, rebuild bool) (string, error) {
-	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, rebuild)
+func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions) (string, error) {
+	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, opts.Rebuild)
 	if err != nil || first.Failure == "" {
 		return first.Tag, err
 	}
@@ -353,52 +384,94 @@ func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile 
 	if sandboximage.DecideRepair(state) != sandboximage.RepairAttempt {
 		return "", failed
 	}
-	return repairImage(ctx, streams, root, dockerfile, cfg, first.Failure, failed)
-}
-
-// repairImage runs the repair loop and reports the outcome. failed is the
-// error to return when the repair does not work.
-func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, failure string, failed error) (string, error) {
-	original, err := os.ReadFile(filepath.Join(root, dockerfile))
-	if err != nil {
-		return "", &userError{msg: "Could not read " + dockerfile + ".", err: err}
-	}
 	var token string
 	if rc, err := config.Resolve("", "", false); err == nil {
 		token = rc.ClaudeOAuthToken
 	}
 	var final imageAttempt
-	res, err := sandboximage.RunRepair(ctx, sandboximage.RepairOptions{
-		Dir: root, Dockerfile: dockerfile, Failure: failure,
-		Fixer:     sandboximage.ClaudeFixer{Token: token},
-		OnAttempt: func(n int) { streams.ErrPrintf("Repair attempt %d of %d...\n", n, sandboximage.MaxRepairAttempts) },
+	return repairImage(ctx, streams, imageRepair{
+		Root: root, Dockerfile: dockerfile, Failure: first.Failure, KeepRepair: opts.KeepRepair,
+		Fixer: sandboximage.ClaudeFixer{Token: token},
 		Retry: func(ctx context.Context) (string, error) {
+			var err error
 			final, err = attemptImage(ctx, streams, root, dockerfile, cfg, false)
 			return final.Failure, err
 		},
+		Tag: func() string { return final.Tag },
+	}, failed)
+}
+
+// imageRepair is one repair of the Dockerfile.
+type imageRepair struct {
+	Root, Dockerfile string
+	Failure          string
+	Fixer            sandboximage.Fixer
+	// Retry rebuilds and verifies, returning the new failure or "".
+	Retry func(ctx context.Context) (string, error)
+	// Tag is the image tag of the last Retry.
+	Tag func() string
+	// KeepRepair leaves the last attempt in the Dockerfile when the repair fails.
+	KeepRepair bool
+}
+
+// repairImage runs the repair loop and reports the outcome. failed is the
+// error to return when the repair does not work. A repair that does not work
+// never leaves the Dockerfile edited, unless asked to: the original is put
+// back and the last attempt is saved next to it.
+func repairImage(ctx context.Context, streams iostream.Streams, r imageRepair, failed error) (string, error) {
+	path := filepath.Join(r.Root, r.Dockerfile)
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return "", &userError{msg: "Could not read " + r.Dockerfile + ".", err: err}
+	}
+	res, err := sandboximage.RunRepair(ctx, sandboximage.RepairOptions{
+		Dir: r.Root, Dockerfile: r.Dockerfile, Failure: r.Failure, Fixer: r.Fixer, Retry: r.Retry,
+		OnAttempt: func(n int) { streams.ErrPrintf("Repair attempt %d of %d...\n", n, sandboximage.MaxRepairAttempts) },
+		OnDiff:    func(_ int, diff string) { streams.ErrPrintln(diff) },
 	})
+	if err == nil && res.Fixed {
+		streams.ErrPrintln(ui.Success("Fixed in " + fmt.Sprint(res.Attempts) + " attempt(s). Commit " + r.Dockerfile + " so the team shares it."))
+		return r.Tag(), nil
+	}
+	if note := settleFailedRepair(streams, r, path, original, res.Last); note != nil {
+		return "", note
+	}
 	switch {
 	case errors.Is(err, sandboximage.ErrOtherFilesChanged):
-		return "", newUserError("Claude changed files other than " + dockerfile + ".").
+		return "", newUserError("Claude changed files other than " + r.Dockerfile + ".").
 			withCode("factory.image_repair_scope").
 			withSuggestion("Review the changes with git status and revert what you don't want.").
 			withoutDetail()
 	case err != nil:
 		return "", &userError{msg: "The repair could not finish.", suggestion: suggestionFactoryImage, err: err}
-	case !res.Fixed:
-		streams.ErrPrintln(ui.Warning(fmt.Sprintf("%s is left as the last attempt edited it.", dockerfile)))
-		return "", failed
 	}
-	if diff, err := sandboximage.DiffText(ctx, dockerfile, string(original), readFileOrEmpty(filepath.Join(root, dockerfile))); err == nil {
-		streams.ErrPrintln(diff)
-	}
-	streams.ErrPrintln(ui.Success("Fixed in " + fmt.Sprint(res.Attempts) + " attempt(s). Commit " + dockerfile + " so the team shares it."))
-	return final.Tag, nil
+	return "", failed
 }
 
-func readFileOrEmpty(path string) string {
-	b, _ := os.ReadFile(path)
-	return string(b)
+// settleFailedRepair saves the last attempt as <dockerfile>.repair and puts
+// the original Dockerfile back unless the repair is to be kept. It returns an
+// error only when the Dockerfile could not be restored, which must not pass
+// silently.
+func settleFailedRepair(streams iostream.Streams, r imageRepair, path string, original []byte, last string) error {
+	if last != "" {
+		repairPath := path + brand.RepairSuffix
+		if err := os.WriteFile(repairPath, []byte(last), 0o644); err != nil {
+			streams.ErrPrintln(ui.Warning(fmt.Sprintf("Could not save the last attempt as %s: %v", filepath.Base(repairPath), err)))
+		}
+	}
+	if r.KeepRepair {
+		streams.ErrPrintln(ui.Warning(fmt.Sprintf("%s is left as the last attempt edited it (--keep-repair).", r.Dockerfile)))
+		return nil
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		return &userError{msg: "Could not restore " + r.Dockerfile + " after the failed repair.", suggestion: "Restore it with git checkout " + r.Dockerfile + ".", err: err}
+	}
+	msg := r.Dockerfile + " is restored to what it was."
+	if last != "" {
+		msg += " The last attempt is saved as " + r.Dockerfile + brand.RepairSuffix + "."
+	}
+	streams.ErrPrintln(ui.Warning(msg))
+	return nil
 }
 
 // dockerUnreachable is the error for a Docker daemon smelt could not connect to.

@@ -43,6 +43,10 @@ const (
 	// Dockerfile is the sandbox Dockerfile written into a repository.
 	Dockerfile = "Dockerfile.smelt"
 
+	// RepairSuffix is appended to a Dockerfile's name for the file that keeps
+	// the last attempt of a failed repair.
+	RepairSuffix = ".repair"
+
 	// ImagePrefix starts every sandbox image tag.
 	ImagePrefix = "smelt-"
 )

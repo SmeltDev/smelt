@@ -80,13 +80,61 @@ type CodexSmoke struct {
 // VerifyResult is the outcome of Verify. Step is empty when everything passed;
 // otherwise it names the first step that failed.
 type VerifyResult struct {
-	Step       string
+	Step string
+	// Gate names the gate command when Step is StepGate.
+	Gate       string
 	ExitCode   int
 	OutputTail string
 }
 
 // OK reports whether every step passed.
 func (r VerifyResult) OK() bool { return r.Step == "" }
+
+// imageFaultRe finds the output of a command the image lacks or cannot start.
+var imageFaultRe = regexp.MustCompile(`(?im)command not found|executable file not found|not found in \$?PATH|error while loading shared librar|cannot open shared object file|: not found$|is not recognized as`)
+
+// exitCommandNotFound is the shell's exit code for a command it cannot find.
+const exitCommandNotFound = 127
+
+// ImageFault reports whether a failure points at the image. The kit and install
+// steps are the image's by definition. A gate fails for the image's reasons
+// only when a command or library is missing; anything else (git refs, the
+// network, a flaky test) is not the image's.
+func (r VerifyResult) ImageFault() bool {
+	switch r.Step {
+	case "":
+		return false
+	case StepGate:
+		return r.ExitCode == exitCommandNotFound || imageFaultRe.MatchString(r.OutputTail)
+	}
+	return true
+}
+
+// maxErrorLineRunes bounds FirstErrorLine.
+const maxErrorLineRunes = 200
+
+// FirstErrorLine is the first meaningful line of the failure's output, skipping
+// blanks and the task runner's own wrapper lines.
+func (r VerifyResult) FirstErrorLine() string {
+	line := ""
+	for l := range strings.SplitSeq(r.OutputTail, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		if line == "" {
+			line = l
+		}
+		if !strings.HasPrefix(l, "task:") {
+			line = l
+			break
+		}
+	}
+	if runes := []rune(line); len(runes) > maxErrorLineRunes {
+		line = string(runes[:maxErrorLineRunes]) + "…"
+	}
+	return line
+}
 
 // Describe is a one-line account of a failure, for prompts and messages.
 func (r VerifyResult) Describe() string {
@@ -132,6 +180,9 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 	if err := b.Sync(ctx, inst.ID, repoPath, opts.Dir, false, func(iostream.Level, string) {}); err != nil {
 		return VerifyResult{}, fmt.Errorf("copy the repo into the container: %w", err)
 	}
+	if err := seedHistory(ctx, inst.HostDir, opts.Dir); err != nil {
+		return VerifyResult{}, fmt.Errorf("copy the repo's history into the container: %w", err)
+	}
 
 	steps := []verifyStep{{StepKit, kitCheck, time.Minute}}
 	if opts.Install != "" {
@@ -143,6 +194,9 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 	for _, step := range steps {
 		res, err := runStep(ctx, b, inst, repoPath, step.name, step.script, nil, step.timeout)
 		if err != nil || !res.OK() {
+			if step.name == StepGate {
+				res.Gate = opts.Gate.Name
+			}
 			return res, err
 		}
 		status(iostream.LevelDone, step.name+" ✓")
