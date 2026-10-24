@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
 )
 
@@ -193,6 +194,60 @@ func TestFactoryAttemptsDefaultsTable(t *testing.T) {
 			got, err := resolveFactorySettings(factorySettings{Attempts: tc.flag}, factoryExplicit{Attempts: tc.explicit}, tc.cfg)
 			assert.NilError(t, err)
 			assert.Equal(t, got.Attempts, tc.want)
+		})
+	}
+}
+
+func TestResolveToolchainSettings(t *testing.T) {
+	const outside = "/elsewhere/Toolchain.Dockerfile"
+	tests := []struct {
+		name     string
+		flags    factorySettings
+		image    bool // --image given
+		factory  config.FactoryConfig
+		env      string
+		wantFile string
+		wantKind sandboximage.ToolchainKind
+		wantImg  string
+		wantSrc  imageSource
+		wantErr  string
+	}{
+		{"flag beats factory.dockerfile", factorySettings{SandboxDockerfile: outside, RepoDockerfile: true}, false,
+			config.FactoryConfig{Dockerfile: "Mine.smelt"}, "", outside, sandboximage.ToolchainCaller, "", imageFromDockerfile, ""},
+		{"flag beats factory.image", factorySettings{SandboxDockerfile: outside}, false,
+			config.FactoryConfig{Image: "cfg:img"}, "", outside, sandboximage.ToolchainCaller, "", imageFromDockerfile, ""},
+		{"flag beats the environment image", factorySettings{SandboxDockerfile: outside}, false,
+			config.FactoryConfig{}, "env:img", outside, sandboximage.ToolchainCaller, "", imageFromDockerfile, ""},
+		{"config beats the repo file", factorySettings{RepoDockerfile: true}, false,
+			config.FactoryConfig{Dockerfile: "Mine.smelt"}, "", "Mine.smelt", sandboximage.ToolchainConfig, "", imageFromDockerfile, ""},
+		{"repo file when nothing else names an image", factorySettings{RepoDockerfile: true}, false,
+			config.FactoryConfig{}, "", sandboximage.DefaultDockerfile, sandboximage.ToolchainRepo, "", imageFromDockerfile, ""},
+		{"repo file yields to the environment image", factorySettings{RepoDockerfile: true}, false,
+			config.FactoryConfig{}, "env:img", "", "", "", imageFromEnv, ""},
+		{"repo file yields to factory.image", factorySettings{RepoDockerfile: true}, false,
+			config.FactoryConfig{Image: "cfg:img"}, "", "", "", "cfg:img", imageFromConfig, ""},
+		{"flag with --image", factorySettings{SandboxDockerfile: outside, Image: "flag:img"}, true,
+			config.FactoryConfig{}, "", "", "", "", imageUnset, "cannot be used together"},
+		{"flag on another backend", factorySettings{SandboxDockerfile: outside, Backend: "circleci"}, false,
+			config.FactoryConfig{}, "", "", "", "", imageUnset, "needs the docker backend"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(docker.EnvImage, tt.env)
+			if tt.flags.Backend == "" {
+				tt.flags.Backend = "docker"
+			}
+			tt.flags.Attempts = 3
+			got, err := resolveFactorySettings(tt.flags, factoryExplicit{Backend: true, Image: tt.image}, &config.ProjectConfig{Factory: &tt.factory})
+			if tt.wantErr != "" {
+				assert.Assert(t, strings.Contains(userMsg(err), tt.wantErr), userMsg(err))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, got.Dockerfile, tt.wantFile)
+			assert.Equal(t, got.Toolchain, tt.wantKind)
+			assert.Equal(t, got.Image, tt.wantImg)
+			assert.Equal(t, got.ImageSource, tt.wantSrc)
 		})
 	}
 }

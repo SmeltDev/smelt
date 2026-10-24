@@ -203,6 +203,7 @@ smelt
 │       --draft                    # Open the PR as a draft
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
+│       --sandbox-dockerfile <path> # Build the toolchain from a Dockerfile anywhere on this machine; the repo is still the build context (docker backend; not with --image)
 │       --harness <name>            # Coding agent for the implementer and reviewers: claude, codex or grok (default: factory.harness, else ask in a terminal; fails without one)
 │       --model <name>              # Model for the chosen agent (default: factory.models.<harness>, else the agent's own default)
 │       --implement-timeout <duration> # Max time for each implementer turn
@@ -235,6 +236,7 @@ smelt
 │   ├── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
 │   │   --unset                     # Remove factory.author, so each person commits as themselves
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
+│       --sandbox-dockerfile <path> # Build the toolchain from a Dockerfile anywhere on this machine; the repo is still the build context (never repaired or regenerated)
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
 │       --kit-from-source           # Build the agent kit image from kit/ here instead of pulling the published one
@@ -638,6 +640,18 @@ smelt
   the Dockerfile or a copied lockfile is a new tag, and `factory build` builds it first when it is
   missing. The build context is exactly the Dockerfile's `COPY` sources (absolute paths, `..` and
   wildcards are rejected), never the repo. A failed build is an error pointing at `smelt factory image`.
+- **`--sandbox-dockerfile PATH` takes the toolchain Dockerfile from outside the repo.** On `factory build`
+  and `factory image` (docker backend only; refused with `--image`). The Dockerfile comes from, highest
+  first, the flag (`caller`), `factory.dockerfile` (`config`), then the repo's own `Dockerfile.smelt`
+  (`repo`, used only when `factory.image` and `SMELT_DOCKER_IMAGE` name no image). A relative PATH is
+  taken against the current directory. The repo stays the build context, so `COPY go.mod go.sum` finds the
+  repo's files; the file is sent to Docker under the reserved name `.smelt-toolchain.Dockerfile` (a COPY of
+  that name is rejected) and is never copied into the repo or the run's worktree. The tag follows the
+  Dockerfile text and the COPY sources as before. `factory image` never repairs or regenerates such a file
+  (`--regenerate` is refused with the flag). `factory status --json` shows the choice as
+  `factory.sandbox`: `{"dockerfile", "source", "toolchain_tag", "kit": "<version>@<digest>"}`; for a kit built with
+  `--kit-from-source` the digest reads `source:<image id>`. The `--overlay` `sandbox.dockerfile` key is not
+  implemented: there is no overlay mechanism yet.
 - **`smelt init` and `smelt factory image` verify what they build.** The image runs in a throwaway
   container over a copy of the repo: first the agent kit (`git`, `claude`, `codex`, `codex-code-mode-host`, `sha256sum`, `pkill`, then `lizard --version`, which only warns;
   plus one `codex exec --skip-git-repo-check "reply ok"` with a 60-second timeout when this machine has a

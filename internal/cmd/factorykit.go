@@ -28,7 +28,10 @@ type kitNotice struct {
 // an agent kit section, which smelt ignores, "" when it has none or is
 // unreadable. It is pure but for reading the file.
 func kitWarning(root, dockerfile string) string {
-	raw, err := os.ReadFile(filepath.Join(root, dockerfile))
+	if !filepath.IsAbs(dockerfile) {
+		dockerfile = filepath.Join(root, dockerfile)
+	}
+	raw, err := os.ReadFile(dockerfile)
 	if err != nil {
 		return ""
 	}
@@ -90,13 +93,14 @@ type kitProvider interface {
 }
 
 // withAgentKit is the sandbox plan on top of the toolchain plan: a layer that
-// copies the kit image in, whatever the Dockerfile says about a kit.
-func withAgentKit(ctx context.Context, streams iostream.Streams, kits kitProvider, toolchain sandboximage.Plan, src kitSource) (sandboximage.Plan, error) {
+// copies the kit image in, whatever the Dockerfile says about a kit. It also
+// returns the kit's reference, for the run to record.
+func withAgentKit(ctx context.Context, streams iostream.Streams, kits kitProvider, toolchain sandboximage.Plan, src kitSource) (plan sandboximage.Plan, kitRef string, err error) {
 	ref, err := kitImageRef(ctx, streams, kits, src)
 	if err != nil {
-		return toolchain, err
+		return toolchain, "", err
 	}
-	return toolchain.SandboxPlan(ref), nil
+	return toolchain.SandboxPlan(ref), ref, nil
 }
 
 // kitImageRef resolves the kit image to copy from, telling the user when it is

@@ -17,6 +17,7 @@ import (
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sandboximage"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
+	"github.com/smeltdev/smelt/internal/smeltd"
 	"github.com/smeltdev/smelt/internal/ui"
 )
 
@@ -34,7 +35,9 @@ func imageBuildLog(root string) string {
 
 // imageBuild says what buildSandboxImage builds.
 type imageBuild struct {
+	// Dockerfile is absolute for Kind ToolchainCaller, repo-relative otherwise.
 	Dockerfile string
+	Kind       sandboximage.ToolchainKind
 	// Reason is shown when it builds.
 	Reason  string
 	Rebuild bool
@@ -45,13 +48,28 @@ type imageBuild struct {
 	KitFromSource bool
 }
 
+// builtImage is a sandbox image that is on the Docker host.
+type builtImage struct {
+	Tag string
+	// Sandbox says where its toolchain came from, for the run to record.
+	Sandbox *smeltd.FactorySandbox
+}
+
+// toolchainPlan plans the toolchain image of b: from the caller's file with the
+// repo as the build context, or from a Dockerfile in the repo.
+func (b imageBuild) toolchainPlan(root string) (sandboximage.Plan, error) {
+	if b.Kind == sandboximage.ToolchainCaller {
+		return sandboximage.NewPlanFromFile(root, b.Dockerfile)
+	}
+	return sandboximage.NewPlan(root, b.Dockerfile)
+}
+
 // buildSandboxImage builds the image for b.Dockerfile unless its tag is already
-// on the Docker host, and returns the tag.
-func buildSandboxImage(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (string, error) {
-	dockerfile, reason, rebuild := b.Dockerfile, b.Reason, b.Rebuild
-	plan, err := sandboximage.NewPlan(root, dockerfile)
+// on the Docker host.
+func buildSandboxImage(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+	plan, err := b.toolchainPlan(root)
 	if err != nil {
-		return "", newUserError(fmt.Sprintf("Could not read %s.", dockerfile)).
+		return builtImage{}, newUserError(fmt.Sprintf("Could not read %s.", b.Dockerfile)).
 			withCode("factory.image_dockerfile").
 			withSuggestion("Run smelt factory image to write it, or smelt init.").
 			withExitCode(ExitBadArgs).
@@ -61,21 +79,35 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 	// lookup with "no such image" and trigger a needless rebuild.
 	provider, err := docker.New()
 	if err != nil {
-		return "", dockerUnreachable(err)
+		return builtImage{}, dockerUnreachable(err)
 	}
 	defer func() { _ = provider.Close() }()
 	provider.ReadyTimeout = b.ReadyTimeout
 	if err := provider.WaitEngine(ctx, func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }); err != nil {
-		return "", dockerUnreachable(err)
+		return builtImage{}, dockerUnreachable(err)
 	}
 	builder, err := sandboximage.Connect()
 	if err != nil {
-		return "", dockerUnreachable(err)
+		return builtImage{}, dockerUnreachable(err)
 	}
 	defer func() { _ = builder.Close() }()
-	plan, err = withAgentKit(ctx, streams, builder, plan, kitSource{Root: root, FromSource: b.KitFromSource})
+	return ensureSandboxImage(ctx, streams, root, b, plan, builder)
+}
+
+// imageEnsurer is the part of a sandboximage.Builder that buildSandboxImage
+// needs once Docker is reachable.
+type imageEnsurer interface {
+	kitProvider
+	Ensure(ctx context.Context, p sandboximage.Plan, opts sandboximage.EnsureOptions) (bool, error)
+}
+
+// ensureSandboxImage puts the kit on top of the toolchain plan, builds what is
+// missing and reports where the toolchain came from.
+func ensureSandboxImage(ctx context.Context, streams iostream.Streams, root string, b imageBuild, toolchain sandboximage.Plan, builder imageEnsurer) (builtImage, error) {
+	dockerfile, reason, rebuild := b.Dockerfile, b.Reason, b.Rebuild
+	plan, kitRef, err := withAgentKit(ctx, streams, builder, toolchain, kitSource{Root: root, FromSource: b.KitFromSource})
 	if err != nil {
-		return "", err
+		return builtImage{}, err
 	}
 
 	_, err = builder.Ensure(ctx, plan, sandboximage.EnsureOptions{
@@ -89,15 +121,20 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 	var buildErr *sandboximage.BuildError
 	switch {
 	case errors.As(err, &buildErr):
-		return "", newUserError(fmt.Sprintf("Building %s failed.", buildErr.Tag)).
+		return builtImage{}, newUserError(fmt.Sprintf("Building %s failed.", buildErr.Tag)).
 			withCode("factory.image_build_failed").
 			withDetail(buildErr.LogTail).
 			withSuggestion(suggestionFactoryImage + logPathHint(buildErr.LogPath)).
 			wrap(err)
 	case err != nil:
-		return "", &userError{msg: "Could not build the factory image.", suggestion: suggestionFactoryImage, err: err}
+		return builtImage{}, &userError{msg: "Could not build the factory image.", suggestion: suggestionFactoryImage, err: err}
 	}
-	return plan.Tag, nil
+	return builtImage{Tag: plan.Tag, Sandbox: &smeltd.FactorySandbox{
+		Dockerfile:   dockerfile,
+		Source:       string(b.Kind),
+		ToolchainTag: plan.Toolchain.Tag,
+		Kit:          sandboximage.KitLabel(sandboximage.KitVersionLabel(), kitRef),
+	}}, nil
 }
 
 func logPathHint(path string) string {
@@ -107,10 +144,17 @@ func logPathHint(path string) string {
 	return " (full log: " + path + ")"
 }
 
-// resolveBuildSettings is resolveFactorySettings plus, for a factory.dockerfile
+// resolveBuildSettings is resolveFactorySettings plus, for a toolchain Dockerfile
 // image, the build of that image when it is missing. The daemon only ever sees
 // the resulting tag.
 func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root string, flags factorySettings, set factoryExplicit, cfg *config.ProjectConfig) (factorySettings, error) {
+	if _, statErr := os.Stat(filepath.Join(root, sandboximage.DefaultDockerfile)); statErr == nil {
+		flags.RepoDockerfile = true
+	}
+	var err error
+	if flags.SandboxDockerfile, err = absSandboxDockerfile(flags.SandboxDockerfile); err != nil {
+		return factorySettings{}, err
+	}
 	s, err := resolveFactorySettings(flags, set, cfg)
 	if err == nil && s.ImageSource == imageFromConfig && s.Backend == config.BackendDocker {
 		s.KitWarning = noteStaleImage(ctx, streams, s.Image, cfg)
@@ -119,9 +163,13 @@ func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root st
 		return s, err
 	}
 	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile})
-	s.Image, err = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: s.Dockerfile, Reason: s.Dockerfile + " changed", ReadyTimeout: flags.ReadyTimeout})
+	built, err := buildImage(ctx, streams, root, imageBuild{Dockerfile: s.Dockerfile, Kind: s.Toolchain, Reason: s.Dockerfile + " changed", ReadyTimeout: flags.ReadyTimeout})
+	s.Image, s.Sandbox = built.Tag, built.Sandbox
 	return s, err
 }
+
+// buildImage builds a sandbox image. It is a variable so tests can fake Docker.
+var buildImage = buildSandboxImage
 
 // inspectUserImage reads a user-managed image from the local Docker daemon. It
 // is a variable so tests can fake the daemon.
@@ -147,6 +195,7 @@ func noteStaleImage(ctx context.Context, streams iostream.Streams, tag string, c
 
 func newFactoryImageCmd() *cobra.Command {
 	var rebuild, regenerate, updateKitFlag, kitFromSource, yes bool
+	var sandboxDockerfile string
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build the Docker image factory runs execute in",
@@ -165,6 +214,11 @@ only that layer. The Docker layer cache keeps unchanged layers cheap.
 
 Dockerfile.smelt is never overwritten without asking. If it is missing, it is
 generated from detection and the CI config.
+
+--sandbox-dockerfile PATH builds the toolchain from a Dockerfile anywhere on this
+machine instead of Dockerfile.smelt or factory.dockerfile. The project stays
+the build context, so COPY go.mod go.sum finds the project's files. smelt never
+writes the file into the project and never repairs or regenerates it.
 
 --rebuild builds even when the tag exists, without the layer cache.
 --regenerate renders Dockerfile.smelt again, shows the diff and asks before
@@ -203,23 +257,41 @@ a section to update. It exits 0 and says why.
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
 			}
-			dockerfile := sandboximage.DefaultDockerfile
-			if cfg.Factory != nil && cfg.Factory.Dockerfile != "" {
-				dockerfile = cfg.Factory.Dockerfile
+			caller, err := absSandboxDockerfile(sandboxDockerfile)
+			if err != nil {
+				return err
 			}
+			if caller != "" && regenerate {
+				return newUserError("--sandbox-dockerfile and --regenerate cannot be used together.").
+					withCode("command.invalid_args").
+					withSuggestion("--regenerate rewrites Dockerfile.smelt in the project; smelt never rewrites a file given with --sandbox-dockerfile.").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
+			configured := ""
+			if cfg.Factory != nil {
+				configured = cfg.Factory.Dockerfile
+			}
+			src, _ := sandboximage.ResolveToolchain(sandboximage.ToolchainInputs{Caller: caller, Config: configured, RepoHasDefault: true})
 			if updateKitFlag {
 				noteUpdateKitRetired(streams)
 				return nil
 			}
-			if err := prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate); err != nil {
-				return err
+			if src.Kind != sandboximage.ToolchainCaller {
+				if err := prepareDockerfile(ctx, streams, root, src.Path, cfg, regenerate); err != nil {
+					return err
+				}
 			}
-			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, EveryTime: true})
-			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource})
+			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: src.Path, EveryTime: true})
+			tag, err := readyImage(ctx, streams, root, src, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource})
 			if err != nil {
 				return err
 			}
-			streams.ErrPrintln(ui.Success("Factory image ready: " + tag))
+			ready := "Factory image ready: " + tag
+			if src.Kind == sandboximage.ToolchainCaller {
+				ready += " (toolchain from " + src.Path + ")"
+			}
+			streams.ErrPrintln(ui.Success(ready))
 			return nil
 		},
 	}
@@ -227,8 +299,32 @@ a section to update. It exits 0 and says why.
 	cmd.Flags().BoolVar(&regenerate, "regenerate", false, "render the Dockerfile again from detection, show the diff and confirm before writing")
 	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "deprecated: does nothing, the agent kit is supplied as an image at build time")
 	cmd.Flags().BoolVar(&kitFromSource, "kit-from-source", false, "build the agent kit image from kit/ in the project instead of pulling it")
+	cmd.Flags().StringVar(&sandboxDockerfile, "sandbox-dockerfile", "", "build the toolchain from this Dockerfile, anywhere on this machine; the project stays the build context")
 	cmd.Flags().BoolVar(&yes, "yes", false, "deprecated: does nothing")
 	return cmd
+}
+
+// absSandboxDockerfile makes the --sandbox-dockerfile value absolute against the
+// working directory and checks that it is a file; "" stays "".
+func absSandboxDockerfile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		var info os.FileInfo
+		if info, err = os.Stat(abs); err == nil && info.IsDir() {
+			err = errors.New("is a directory")
+		}
+	}
+	if err != nil {
+		return "", newUserError(fmt.Sprintf("Could not read %s.", path)).
+			withCode("command.invalid_args").
+			withSuggestion("--sandbox-dockerfile takes the path of a Dockerfile.").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	return abs, nil
 }
 
 // prepareDockerfile makes sure dockerfile exists: it writes a generated one if
@@ -310,8 +406,10 @@ type imageOptions struct {
 
 // attemptImage builds the image and verifies it. A failed build or verification
 // is reported in the result; only a problem with Docker itself is an error.
-func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions) (imageAttempt, error) {
-	tag, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource})
+func attemptImage(ctx context.Context, streams iostream.Streams, root string, src sandboximage.ToolchainSource, cfg *config.ProjectConfig, opts imageOptions) (imageAttempt, error) {
+	dockerfile := src.Path
+	built, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Kind: src.Kind, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource})
+	tag := built.Tag
 	var buildErr *sandboximage.BuildError
 	if errors.As(err, &buildErr) {
 		return imageAttempt{Failure: "docker build failed:\n" + buildErr.LogTail}, nil
@@ -363,9 +461,11 @@ func codexSmoke() *sandboximage.CodexSmoke {
 
 // readyImage builds and verifies the image. When that fails in a terminal with
 // claude installed, it offers to let Claude repair Dockerfile.smelt, up to
-// sandboximage.MaxRepairAttempts times.
-func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions) (string, error) {
-	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, opts)
+// sandboximage.MaxRepairAttempts times. A Dockerfile the caller named is never
+// repaired: it is not the project's to edit.
+func readyImage(ctx context.Context, streams iostream.Streams, root string, src sandboximage.ToolchainSource, cfg *config.ProjectConfig, opts imageOptions) (string, error) {
+	dockerfile := src.Path
+	first, err := attemptImage(ctx, streams, root, src, cfg, opts)
 	if err != nil || first.Failure == "" {
 		return first.Tag, err
 	}
@@ -373,6 +473,9 @@ func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile 
 		withCode("factory.image_verify_failed").
 		withDetail(first.Failure).
 		withSuggestion(suggestionFactoryImage + logPathHint(imageBuildLog(root)))
+	if src.Kind == sandboximage.ToolchainCaller {
+		return "", failed
+	}
 	state := sandboximage.RepairState{Interactive: isInteractive(), HaveClaude: sandboximage.HaveClaude()}
 	if sandboximage.DecideRepair(state) == sandboximage.RepairAsk {
 		ok, err := ui.Confirm(fmt.Sprintf("Let Claude try to fix %s? (up to %d attempts)", dockerfile, sandboximage.MaxRepairAttempts), false)
@@ -382,12 +485,13 @@ func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile 
 	if sandboximage.DecideRepair(state) != sandboximage.RepairAttempt {
 		return "", failed
 	}
-	return repairImage(ctx, streams, root, dockerfile, cfg, opts, first.Failure, failed)
+	return repairImage(ctx, streams, root, src, cfg, opts, first.Failure, failed)
 }
 
 // repairImage runs the repair loop and reports the outcome. failed is the
 // error to return when the repair does not work.
-func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, opts imageOptions, failure string, failed error) (string, error) {
+func repairImage(ctx context.Context, streams iostream.Streams, root string, src sandboximage.ToolchainSource, cfg *config.ProjectConfig, opts imageOptions, failure string, failed error) (string, error) {
+	dockerfile := src.Path
 	original, err := os.ReadFile(filepath.Join(root, dockerfile))
 	if err != nil {
 		return "", &userError{msg: "Could not read " + dockerfile + ".", err: err}
@@ -402,7 +506,7 @@ func repairImage(ctx context.Context, streams iostream.Streams, root, dockerfile
 		Fixer:     sandboximage.ClaudeFixer{Token: token},
 		OnAttempt: func(n int) { streams.ErrPrintf("Repair attempt %d of %d...\n", n, sandboximage.MaxRepairAttempts) },
 		Retry: func(ctx context.Context) (string, error) {
-			final, err = attemptImage(ctx, streams, root, dockerfile, cfg, imageOptions{KitFromSource: opts.KitFromSource})
+			final, err = attemptImage(ctx, streams, root, src, cfg, imageOptions{KitFromSource: opts.KitFromSource})
 			return final.Failure, err
 		},
 	})

@@ -42,7 +42,7 @@ func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
 	var fallback []string
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
+	var orgID, image, sandboxDockerfile, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag, from, against string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -152,7 +152,14 @@ Defaults for --backend, --image, --max-attempts and --log come from the
 factory section of .smelt/config.json (smelt init sets it); a flag given on the
 command line wins. For the docker backend the image is --image,
 factory.image (used as is), or factory.dockerfile (built here when its image is
-missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
+missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).
+
+--sandbox-dockerfile PATH builds the toolchain from a Dockerfile anywhere on this
+machine instead. The project is still the build context, so COPY go.mod go.sum
+works, and the file is never copied into the project or the run's worktree. The
+Dockerfile comes from, in order: --sandbox-dockerfile, factory.dockerfile, the
+project's Dockerfile.smelt. It cannot be combined with --image. 'smelt factory
+status --json' reports which one a run used under factory.sandbox.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -194,7 +201,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			}
 			flags := cmd.Flags()
 			settings, err := resolveBuildSettings(ctx, streams, root,
-				factorySettings{Backend: backend, Image: image, Attempts: attempts, Log: logOn},
+				factorySettings{Backend: backend, Image: image, SandboxDockerfile: sandboxDockerfile, Attempts: attempts, Log: logOn},
 				factoryExplicit{
 					Backend:  flags.Changed("backend"),
 					Image:    flags.Changed("image"),
@@ -265,6 +272,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				Image:                   settings.Image,
 				Backend:                 settings.Backend,
 				KitWarning:              settings.KitWarning,
+				Sandbox:                 settings.Sandbox,
 				Log:                     logArg,
 				Verbose:                 verbose,
 			})
@@ -301,6 +309,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().BoolVar(&noPlan, "no-plan", false, "skip the plan the implementer writes, and the review of it, before it implements (default: factory.plan from config, else on)")
 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")
+	cmd.Flags().StringVar(&sandboxDockerfile, "sandbox-dockerfile", "", "build the toolchain from this Dockerfile, anywhere on this machine; the project stays the build context (docker backend)")
 	cmd.Flags().StringVar(&image, "image", "", "image: a Docker image (default: factory.image or factory.dockerfile), or a CircleCI snapshot ID with --backend circleci (default: validation.sidecarImage)")
 	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci or docker (local containers) (default: factory.backend from config, else docker)")
 	cmd.Flags().StringSliceVar(&fallback, "fallback", nil, "ordered alternate harnesses after --harness (default: factory.fallback)")
