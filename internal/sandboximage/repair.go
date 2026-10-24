@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/smeltdev/smelt/internal/config"
@@ -72,6 +73,9 @@ type RepairOptions struct {
 	Retry func(ctx context.Context) (string, error)
 	// OnAttempt is called before each attempt, with its 1-based number.
 	OnAttempt func(n int)
+	// OnDiff is called after each attempt with the diff of the Dockerfile that
+	// attempt made, when it changed it.
+	OnDiff func(n int, diff string)
 }
 
 // RepairResult is how a repair ended.
@@ -80,6 +84,9 @@ type RepairResult struct {
 	Attempts int
 	// Failure is the last failure, when not fixed.
 	Failure string
+	// Last is the Dockerfile as the last attempt left it, empty when no
+	// attempt ran.
+	Last string
 }
 
 // RunRepair lets the Fixer edit the Dockerfile and rebuilds after each attempt,
@@ -97,9 +104,12 @@ func RunRepair(ctx context.Context, opts RepairOptions) (RepairResult, error) {
 		if err != nil {
 			return res, err
 		}
+		prev := readOrEmpty(filepath.Join(opts.Dir, opts.Dockerfile))
 		if err := opts.Fixer.Fix(ctx, opts.Dir, RepairPrompt(opts.Dockerfile, res.Failure)); err != nil {
 			return res, fmt.Errorf("repair attempt %d: %w", res.Attempts, err)
 		}
+		res.Last = readOrEmpty(filepath.Join(opts.Dir, opts.Dockerfile))
+		reportDiff(ctx, opts, res.Attempts, prev, res.Last)
 		after, err := porcelain(ctx, git)
 		if err != nil {
 			return res, err
@@ -118,6 +128,22 @@ func RunRepair(ctx context.Context, opts RepairOptions) (RepairResult, error) {
 		res.Failure = failure
 	}
 	return res, nil
+}
+
+// reportDiff hands OnDiff the diff one attempt made. A diff that cannot be
+// computed only loses the display, so it never fails the repair.
+func reportDiff(ctx context.Context, opts RepairOptions, n int, before, after string) {
+	if opts.OnDiff == nil || before == after {
+		return
+	}
+	if diff, err := DiffText(ctx, opts.Dockerfile, before, after); err == nil {
+		opts.OnDiff(n, diff)
+	}
+}
+
+func readOrEmpty(path string) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
 }
 
 func porcelain(ctx context.Context, git gitexec.Runner) (string, error) {

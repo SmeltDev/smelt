@@ -136,3 +136,19 @@ func TestRepairPromptStatesTheRules(t *testing.T) {
 	assert.Assert(t, strings.Contains(p, "Edit only Dockerfile.smelt"))
 	assert.Assert(t, strings.Contains(p, "agent kit"))
 }
+
+func TestRunRepairReportsEachAttemptsDiffAndTheLastDockerfile(t *testing.T) {
+	dir := gitRepo(t)
+	var diffs []int
+	res, err := RunRepair(context.Background(), RepairOptions{
+		Dir: dir, Dockerfile: "Dockerfile.smelt", Fixer: &fakeFixer{edit: editDockerfile},
+		Retry: func(context.Context) (string, error) { return "nope", nil },
+		OnDiff: func(n int, diff string) {
+			assert.Assert(t, strings.Contains(diff, "+# attempt"))
+			diffs = append(diffs, n)
+		},
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, diffs, []int{1, 2, 3})
+	assert.Equal(t, res.Last, "FROM y\n# attempt 3\n")
+}
