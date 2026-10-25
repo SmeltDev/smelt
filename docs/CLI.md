@@ -718,13 +718,14 @@ smelt
   from any project, retaining Docker layer caching. An explicitly refreshed kit remains selected.
   If building fails, the last cached kit is a final fallback. Cold offline builds still need cached
   base images and download dependencies. Forks must publish their own kit or will build locally.
-  Publishing to GHCR initially creates a private package. A package administrator must change
-  its visibility to Public in the package settings and rerun the release job; the workflow
+  After the first kit publish to GHCR, a repository owner must open the package settings
+  and set its visibility to Public, then rerun the release job. Each fork must do the same
+  for its own package or rely on the automatic local source build. The workflow
   checks visibility and fails until this is done. Repository permission inheritance does not
   inherit public visibility. GitHub's supported Packages API has no visibility update operation
   ([visibility settings](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility),
-  [Packages API](https://docs.github.com/en/rest/packages/packages)). Automatic first-publish
-  public initialization remains an unresolved release requirement; this check does not implement it.
+  [Packages API](https://docs.github.com/en/rest/packages/packages)); visibility is a one-time
+  administrator bootstrap, not an automated release step.
   `--update-kit` and
   `--yes` are retired: they print the same notice every time and do nothing. <a id="updating-the-agent-kit"></a>
   There is nothing to update in `Dockerfile.smelt`: run `smelt factory image`, and delete a leftover kit

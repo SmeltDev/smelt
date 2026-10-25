@@ -69,9 +69,9 @@ jobs:
         run: kit/publish.sh "${GITHUB_REF_NAME#v}" | tee -a "$GITHUB_STEP_SUMMARY"
       # GitHub exposes visibility changes only in package settings, not its
       # supported Packages REST API. Never assume packages:write makes it public.
-      # This is a verification gate, not automatic public initialization. That
-      # release requirement remains unresolved until an administrator bootstraps
-      # visibility or a supported automation mechanism becomes available. See
+      # After the first publish, a repository owner sets the package to Public
+      # in package settings, then reruns this job. Fork owners do the same for
+      # their own package or rely on automatic local source builds. See
       # docs/CLI.md and https://docs.github.com/en/rest/packages/packages.
       - name: Verify the kit is public
         env:
