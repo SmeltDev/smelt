@@ -213,6 +213,8 @@ func (b *Builder) BuildKit(ctx context.Context, kitDir string, opts BuildOptions
 	for _, a := range KitPins() {
 		args[a.Name] = &a.Value
 	}
+	revision := KitRevision()
+	args["SMELT_VERSION"] = &revision
 	opts.Context, opts.Slug, opts.Tag, opts.BuildArgs = c, "kit", KitRevisionRef(), args
 	opts.ExtraTags = []string{KitLocalRef()}
 	if err := b.Build(ctx, opts); err != nil {

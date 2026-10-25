@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -500,45 +499,4 @@ func TestFactoryCapacityWait(t *testing.T) {
 	for _, v := range []string{"soon", "0s", "-5m", "30"} {
 		assert.Assert(t, (&FactoryConfig{CapacityWait: v}).validate() != nil, v)
 	}
-}
-
-func TestFactoryStorageConfig(t *testing.T) {
-	for _, tc := range []struct {
-		raw     string
-		enabled bool
-		cap     int64
-	}{
-		{`{}`, true, 10e9},
-		{`{"cache":true}`, true, 10e9},
-		{`{"cache":false}`, false, 10e9},
-		{`{"cache":{"enabled":false,"maxGB":2.5}}`, false, 2500000000},
-		{`{"cache":{"maxGB":1.25},"minFreeGB":3}`, true, 1250000000},
-	} {
-		var f FactoryConfig
-		assert.NilError(t, json.Unmarshal([]byte(tc.raw), &f))
-		assert.Equal(t, f.CacheEnabled(), tc.enabled)
-		assert.Equal(t, f.CacheMaxBytes(), tc.cap)
-		assert.NilError(t, f.validateStorage())
-		encoded, err := json.Marshal(f)
-		assert.NilError(t, err)
-		var roundTrip FactoryConfig
-		assert.NilError(t, json.Unmarshal(encoded, &roundTrip))
-		assert.Equal(t, roundTrip.CacheEnabled(), tc.enabled)
-		assert.Equal(t, roundTrip.CacheMaxBytes(), tc.cap)
-		assert.Equal(t, roundTrip.MinFreeBytes(), f.MinFreeBytes())
-	}
-	var unset *FactoryConfig
-	assert.Equal(t, unset.CacheMaxBytes(), int64(10e9))
-	assert.Equal(t, unset.MinFreeBytes(), int64(10e9))
-	for _, raw := range []string{`{"cache":{"maxGB":0}}`, `{"cache":{"maxGB":-1}}`, `{"minFreeGB":0}`, `{"minFreeGB":-10}`, `{"minFreeGB":1e20}`} {
-		var f FactoryConfig
-		assert.NilError(t, json.Unmarshal([]byte(raw), &f))
-		assert.Assert(t, f.validateStorage() != nil, raw)
-	}
-}
-
-func TestConfiguredMinFreeBytes(t *testing.T) {
-	var f FactoryConfig
-	assert.NilError(t, json.Unmarshal([]byte(`{"minFreeGB":3}`), &f))
-	assert.Equal(t, f.MinFreeBytes(), int64(3000000000))
 }

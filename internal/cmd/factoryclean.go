@@ -56,8 +56,7 @@ one of them is gone.`,
 }
 
 func newFactoryCleanCmd() *cobra.Command {
-	var yes, force, dryRun, cache, caches bool
-	var project string
+	var yes, force, dryRun, cache bool
 	cmd := &cobra.Command{
 		Use:   "clean [run...]",
 		Short: "Remove factory runs' worktrees, branches and records",
@@ -78,16 +77,10 @@ fills them again. Use it when a stale cache is suspected, or to free the disk
 space.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if project != "" && !caches || cache && caches {
-				return newUserError("--project requires --caches; --cache and --caches are mutually exclusive.").withCode("command.invalid_args").withExitCode(ExitBadArgs).withoutDetail()
-			}
-			if cache || caches {
+			if cache {
 				if len(args) > 0 || force {
 					return newUserError("--cache takes no runs and no --force.").
 						withCode("command.invalid_args").withExitCode(ExitBadArgs).withoutDetail()
-				}
-				if caches {
-					return runFactoryCleanCaches(cmd, cleanFlags{yes: yes, dryRun: dryRun}, project)
 				}
 				return runFactoryCleanCache(cmd, cleanFlags{yes: yes, dryRun: dryRun})
 			}
@@ -97,8 +90,6 @@ space.`,
 	cmd.Flags().BoolVar(&yes, "yes", false, "remove without asking")
 	cmd.Flags().BoolVar(&force, "force", false, "also remove worktrees with uncommitted changes, discarding them")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "list what would be removed and stop")
-	cmd.Flags().BoolVar(&caches, "caches", false, "remove Docker cache volumes across projects")
-	cmd.Flags().StringVar(&project, "project", "", "exact project hash to clean with --caches")
 	cmd.Flags().BoolVar(&cache, "cache", false, "remove the project's docker cache volumes instead of runs")
 	return cmd
 }
@@ -263,19 +254,12 @@ func confirmRemoval(label, noTTY string) error {
 // runFactoryCleanCache removes the project's cache volumes.
 func runFactoryCleanCache(cmd *cobra.Command, flags cleanFlags) error {
 	ctx := cmd.Context()
+	streams := iostream.FromCmd(cmd)
 	root, err := sessionProjectRoot(ctx)
 	if err != nil {
 		return err
 	}
-	return runFactoryCleanCaches(cmd, flags, config.ProjectHash(root))
-}
-
-func runFactoryCleanCaches(cmd *cobra.Command, flags cleanFlags, key string) error {
-	ctx := cmd.Context()
-	streams := iostream.FromCmd(cmd)
-	if key != "" && (len(key) != 12 || strings.Trim(key, "0123456789abcdef") != "") {
-		return newUserError("--project must be an exact 12-character project hash.").withCode("command.invalid_args").withExitCode(ExitBadArgs).withoutDetail()
-	}
+	key := config.ProjectHash(root)
 	provider, err := docker.New()
 	if err != nil {
 		return &userError{msg: "Could not reach Docker.", err: err}
@@ -292,7 +276,13 @@ func runFactoryCleanCaches(cmd *cobra.Command, flags cleanFlags, key string) err
 		streams.Printf("No cache volumes for this project.\n")
 		return nil
 	}
-	printCacheVolumes(streams, vols)
+	for _, v := range vols {
+		if v.Legacy {
+			streams.Printf("%s (from before volumes were kept per image user)\n", v.Name)
+		} else {
+			streams.Printf("%s\n", v.Name)
+		}
+	}
 	if flags.dryRun {
 		return nil
 	}
@@ -413,14 +403,4 @@ func runAge(start, now time.Time) string {
 		return fmt.Sprintf("%dh", int(d/time.Hour))
 	}
 	return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
-}
-
-func printCacheVolumes(streams iostream.Streams, vols []docker.CacheVolume) {
-	for _, v := range vols {
-		if v.Legacy {
-			streams.Printf("%s (from before volumes were kept per image user)\n", v.Name)
-		} else {
-			streams.Printf("%s\n", v.Name)
-		}
-	}
 }

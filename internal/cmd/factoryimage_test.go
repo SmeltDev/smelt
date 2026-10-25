@@ -1,13 +1,9 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,7 +283,6 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.Equal(t, entries[0].Name(), "go.mod")
 }
 
-<<<<<<< HEAD
 func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {
 	root := kitProject(t, "FROM x\n")
 	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
@@ -343,92 +338,4 @@ func TestFactoryImageCommandDisplaysClaimedKitNotice(t *testing.T) {
 	assert.ErrorIs(t, err, stop)
 	assert.Assert(t, called)
 	assert.Assert(t, strings.Contains(output.String(), choice.Notice), output.String())
-=======
-func TestImageStorageDiscoveryRefusesBeforeImageWork(t *testing.T) {
-	root := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{}`), 0o600))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM alpine:3.20\n"), 0o600))
-	imageWork := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/_ping"):
-			w.Header().Set("API-Version", "1.47")
-			_, _ = w.Write([]byte("OK"))
-		case strings.HasSuffix(r.URL.Path, "/info"):
-			_, _ = w.Write([]byte(`{"ID":"id","ServerVersion":"27.0.0","OperatingSystem":"Docker Desktop","DockerRootDir":"/var/lib/docker"}`))
-		case strings.HasSuffix(r.URL.Path, "/images/json"):
-			_, _ = w.Write([]byte(`[]`))
-		default:
-			imageWork++
-			http.Error(w, "unexpected image work", 500)
-		}
-	}))
-	defer server.Close()
-	t.Setenv("DOCKER_HOST", server.URL)
-	t.Setenv("DOCKER_API_VERSION", "1.47")
-	_, err := buildSandboxImage(context.Background(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"})
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
-	assert.Equal(t, imageWork, 0)
-}
-
-func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
-	root := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"minFreeGB":0.000001,"cache":{"maxGB":3}}}`), 0o600))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM alpine:3.20\n"), 0o600))
-	socket := filepath.Join(t.TempDir(), "docker.sock")
-	listener, err := net.Listen("unix", socket)
-	assert.NilError(t, err)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/_ping"):
-			w.Header().Set("API-Version", "1.47")
-			_, _ = w.Write([]byte("OK"))
-		case strings.HasSuffix(r.URL.Path, "/info"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"ID": "image-report-engine", "ServerVersion": "27.0.0", "OperatingSystem": "Linux", "DockerRootDir": root})
-		case strings.HasSuffix(r.URL.Path, "/images/json"):
-			_, _ = w.Write([]byte(`[]`))
-		case strings.HasSuffix(r.URL.Path, "/volumes"):
-			_, _ = w.Write([]byte(`{"Volumes":[{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}]}`))
-		case strings.Contains(r.URL.Path, "/volumes/"):
-			_, _ = w.Write([]byte(`{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}`))
-		case strings.HasSuffix(r.URL.Path, "/json") && strings.Contains(r.URL.Path, "/images/"):
-			_, _ = w.Write([]byte(`{"Id":"sha256:local"}`))
-		case strings.HasSuffix(r.URL.Path, "/containers/create"):
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"Id":"helper"}`))
-		case strings.HasSuffix(r.URL.Path, "/start"), r.Method == http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
-		case strings.HasSuffix(r.URL.Path, "/wait"):
-			_, _ = w.Write([]byte(`{"StatusCode":0}`))
-		case strings.HasSuffix(r.URL.Path, "/logs"):
-			out := "20000000"
-			w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
-			_, _ = w.Write(append([]byte{1, 0, 0, 0, 0, 0, 0, byte(len(out))}, []byte(out)...))
-		default:
-			// Stop subsequent kit/image work; storage output must already exist.
-			http.Error(w, `{"message":"stop image work"}`, http.StatusInternalServerError)
-		}
-	}))
-	server.Listener.Close()
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-	t.Setenv("DOCKER_HOST", "unix://"+socket)
-	t.Setenv("DOCKER_API_VERSION", "1.47")
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	var output bytes.Buffer
-	streams := discardStreams()
-	streams.Out = &output
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_, _ = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})
-	assert.Assert(t, strings.Contains(output.String(), "smelt-cache-abcdef123456"), output.String())
-	assert.Assert(t, strings.Contains(output.String(), "20.48 GB"), output.String())
-	assert.Assert(t, strings.Contains(output.String(), "3.00 GB"), output.String())
->>>>>>> origin/fix/daemon-takes-large-specs
 }

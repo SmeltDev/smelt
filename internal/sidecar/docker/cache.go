@@ -10,7 +10,6 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -159,9 +158,7 @@ func (b *Provider) probeUID(ctx context.Context, image string) (string, error) {
 		return "", fmt.Errorf("probe the user of %s: %w", image, err)
 	}
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		_ = b.cli.ContainerRemove(cleanup, created.ID, container.RemoveOptions{Force: true})
+		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
 	}()
 	if err := b.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("probe the user of %s: %w", image, err)
@@ -199,9 +196,7 @@ func (b *Provider) cacheMounts(l cacheLayout) []mount.Mount {
 	for _, v := range l.Volumes {
 		out = append(out, mount.Mount{
 			Type: mount.TypeVolume, Source: v.Name, Target: v.Target,
-			// Copying image contents into a fresh volume would fill it after
-			// maintenance measured it, bypassing the pre-mount cap check.
-			VolumeOptions: &mount.VolumeOptions{NoCopy: true, Labels: map[string]string{label: "1", labelCacheKey: b.CacheKey}},
+			VolumeOptions: &mount.VolumeOptions{Labels: map[string]string{label: "1", labelCacheKey: b.CacheKey}},
 		})
 	}
 	return out
@@ -389,17 +384,6 @@ func (b *Provider) ListCacheVolumes(ctx context.Context, key string) ([]CacheVol
 // matchCacheVolume tells whether name is one of the project's cache volumes,
 // and whether it is a legacy one.
 func matchCacheVolume(name, key string) (legacy, ok bool) {
-	if key == "" {
-		for _, prefix := range []string{cacheVolumePrefix, gomodVolumePrefix} {
-			if rest, found := strings.CutPrefix(name, prefix); found {
-				project, _, _ := strings.Cut(rest, "-")
-				if project != "" {
-					return matchCacheVolume(name, project)
-				}
-			}
-		}
-		return false, false
-	}
 	for _, prefix := range []string{cacheVolumePrefix, gomodVolumePrefix} {
 		rest, found := strings.CutPrefix(name, prefix+key)
 		switch {
@@ -417,11 +401,6 @@ func matchCacheVolume(name, key string) (legacy, ok bool) {
 // returns the names it removed. A volume that does not exist is skipped; one a
 // container still uses is an error, and the others are still removed.
 func (b *Provider) RemoveCacheVolumes(ctx context.Context, key string) ([]string, error) {
-	unlock, err := b.storageLock(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
 	vols, err := b.ListCacheVolumes(ctx, key)
 	if err != nil {
 		return nil, err

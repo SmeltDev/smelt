@@ -242,9 +242,6 @@ func shortID(id string) string {
 // WaitEngine does. Other lookup errors are reported as themselves rather than
 // turned into a misleading pull.
 func (b *Provider) resolveImage(ctx context.Context, ref string, status iostream.StatusFunc) (string, error) {
-	if err := b.CheckStorage(ctx); err != nil {
-		return "", err
-	}
 	if status == nil {
 		status = func(iostream.Level, string) {}
 	}

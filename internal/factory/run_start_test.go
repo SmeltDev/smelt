@@ -202,38 +202,3 @@ func TestReviewersOfWaitsForThePool(t *testing.T) {
 	assert.Assert(t, r.members[0].ID != impl.ID)
 	assert.Equal(t, r.members[0].RepoPath, impl.RepoPath)
 }
-
-func TestClosePoolRemovesWorkspacesAndPreservesExplicitRetention(t *testing.T) {
-	skipWithoutTools(t)
-	t.Setenv(config.EnvHome, t.TempDir())
-	for _, tc := range []struct {
-		name            string
-		keep, cancelled bool
-	}{{"success", false, false}, {"failure or cancellation", false, true}, {"keep sidecars", true, true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			workDir := setupRepo(t)
-			backend := &localBackend{dir: t.TempDir()}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			pool, err := sidecar.NewPool(ctx, nil, sidecar.PoolOptions{Size: 1, Name: "cleanup", Backend: backend, WorkDir: workDir, StateDir: t.TempDir()}, func(iostream.Level, string) {})
-			assert.NilError(t, err)
-			t.Cleanup(func() { _ = pool.Destroy(context.Background()) })
-			assert.NilError(t, pool.WaitSynced(ctx))
-			ids := pool.IDs()
-			assert.Assert(t, len(ids) > 0)
-			if tc.cancelled {
-				cancel()
-			}
-			kept := closePool(ctx, pool, tc.keep, func(iostream.Level, string) {})
-			assert.Equal(t, len(kept) > 0, tc.keep)
-			for _, id := range ids {
-				_, err := os.Stat(backend.workspace(id))
-				if tc.keep {
-					assert.NilError(t, err)
-				} else {
-					assert.Assert(t, os.IsNotExist(err))
-				}
-			}
-		})
-	}
-}

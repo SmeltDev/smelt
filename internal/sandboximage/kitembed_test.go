@@ -102,6 +102,7 @@ func TestDockerEmbeddedFallbackTagsAndReuse(t *testing.T) {
 	assert.Equal(t, choice.Ref, "sha256:built")
 	assert.Equal(t, len(docker.builds), 1)
 	assert.DeepEqual(t, docker.builds[0].Tags, []string{KitRevisionRef(), KitLocalRef()})
+	assert.Equal(t, *docker.builds[0].BuildArgs["SMELT_VERSION"], KitRevision())
 	for _, pin := range KitPins() {
 		assert.Equal(t, *docker.builds[0].BuildArgs[pin.Name], pin.Value)
 	}
