@@ -41,8 +41,7 @@ tasks:
       - task: check:circleci
       - task: check:names
       - task: lint:shell
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py harness/factory.py
 
   fmt:
     desc: Format the code

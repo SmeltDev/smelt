@@ -19,7 +19,7 @@
 ARG BUILDER=alpine:3.22
 FROM ${BUILDER} AS builder
 
-ARG KIT_VERSION=5
+ARG KIT_VERSION=6
 ARG SMELT_VERSION=dev
 ARG CODEX_VERSION=0.162.0
 ARG CODEX_URL_BASE=https://github.com/openai/codex/releases/download/rust-v
@@ -136,7 +136,7 @@ RUN set -eu; \
     /opt/smelt/bin/claude --version
 
 FROM scratch
-ARG KIT_VERSION=5
+ARG KIT_VERSION=6
 ARG SMELT_VERSION=dev
 LABEL org.opencontainers.image.title="smelt agent kit" \
       org.opencontainers.image.source="https://github.com/smeltdev/smelt" \

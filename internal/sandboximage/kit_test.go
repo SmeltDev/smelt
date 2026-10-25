@@ -2,6 +2,7 @@ package sandboximage
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,8 +21,8 @@ func TestKitVersionOf(t *testing.T) {
 		{"no marker", "FROM x\nRUN true\n", 1, false, false},
 		{"v1 marker without number", "FROM x\n# --- smelt agent kit ------\nRUN true\n", 1, true, false},
 		{"v2", "FROM x\n# --- smelt agent kit (v2) ------\n", 2, true, false},
-		{"current", "FROM x\n# --- smelt agent kit (v5) ------\n", 5, true, false},
-		{"newer than the binary", "FROM x\n# --- smelt agent kit (v6) ------\n", 6, true, true},
+		{"current", "FROM x\n# --- smelt agent kit (v" + kitVersionString() + ") ------\n", KitVersion, true, false},
+		{"newer than the binary", "FROM x\n# --- smelt agent kit (v" + strconv.Itoa(KitVersion+1) + ") ------\n", KitVersion + 1, true, true},
 		{"garbage after the marker", "# --- smelt agent kit (vX) ---\n", 1, true, false},
 		{"huge number", "# --- smelt agent kit (v99999999999999999999) ---\n", 1, true, false},
 		{"marker in a comment elsewhere", "FROM x\n# see the '# --- smelt agent kit (v2)' section\nRUN echo # --- smelt agent kit (v2)\n", 1, false, false},
@@ -74,8 +75,8 @@ func TestStaleImageWarning(t *testing.T) {
 	}{
 		"missing":   {ImageInfo{Status: ImageMissing}, nil, ""},
 		"error":     {ImageInfo{}, errors.New("x"), ""},
-		"unlabeled": {ImageInfo{Status: ImageUnlabeled, Kit: 1}, nil, "t:1 has agent kit none; this smelt expects 5: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
-		"lower":     {ImageInfo{Status: ImageLabeled, Kit: 3, KitLabeled: true}, nil, "t:1 has agent kit 3; this smelt expects 5: rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"unlabeled": {ImageInfo{Status: ImageUnlabeled, Kit: 1}, nil, "t:1 has agent kit none; this smelt expects " + kitVersionString() + ": rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
+		"lower":     {ImageInfo{Status: ImageLabeled, Kit: 3, KitLabeled: true}, nil, "t:1 has agent kit 3; this smelt expects " + kitVersionString() + ": rebuild it (docker build -t t:1 -f Dockerfile.smelt .)"},
 		"equal":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion, KitLabeled: true}, nil, ""},
 		"newer":     {ImageInfo{Status: ImageLabeled, Kit: KitVersion + 1, KitLabeled: true}, nil, ""},
 	} {

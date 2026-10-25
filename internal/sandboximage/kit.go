@@ -13,8 +13,9 @@ import (
 // the version it was written with: 1 is a Dockerfile without a marker (Claude
 // only); 2 adds Codex and the harness label; 3 adds codex-code-mode-host, which
 // Codex runs every command through; 4 adds python3 and lizard, which measures
-// code quality in any language; 5 adds the Grok CLI.
-const KitVersion = 5
+// code quality in any language; 5 adds the Grok CLI; 6 moves the kit to a
+// self-contained published image under /opt/smelt.
+const KitVersion = 6
 
 // kitMarkerPrefix starts the line that opens the agent-kit section.
 const kitMarkerPrefix = "# --- smelt agent kit"

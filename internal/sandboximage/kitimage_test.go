@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -185,7 +186,7 @@ func TestOfflineKitAcrossUpgrade(t *testing.T) {
 	assert.Equal(t, choice.Kit, old.Kit)
 	assert.Equal(t, choice.Ref, old.Ref)
 	plan := (Plan{Tag: "tool:1"}).SandboxPlanWithKit(choice)
-	assert.Assert(t, strings.Contains(plan.Context.Content, "smelt.kit=4"))
+	assert.Assert(t, strings.Contains(plan.Context.Content, "smelt.kit="+strconv.Itoa(old.Kit)))
 	cached, ok := plan.Toolchain.LastKitSandboxPlan(state)
 	assert.Assert(t, ok)
 	assert.Equal(t, cached.Kit, old.Kit)
