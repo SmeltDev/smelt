@@ -248,7 +248,7 @@ func codexImplementer(t *testing.T) *Implementer {
 func TestImplementerFailsWhenCodexCannotStartItsCommandHost(t *testing.T) {
 	_, err := codexImplementer(t).Run(context.Background(), "add a flag")
 	assert.ErrorIs(t, err, codex.ErrHostMissing)
-	assert.ErrorContains(t, err, "Codex can't run commands in this sandbox image: rebuild it with `smelt factory image --update-kit`")
+	assert.ErrorContains(t, err, "Codex can't run commands in this sandbox image: rebuild it with `smelt factory image`")
 }
 
 // implementerSteps drives the loop with a real Implementer, so the error it

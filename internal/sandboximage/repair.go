@@ -176,7 +176,7 @@ func RepairPrompt(dockerfile, failure string) string {
 
 %[2]s
 
-Fix it. Edit only %[1]s: keep its section headers and the "smelt agent kit" section, and change nothing else in the repo. Reply with one sentence saying what you changed.`, dockerfile, failure)
+Fix it. Edit only %[1]s: keep its section headers, do not add an agent kit (smelt adds the agent CLIs itself), and change nothing else in the repo. Reply with one sentence saying what you changed.`, dockerfile, failure)
 }
 
 // ClaudeFixer runs the host's claude CLI headlessly with only Read and Edit.

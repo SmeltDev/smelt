@@ -740,9 +740,21 @@ the status JSON:
 `language` is optional and additive. `factory.quality.enabled: false` omits the check and the
 `quality` object, and makes no exec calls. `smelt quality` measures the same way in a throwaway
 container from the project's image (Docker, whatever the project's backend), through `quality.Assess`.
-Lizard is installed by agent kit v4 (`sandboximage.LizardVersion`, a venv at
-`~/.local/share/smelt-tools`, installed with `pip --require-hashes`); the image verify step runs
+Lizard ships in the agent kit image (`kit/`, `/opt/smelt/bin/lizard`, a relocatable Python with wheels
+installed by `pip --require-hashes`, pins in `sandboximage.lizardWheels`); the image verify step runs
 `lizard --version` and only warns when it fails.
+
+### The agent kit image (`kit/`, `internal/sandboximage`)
+
+`kit/Dockerfile` builds a `scratch` image holding `/opt/smelt` (the agent CLIs, lizard, `env.sh`,
+`manifest.json`). The Go pins (`sandboximage.KitPins`) are the single source: `kit/build.sh` passes them
+as build args and a test keeps the Dockerfile's ARG defaults equal. The release `kit` job publishes it
+(`:<KitVersion>`, `:<KitVersion>-<smelt version>`) and signs the digest. `ResolveKit` pulls by tag,
+resolves the digest, and falls back to the last remembered digest offline. The sandbox image is two
+builds: `NewPlan` plans the toolchain image from the Dockerfile above any kit marker
+(`ToolchainDockerfile`), and `Plan.SandboxPlan` plans a generated layer (`SandboxDockerfile`:
+`FROM` the toolchain, `COPY --from=<kit>`, static `ENV`, labels) whose tag (`SandboxTag`) hashes the
+toolchain tag and the kit ref. `Builder.Ensure` builds the toolchain first when it is missing. See `kit/README.md` for bumping a tool.
 
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 

@@ -41,8 +41,7 @@ tasks:
       - task: check:circleci
       - task: check:names
       - task: lint:shell
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py harness/factory.py
 
   fmt:
     desc: Format the code
@@ -127,12 +126,23 @@ tasks:
     cmds:
       - go mod download -x
 
+  kit:
+    desc: Build the agent kit image locally (smelt-kit:local), the way the release does
+    cmds:
+      - kit/build.sh --tag smelt-kit:local
+
+  test:kit:
+    desc: Run the agent kit on several base images and check a tampered download fails (needs Docker)
+    deps: [kit]
+    cmds:
+      - kit/test.sh smelt-kit:local
+
   lint:shell:
     desc: Run shellcheck on install.sh, scripts/upstream-check.sh and scripts/capture-lizard-fixtures.sh (skipped with a notice when shellcheck is not installed)
     cmds:
       - |
         if command -v shellcheck >/dev/null 2>&1; then
-          shellcheck install.sh scripts/upstream-check.sh scripts/capture-lizard-fixtures.sh
+          shellcheck install.sh scripts/upstream-check.sh scripts/capture-lizard-fixtures.sh kit/*.sh
         else
           echo "shellcheck not installed; skipping shell lint" >&2
         fi

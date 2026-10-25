@@ -95,6 +95,9 @@ func cleanSource(src string) (string, error) {
 		return "", fmt.Errorf("COPY source %q: wildcards are not supported; list the files", src)
 	}
 	clean := path.Clean(src)
+	if clean == OutsideDockerfileName {
+		return "", fmt.Errorf("COPY source %q is reserved for smelt's toolchain Dockerfile", src)
+	}
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("COPY source %q is outside the repo", src)
 	}
@@ -121,6 +124,26 @@ func ReadContext(dir, dockerfile string) (*Context, error) {
 		return nil, err
 	}
 	return &Context{Dockerfile: dockerfile, Content: string(content), Sources: sources, dir: dir}, nil
+}
+
+// OutsideDockerfileName is the name an outside Dockerfile is tarred under. The
+// file is held in memory and never written to the repo, so the name only has to
+// stay clear of the repo's own paths.
+const OutsideDockerfileName = ".smelt-toolchain.Dockerfile"
+
+// ReadContextFile reads the Dockerfile at path, which may be anywhere on the
+// machine, and resolves its COPY sources against dir, the build context. The
+// file is tarred as OutsideDockerfileName and is not copied into dir.
+func ReadContextFile(dir, path string) (*Context, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	sources, err := CopySources(string(content))
+	if err != nil {
+		return nil, err
+	}
+	return &Context{Dockerfile: OutsideDockerfileName, Content: string(content), Sources: sources, dir: dir}, nil
 }
 
 // walk calls fn for every regular file a source names, expanding directories,

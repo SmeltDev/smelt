@@ -182,7 +182,7 @@ func TestUnlabeledImageIsRunOnceAndTheAnswerCached(t *testing.T) {
 	assert.Assert(t, !x.InstalledImage)
 	assert.Equal(t, c.ImageStatus, sandboximage.ImageUnlabeled)
 	assert.Assert(t, strings.Contains(c.Note, "image has no smelt.harnesses label (agent kit v1); checked by running it"), c.Note)
-	assert.Assert(t, strings.Contains(c.Note, "--update-kit"), c.Note)
+	assert.Assert(t, strings.Contains(c.Note, "smelt factory image"), c.Note)
 	assert.Equal(t, rep.Image.Describe([]string{"claude", "codex"}), "smelt-x:abc (kit v1, unlabeled; claude found, codex not)")
 
 	// The second call finds the answer in the cache.
@@ -337,4 +337,35 @@ func TestGrokReportGoldenPreservesExistingEntries(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(before, &baseline))
 	assert.NilError(t, json.Unmarshal(raw, &current))
 	assert.DeepEqual(t, current.Harnesses[:2], baseline.Harnesses)
+}
+
+func TestHostAndSandboxVersions(t *testing.T) {
+	d := baseDeps(t)
+	d.CodexLogin = func() (codexauth.Login, error) { return codexauth.Login{}, codexauth.ErrNone }
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex", "grok"} {
+		assert.NilError(t, os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n[ \"$1\" = --version ] && echo "+name+"-host-123\n"), 0o755))
+	}
+	d.LookPath = func(name string) (string, error) { return filepath.Join(bin, name), nil }
+	d.GrokRun = func(context.Context, string, ...string) error { return nil }
+	d.Images = &fakeImages{info: sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, ID: "image-id", Kit: 5, Harnesses: []string{"claude", "codex", "grok"}}}
+	d.ImageTag = "sandbox:tag"
+	d.Manifest = func(_ context.Context, id string) (sandboximage.KitManifest, error) {
+		assert.Equal(t, id, "image-id")
+		return sandboximage.KitManifest{Kit: 7, Tools: []sandboximage.KitTool{
+			{Name: "claude", Version: "claude-sandbox-456"},
+			{Name: "codex", Version: "codex-sandbox-456"},
+			{Name: "grok", Version: "grok-sandbox-456"},
+		}}, nil
+	}
+	rep := Build(t.Context(), d)
+	assert.Equal(t, rep.Image.Kit, 7)
+	for _, e := range rep.Harnesses {
+		assert.Equal(t, e.HostVersion, string(e.Name)+"-host-123")
+		assert.Equal(t, e.ImageVersion, string(e.Name)+"-sandbox-456")
+	}
+	raw, err := json.Marshal(rep)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(raw), `"host_version":"claude-host-123"`))
+	assert.Assert(t, strings.Contains(string(raw), `"image_version":"claude-sandbox-456"`))
 }

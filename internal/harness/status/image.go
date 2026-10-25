@@ -58,13 +58,26 @@ func (d Deps) checkImage(ctx context.Context) imageCheck {
 		return imageCheck{report: rep, note: fmt.Sprintf("sandbox image %s is not built; run smelt factory image", d.ImageTag)}
 	case info.Status == sandboximage.ImageLabeled:
 		rep.Found = info.Harnesses
+		if d.Manifest != nil {
+			probeCtx, stop := context.WithTimeout(ctx, DefaultProbeTimeout)
+			defer stop()
+			manifest, err := d.Manifest(probeCtx, info.ID)
+			if err != nil {
+				return imageCheck{report: rep, note: "could not read kit manifest: " + err.Error()}
+			}
+			rep.Kit = manifest.Kit
+			rep.Versions = make(map[string]string, len(manifest.Tools))
+			for _, tool := range manifest.Tools {
+				rep.Versions[tool.Name] = tool.Version
+			}
+		}
 		return imageCheck{report: rep}
 	}
 	return d.probeUnlabeled(ctx, rep)
 }
 
 // updateKitHint says how to get an image with a label.
-const updateKitHint = "update the Dockerfile's agent kit with: smelt factory image --update-kit"
+const updateKitHint = "rebuild the image with the current agent kit: smelt factory image"
 
 func (d Deps) probeUnlabeled(ctx context.Context, rep *ImageReport) imageCheck {
 	const lead = "image has no " + sandboximage.LabelHarnesses + " label (agent kit v1)"

@@ -115,6 +115,25 @@ func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backe
 	return factory.DockerBackend(root, cfg)
 }
 
+// recordRequest copies what the request says about the run onto its record and
+// returns the model to use.
+func recordRequest(record *smeltd.FactoryRun, req smeltd.FactoryRequest, cfg *config.ProjectConfig, agent harness.Harness) (string, error) {
+	model := req.Model
+	if model == "" {
+		model = cfg.Factory.ModelFor(string(agent.Name()))
+	}
+	record.Harness, record.Model = string(agent.Name()), model
+	record.KitOutdated = req.KitWarning != ""
+	if req.Sandbox != nil {
+		if err := checkSandbox(*req.Sandbox); err != nil {
+			return "", err
+		}
+		sandbox := *req.Sandbox
+		record.Sandbox = &sandbox
+	}
+	return model, nil
+}
+
 // startFactory validates a request, records a factory session and starts it in
 // the background. It returns as soon as the session is accepted.
 func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error) {
@@ -203,12 +222,10 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	}
 	attempts := factoryAttempts(req)
 	record.Attempts = attempts
-	model := req.Model
-	if model == "" {
-		model = cfg.Factory.ModelFor(string(agent.Name()))
+	model, err := recordRequest(record, req, cfg, agent)
+	if err != nil {
+		return smeltd.Session{}, err
 	}
-	record.Harness, record.Model = string(agent.Name()), model
-	record.KitOutdated = req.KitWarning != ""
 
 	entry, ctx, busy := d.sessions.add(smeltd.Session{
 		ProjectRoot: ps.root,
@@ -1000,4 +1017,14 @@ func updateFactoryBaseline(f *smeltd.FactoryRun, wt factory.Worktree) {
 	if wt.UpdatedFrom != nil {
 		f.UpdatedFrom = &smeltd.UpdatedFrom{Branch: wt.UpdatedFrom.Branch, Commit: wt.UpdatedFrom.Commit}
 	}
+}
+
+// checkSandbox refuses a sandbox record whose source is not one the daemon
+// knows, so status never shows a made-up one.
+func checkSandbox(s smeltd.FactorySandbox) error {
+	switch s.Source {
+	case smeltd.SandboxFromCaller, smeltd.SandboxFromConfig, smeltd.SandboxFromRepo:
+		return nil
+	}
+	return apiErr(http.StatusBadRequest, "sandbox source %q must be caller, config or repo", s.Source)
 }

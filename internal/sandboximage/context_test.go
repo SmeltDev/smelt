@@ -96,3 +96,52 @@ func TestSlug(t *testing.T) {
 	assert.Equal(t, Slug("circleci-demo-javascript-react-app"), "circleci-demo-javascript-react-app")
 	assert.Equal(t, Slug("###"), "repo")
 }
+
+func TestOutsideDockerfileUsesTheRepoAsContext(t *testing.T) {
+	repo := writeRepo(t, map[string]string{"go.mod": "module a\n", "go.sum": "sum\n"})
+	outside := filepath.Join(t.TempDir(), "Toolchain.Dockerfile")
+	assert.NilError(t, os.WriteFile(outside, []byte("FROM x\nCOPY go.mod go.sum /tmp/\n"), 0o644))
+
+	plan, err := NewPlanFromFile(repo, outside)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, plan.Context.Sources, []string{"go.mod", "go.sum"})
+	assert.Equal(t, plan.Context.Dockerfile, OutsideDockerfileName)
+
+	var buf bytes.Buffer
+	assert.NilError(t, plan.Context.Tar(&buf))
+	var names []string
+	tr := tar.NewReader(&buf)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NilError(t, err)
+		names = append(names, h.Name)
+	}
+	assert.DeepEqual(t, names, []string{OutsideDockerfileName, "go.mod", "go.sum"})
+
+	assert.NilError(t, os.WriteFile(filepath.Join(repo, "go.sum"), []byte("new"), 0o644))
+	again, err := NewPlanFromFile(repo, outside)
+	assert.NilError(t, err)
+	assert.Assert(t, again.Tag != plan.Tag)
+
+	// The repo gets no copy of the file.
+	entries, err := os.ReadDir(repo)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 2)
+
+	// The build asks the daemon for the reserved name.
+	f := &fakeDocker{stream: `{"stream":"ok\n"}` + "\n"}
+	_, err = NewBuilder(f).Ensure(t.Context(), again, EnsureOptions{})
+	assert.NilError(t, err)
+	assert.Equal(t, f.builds[0].Dockerfile, OutsideDockerfileName)
+}
+
+func TestOutsideDockerfileRejectsTheReservedCopySource(t *testing.T) {
+	repo := writeRepo(t, map[string]string{OutsideDockerfileName: "x"})
+	outside := filepath.Join(t.TempDir(), "D")
+	assert.NilError(t, os.WriteFile(outside, []byte("FROM x\nCOPY "+OutsideDockerfileName+" /x\n"), 0o644))
+	_, err := NewPlanFromFile(repo, outside)
+	assert.ErrorContains(t, err, "reserved")
+}

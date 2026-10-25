@@ -18,6 +18,7 @@ import (
 	"github.com/smeltdev/smelt/internal/harness/status"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sandboximage"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 	"github.com/smeltdev/smelt/internal/ui"
 )
 
@@ -30,7 +31,7 @@ func newHarnessCmd() *cobra.Command {
 		Short: "Inspect the coding agents factory runs can use",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newHarnessStatusCmd())
+	cmd.AddCommand(newHarnessStatusCmd(), newHarnessRefreshCmd())
 	return cmd
 }
 
@@ -107,6 +108,7 @@ func projectDeps(ctx context.Context, d status.Deps) status.Deps {
 		return d
 	}
 	d.Images = dockerImages{}
+	d.Manifest = readSandboxManifest
 	return d
 }
 
@@ -135,12 +137,23 @@ func (dockerImages) RunProbe(ctx context.Context, tag string) ([]string, error) 
 // factoryImageTag is the docker image the project's factory runs use, "" when
 // it is not known without building anything.
 func factoryImageTag(root string, f *config.FactoryConfig) string {
-	switch {
-	case f.Image != "":
+	if f.Image != "" {
 		return f.Image
-	case f.Dockerfile != "":
-		if plan, err := sandboximage.NewPlan(root, f.Dockerfile); err == nil {
-			return plan.Tag
+	}
+	_, err := os.Stat(filepath.Join(root, sandboximage.DefaultDockerfile))
+	src, ok := sandboximage.ResolveToolchain(sandboximage.ToolchainInputs{
+		Config: f.Dockerfile, RepoHasDefault: err == nil && os.Getenv(docker.EnvImage) == "",
+	})
+	if !ok {
+		return ""
+	}
+	if plan, err := sandboximage.NewPlan(root, src.Path); err == nil {
+		// The factory image is the toolchain with the kit pulled last on
+		// top; before any pull there is no image to name.
+		if dir, err := config.AppData(); err == nil {
+			if sandbox, ok := plan.LastKitSandboxPlan(sandboximage.KitStatePath(dir)); ok {
+				return sandbox.Tag
+			}
 		}
 	}
 	return ""
@@ -163,6 +176,7 @@ func printHarnessStatus(streams iostream.Streams, rep status.Report) {
 	for _, e := range rep.Harnesses {
 		streams.Println(ui.Bold(string(e.Name)))
 		streams.Printf("  installed:  %s on this machine, %s in the image\n", yesNo(e.InstalledHost), yesNo(e.InstalledImage))
+		streams.Printf("  versions:   %s on this machine, %s in the image\n", versionText(e.HostVersion), versionText(e.ImageVersion))
 		login := e.Auth
 		if e.AuthKind != "" {
 			login += " (" + e.AuthKind + ")"
@@ -212,4 +226,53 @@ func describeWindow(w harness.Window) string {
 	}
 	parts = append(parts, "["+w.Source+"]")
 	return strings.Join(parts, "  ")
+}
+
+func versionText(v string) string {
+	if v == "" {
+		return "unknown"
+	}
+	return v
+}
+
+func readSandboxManifest(ctx context.Context, tag string) (sandboximage.KitManifest, error) {
+	b, err := sandboximage.Connect()
+	if err != nil {
+		return sandboximage.KitManifest{}, err
+	}
+	defer func() { _ = b.Close() }()
+	return b.ReadKitManifest(ctx, tag)
+}
+
+func newHarnessRefreshCmd() *cobra.Command {
+	var ref string
+	cmd := &cobra.Command{
+		Use: "refresh", Short: "Refresh sandbox agents from a published kit without upgrading smelt",
+		Long: "Pull and select an agent kit for subsequent sandbox builds. Use --kit-ref to select a newer published kit without upgrading smelt. Run smelt factory image afterward to assemble it with the project's toolchain. Host agents are managed by their own installers.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			choice, err := refreshAgentKit(cmd.Context(), ref)
+			if err != nil {
+				return &userError{msg: "Could not refresh the agent kit.", err: err}
+			}
+			iostream.FromCmd(cmd).Printf("Selected agent kit v%d: %s\nRun smelt factory image to rebuild the sandbox with these agents.\n", choice.Kit, choice.Ref)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&ref, "kit-ref", sandboximage.KitTagRef(), "Published agent kit tag to pull and select")
+	return cmd
+}
+
+// refreshAgentKit is a test seam for the local Docker daemon.
+var refreshAgentKit = func(ctx context.Context, ref string) (sandboximage.KitChoice, error) {
+	b, err := sandboximage.Connect()
+	if err != nil {
+		return sandboximage.KitChoice{}, err
+	}
+	defer func() { _ = b.Close() }()
+	dir, err := config.AppData()
+	if err != nil {
+		return sandboximage.KitChoice{}, err
+	}
+	return sandboximage.RefreshKit(ctx, b, sandboximage.KitStatePath(dir), ref)
 }

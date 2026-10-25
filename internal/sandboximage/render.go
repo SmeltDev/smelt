@@ -14,25 +14,11 @@ const DefaultDockerfile = brand.Dockerfile
 // depsDir is the scratch directory the dependency layer warms the store in.
 const depsDir = "/tmp/" + brand.Command + "-deps"
 
-// agentKit is the same for every repo: the tools the factory's own scripts use
-// and the agent CLIs. Package installs need root, so the user is switched
-// around them; %s is the base image's user, and the lines are dropped for root.
-const (
-	kitPackages = `RUN apt-get update && apt-get install -y --no-install-recommends \
-      git coreutils procps ca-certificates curl bash python3 python3-venv \
- && rm -rf /var/lib/apt/lists/* \
- && git config --system safe.directory '*'
-`
-	kitClaude = `RUN curl -fsSL https://claude.ai/install.sh | bash && test -x "$HOME/.local/bin/claude"
-`
-	kitCmd = "CMD [\"sleep\", \"infinity\"]\n"
-)
-
-// Codex is installed from its GitHub release, which needs no Node. It runs
-// every command through a companion program, codex-code-mode-host, which the
-// release ships as a separate asset. The version and the checksums of the
+// The kit image ships Codex from its GitHub release, which needs no Node. It
+// runs every command through a companion program, codex-code-mode-host, which
+// the release ships as a separate asset. The version and the checksums of the
 // four Linux archives are pinned together: change them together, and
-// Dockerfile.smelt with them (a test keeps the two in step).
+// kit/Dockerfile with them (a test keeps the two in step).
 const (
 	CodexVersion = "0.162.0"
 	// codexHostBinary is the file the command host is installed as.
@@ -40,58 +26,26 @@ const (
 	codexReleaseURLBase = "https://github.com/openai/codex/releases/download/rust-v"
 )
 
-// codexAsset is one release asset the kit installs: the archive holds a single
-// file named after the archive, which goes to ~/.local/bin/<installAs>.
-type codexAsset struct {
-	prefix    string // the archive name before "-<arch>-unknown-linux-musl"
-	installAs string
-	sumX86    string
-	sumARM    string
-}
+// codexAsset is one Codex release asset the kit ships, pinned by the SHA-256 of
+// its archive for each architecture.
+type codexAsset struct{ sumX86, sumARM string }
 
 var (
 	codexMain = codexAsset{
-		prefix: "codex", installAs: "codex",
 		sumX86: "8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73",
 		sumARM: "15162a9b59edf8e512b27414ec0b7db22e6424a1262b0eee8666643e0d295c2f",
 	}
 	codexHost = codexAsset{
-		prefix: codexHostBinary, installAs: codexHostBinary,
 		sumX86: "dee8bf3df637c68e1495b928d643b76d4ad44f94e4f0ed79fe8482fa79e23d97",
 		sumARM: "18d99b055d2ef4a2af51f1144919bd8a208f4f79ace389b7775341d6903cf7e9",
 	}
 )
 
-// install is the Dockerfile RUN block that downloads the asset for the
-// architecture the image is built on, checks it and installs it.
-func (a codexAsset) install() string {
-	return `RUN set -e; \
-    case "$(uname -m)" in \
-      x86_64) arch=x86_64; sum=` + a.sumX86 + ` ;; \
-      aarch64|arm64) arch=aarch64; sum=` + a.sumARM + ` ;; \
-      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    name="` + a.prefix + `-${arch}-unknown-linux-musl"; \
-    curl -fsSL -o "/tmp/${name}.tar.gz" "` + codexReleaseURLBase + CodexVersion + `/${name}.tar.gz"; \
-    echo "${sum}  /tmp/${name}.tar.gz" | sha256sum -c -; \
-    mkdir -p "$HOME/.local/bin"; \
-    tar -xzf "/tmp/${name}.tar.gz" -C /tmp; \
-    mv "/tmp/${name}" "$HOME/.local/bin/` + a.installAs + `"; \
-    rm -f "/tmp/${name}.tar.gz"; \
-    test -x "$HOME/.local/bin/` + a.installAs + `"
-`
-}
-
-// KitCodex is the Dockerfile blocks that install the Codex CLI and its command
-// host to ~/.local/bin, for the architecture the image is built on.
-func KitCodex() string {
-	return codexMain.install() + codexHost.install()
-}
-
-// Grok is installed from xAI's download, a single binary per architecture with
-// no published checksum, so the SHA-256 of each is pinned here, computed on
-// 2026-10-18. The version and the checksums are pinned together: change them
-// together, and Dockerfile.smelt with them (a test keeps the two in step).
+// The kit image ships Grok from xAI's download, a single binary per
+// architecture with no published checksum, so the SHA-256 of each is pinned
+// here, computed on 2026-10-18. The version and the checksums are pinned
+// together: change them together, and kit/Dockerfile with them (a test keeps
+// the two in step).
 const (
 	GrokVersion = "1.0.62"
 	grokURLBase = "https://x.ai/cli/grok-"
@@ -99,66 +53,20 @@ const (
 	grokSumARM  = "0b808a2209728788d2e37c34ea1846d460b41528a9fc7edc7698b9e7dec12fe1"
 )
 
-// KitGrok is the Dockerfile block that downloads the Grok CLI for the
-// architecture the image is built on, checks it and installs it to
-// ~/.local/bin.
-func KitGrok() string {
-	return `RUN set -e; \
-    case "$(uname -m)" in \
-      x86_64) arch=x86_64; sum=` + grokSumX86 + ` ;; \
-      aarch64|arm64) arch=aarch64; sum=` + grokSumARM + ` ;; \
-      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/grok "` + grokURLBase + GrokVersion + `-linux-${arch}"; \
-    echo "${sum}  /tmp/grok" | sha256sum -c -; \
-    mkdir -p "$HOME/.local/bin"; \
-    mv /tmp/grok "$HOME/.local/bin/grok"; \
-    chmod +x "$HOME/.local/bin/grok"; \
-    test -x "$HOME/.local/bin/grok"
-`
-}
+// LizardVersion is the pinned lizard, which measures the code quality of any language (see internal/quality). The
+// kit image installs it from pinned wheels whose SHA-256 pip checks
+// (--require-hashes). The version and the hashes are pinned together: change
+// them together, and kit/Dockerfile with them (a test keeps the two in step).
+const LizardVersion = "1.24.1"
 
-// lizard measures the code quality of any language (see internal/quality). It
-// is installed from PyPI into a venv of its own, from pinned wheels whose
-// SHA-256 pip checks (--require-hashes), so the project's Python is untouched.
-// The version and the hashes are pinned together: change them together, and
-// Dockerfile.smelt with them (a test keeps the two in step).
-const (
-	LizardVersion = "1.24.1"
-	// lizardToolsDir is the venv's home, and lizardLink the name it is on PATH as.
-	lizardToolsDir = "$HOME/.local/share/" + brand.Command + "-tools"
-	lizardLink     = "$HOME/.local/bin/lizard"
-)
+// pinnedWheel is one wheel lizard needs, pinned by version and SHA-256.
+type pinnedWheel struct{ name, version, sha256 string }
 
-// lizardRequirements are lizard and the wheels it needs, with their hashes.
-func lizardRequirements() []string {
-	return []string{
-		"lizard==" + LizardVersion + " --hash=sha256:746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c",
-		"pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
-		"pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
-	}
-}
-
-// KitLizard is the Dockerfile block that installs lizard. An image without
-// python3 skips it with a warning and measures nothing, which is not an error.
-func KitLizard() string {
-	reqs := lizardRequirements()
-	quoted := make([]string, len(reqs))
-	for i, r := range reqs {
-		quoted[i] = "'" + r + "'"
-	}
-	return `RUN set -e; \
-    if ! command -v python3 >/dev/null 2>&1; then \
-      echo "warning: python3 is missing, so lizard is not installed and code quality is not measured" >&2; exit 0; \
-    fi; \
-    python3 -m venv "` + lizardToolsDir + `"; \
-    printf '%s\n' ` + strings.Join(quoted, " ") + ` > /tmp/lizard-requirements.txt; \
-    "` + lizardToolsDir + `/bin/pip" install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/lizard-requirements.txt; \
-    rm -f /tmp/lizard-requirements.txt; \
-    mkdir -p "$HOME/.local/bin"; \
-    ln -sf "` + lizardToolsDir + `/bin/lizard" "` + lizardLink + `"; \
-    lizard --version
-`
+// lizardWheels are lizard and the wheels it needs.
+var lizardWheels = []pinnedWheel{
+	{"lizard", LizardVersion, "746060a3e9a375af7340b2d4c6aab307b8a8b4199339c36ddc7afc4188b53d1c"},
+	{"pygments", "2.21.0", "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"},
+	{"pathspec", "1.1.1", "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"},
 }
 
 // Render writes the Dockerfile for r. It is pure.
@@ -189,23 +97,7 @@ func Render(r Recipe) string {
 		b.WriteString("\n# --- dependencies: rebuilt when these files change -------------------------\n")
 		b.WriteString(r.depsLayer())
 	}
-
-	b.WriteString("\n" + kitSection(r.User))
 	return b.String()
-}
-
-// kitHarnessLabel tells `smelt harness status` which agent CLIs the image has
-// and which kit built it.
-func kitHarnessLabel() string {
-	return "LABEL " + LabelHarnesses + "=claude,codex,grok " + LabelKit + "=" + kitVersionString() + "\n"
-}
-
-// kitSection is the agent kit from its marker to the end of the Dockerfile.
-// user is the base image's user.
-func kitSection(user string) string {
-	return kitMarker() +
-		asUser(rootUser, user, kitPackages) +
-		kitClaude + KitCodex() + KitGrok() + KitLizard() + kitHarnessLabel() + kitCmd
 }
 
 // asUser runs block as user, then restores the base image's user. A root base

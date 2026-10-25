@@ -23,6 +23,7 @@ import (
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/quality"
 	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 	"github.com/smeltdev/smelt/internal/sarif"
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
@@ -1074,4 +1075,43 @@ func TestFactoryRunThatStaysAtCapacityEndsUnavailableWithAStop(t *testing.T) {
 	raw, err := json.Marshal(detail)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(raw), `"stop":"harness_unavailable"`), string(raw))
+}
+
+func TestFactorySessionRecordsTheSandbox(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+	sandbox := smeltd.FactorySandbox{
+		Dockerfile: "/data/toolchains/go.Dockerfile", Source: smeltd.SandboxFromCaller,
+		ToolchainTag: "smelt-r-toolchain:0123456789ab", Kit: "5@sha256:abc",
+	}
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", Sandbox: &sandbox})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	assert.DeepEqual(t, detail.Factory.Sandbox, &sandbox)
+
+	b, err := json.Marshal(detail)
+	assert.NilError(t, err)
+	var envelope map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(b, &envelope))
+	var status map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(envelope["factory"], &status))
+	assert.Equal(t, string(status["sandbox"]), `{"dockerfile":"/data/toolchains/go.Dockerfile","source":"caller","toolchain_tag":"smelt-r-toolchain:0123456789ab","kit":"5@sha256:abc"}`)
+
+	sess, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x"})
+	assert.NilError(t, err)
+	detail = waitForSessionEnd(t, d, sess.ID)
+	assert.Assert(t, detail.Factory.Sandbox == nil)
+
+	bad := sandbox
+	bad.Source = "elsewhere"
+	_, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "x", Sandbox: &bad})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "got %v", err)
+	assert.Equal(t, ae.status, http.StatusBadRequest)
+}
+
+// The wire names of a sandbox's source are the toolchain kinds' strings.
+func TestSandboxSourcesMatchTheToolchainKinds(t *testing.T) {
+	assert.Equal(t, smeltd.SandboxFromCaller, string(sandboximage.ToolchainCaller))
+	assert.Equal(t, smeltd.SandboxFromConfig, string(sandboximage.ToolchainConfig))
+	assert.Equal(t, smeltd.SandboxFromRepo, string(sandboximage.ToolchainRepo))
 }
