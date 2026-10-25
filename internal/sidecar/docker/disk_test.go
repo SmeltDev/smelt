@@ -225,3 +225,46 @@ func TestStorageProbeBootstrapsEmptyDaemon(t *testing.T) {
 	assert.Equal(t, f.pulls, 1)
 	assert.Equal(t, f.probeImage, "alpine:3.21")
 }
+
+func TestDiagnosticsMeasureLegacyAndExpiredVolumesHourly(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	name := "smelt-cache-abcdef123456"
+	f.volumes[name] = volume.Volume{Name: name, CreatedAt: "today"}
+	for call, expected := range []int{1, 1, 2} {
+		report, err := b.ReportStorage(context.Background())
+		assert.NilError(t, err)
+		assert.Equal(t, len(report.Caches), 1)
+		assert.Equal(t, report.Caches[0].Bytes, int64(4096))
+		assert.Equal(t, report.Caches[0].Unavailable, "")
+		assert.Equal(t, f.measurements, expected)
+		if expected == 1 {
+			record := readMeasurement(b.measurementPath("engine", name))
+			// Expire only after the second call.
+			if call == 1 {
+				record.At = record.At.Add(-time.Hour)
+				assert.NilError(t, writeMeasurement(b.measurementPath("engine", name), record))
+			}
+		}
+	}
+	assert.Equal(t, f.trims, 0)
+}
+
+func TestMaintenanceReusesFreshDiagnosticMeasurement(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	b.CacheMaxBytes = 10 * 1024
+	name := "smelt-cache-abcdef123456"
+	f.volumes[name] = volume.Volume{Name: name, CreatedAt: "today"}
+	f.cacheKB = 20
+	_, err := b.ReportStorage(context.Background())
+	assert.NilError(t, err)
+	assert.Equal(t, f.measurements, 1)
+	unlock, err := b.storageLock(context.Background())
+	assert.NilError(t, err)
+	defer unlock()
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", name))
+	// Only the required post-trim measurement follows the diagnostic scan.
+	assert.Equal(t, f.measurements, 2)
+	assert.Equal(t, f.trims, 1)
+}

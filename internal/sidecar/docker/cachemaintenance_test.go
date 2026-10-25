@@ -1,7 +1,10 @@
 package docker
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -290,4 +293,63 @@ func TestTrimModuleEvictsWholeVersionAndMetadata(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err))
 	_, err = os.Stat(filepath.Join(metadata, "v1.0.0.ziphash"))
 	assert.Assert(t, os.IsNotExist(err))
+}
+
+func TestTrimUsesKitRuntimeWithoutSystemPython(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	assert.NilError(t, err)
+	kit, bin, root := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{"lib", "libexec/python/bin"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(kit, dir), 0o700))
+	}
+	assert.NilError(t, os.Symlink(python, filepath.Join(kit, "libexec/python/bin/python3")))
+	// A fake loader checks the same arguments as the kit wrapper before
+	// invoking the real interpreter; PATH deliberately has no Python.
+	loader := "#!/bin/sh\n[ \"$1\" = --library-path ] || exit 1\nshift 2\nexec \"$@\"\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(kit, "lib", "ld-musl-test.so.1"), []byte(loader), 0o700))
+	for _, name := range []string{"sh", "du"} {
+		executable, err := exec.LookPath(name)
+		assert.NilError(t, err)
+		assert.NilError(t, os.Symlink(executable, filepath.Join(bin, name)))
+	}
+	t.Setenv("SMELT_KIT", kit)
+	t.Setenv("PATH", bin)
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "cache"), make([]byte, 8192), 0o600))
+	runTrim(t, root, 4096, homeCache)
+	entries, err := os.ReadDir(root)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 0)
+}
+
+func TestEvictionUsesBoundedMeasurements(t *testing.T) {
+	root, bin := t.TempDir(), t.TempDir()
+	du, err := exec.LookPath("du")
+	assert.NilError(t, err)
+	count := filepath.Join(t.TempDir(), "calls")
+	script := "#!/bin/sh\necho measured >> " + shellQuote(count) + "\nexec " + shellQuote(du) + " \"$@\"\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "du"), []byte(script), 0o700))
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	for i := range 3000 {
+		assert.NilError(t, os.WriteFile(filepath.Join(root, fmt.Sprint(i)), []byte("cache"), 0o600))
+	}
+	runTrim(t, root, 4096, moduleCache)
+	calls, err := os.ReadFile(count)
+	assert.NilError(t, err)
+	assert.Equal(t, strings.Count(string(calls), "measured"), 1)
+}
+
+func TestMaintenanceReportsFreedBytes(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.CacheMaxBytes = 10 * 1024
+	f.cacheKB = 20
+	var output bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(old)
+	unlock, err := b.storageLock(context.Background())
+	assert.NilError(t, err)
+	defer unlock()
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", "smelt-cache-project-1"))
+	assert.Assert(t, strings.Contains(output.String(), "smelt-cache-project-1"))
+	assert.Assert(t, strings.Contains(output.String(), "freed 16384 bytes"), output.String())
 }

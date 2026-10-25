@@ -129,6 +129,7 @@ func volumeMounts(t *testing.T, f *fakeDocker) map[string]string {
 	got := map[string]string{}
 	for _, m := range f.hostConfigs[0].Mounts {
 		assert.Equal(t, m.Type, mount.TypeVolume)
+		assert.Assert(t, m.VolumeOptions.NoCopy, "image cache contents must not populate a volume after maintenance")
 		got[m.Source] = m.Target
 	}
 	return got

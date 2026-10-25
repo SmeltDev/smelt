@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
 )
 
@@ -170,7 +171,7 @@ func (b *Provider) helper(ctx context.Context, image string, mounts []mount.Moun
 		log.Printf("docker storage helper: %s", strings.TrimSpace(stderr.String()))
 	}
 	if exitCode != 0 {
-		return "", fmt.Errorf("storage helper exited %d (requires sh, du, and python3 for trimming): %s", exitCode, strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf("storage helper exited %d (requires sh, du, and the agent kit Python runtime or python3 for trimming): %s", exitCode, strings.TrimSpace(stderr.String()))
 	}
 	return out.String(), nil
 }
@@ -230,12 +231,16 @@ func (b *Provider) maintainVolume(ctx context.Context, engine, image, name strin
 	identity := volumeIdentity(engine, vol)
 	recordPath := b.measurementPath(engine, name)
 	record := readMeasurement(recordPath)
-	if !measurementDue(record, identity, b.clock()) && record.Bytes <= b.CacheMaxBytes {
+	due := measurementDue(record, identity, b.clock())
+	if !due && record.Bytes <= b.CacheMaxBytes {
 		return nil
 	}
-	size, err := b.measureVolume(ctx, image, name)
-	if err != nil {
-		return err
+	size := record.Bytes
+	if due {
+		size, err = b.measureVolume(ctx, image, name)
+		if err != nil {
+			return err
+		}
 	}
 	target, trim := trimTarget(size, b.CacheMaxBytes)
 	if trim {
@@ -257,7 +262,11 @@ func (b *Provider) maintainVolume(ctx context.Context, engine, image, name strin
 		}
 		size = after
 	}
-	data, err := json.Marshal(cacheMeasurement{Identity: identity, Cap: b.CacheMaxBytes, Bytes: size, At: b.clock()})
+	return writeMeasurement(recordPath, cacheMeasurement{Identity: identity, Cap: b.CacheMaxBytes, Bytes: size, At: b.clock()})
+}
+
+func writeMeasurement(recordPath string, record cacheMeasurement) error {
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -294,7 +303,9 @@ func volumeKind(name string) cacheKind {
 }
 
 func trimScript(root string, target int64, kind cacheKind) string {
-	return "python3 - " + shellQuote(root) + " " + strconv.FormatInt(target, 10) + " " + shellQuote(string(kind)) + " <<'SMELT_TRIM'\n" + trimPython + "\nSMELT_TRIM"
+	// The kit Python needs its bundled musl loader, just like the lizard wrapper.
+	prefix := "kit=\"${SMELT_KIT:-/opt/" + brand.Command + "}\"; python() { if [ -x \"$kit/libexec/python/bin/python3\" ]; then \"$kit\"/lib/ld-musl-*.so.1 --library-path \"$kit/libexec/runtime/lib\" \"$kit/libexec/python/bin/python3\" \"$@\"; else python3 \"$@\"; fi; }; "
+	return prefix + "python - " + shellQuote(root) + " " + strconv.FormatInt(target, 10) + " " + shellQuote(string(kind)) + " <<'SMELT_TRIM'\n" + trimPython + "\nSMELT_TRIM"
 }
 
 const trimPython = `import os, sys, stat, subprocess, shutil
@@ -362,11 +373,24 @@ for directory, dirs, files in os.walk(root, followlinks=False):
     for name in files + [n for n in dirs if os.path.islink(os.path.join(directory, n))]:
         path = os.path.join(directory, name)
         entries.append((os.lstat(path).st_atime_ns, path, [path]))
+# Each eviction unit is traversed once; du runs only at the stage boundaries.
+# Count hard-linked files only when removing their last link.
+def allocated(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return 0
+    if stat.S_ISDIR(info.st_mode):
+        return info.st_blocks * 512 + sum(allocated(os.path.join(path, n)) for n in os.listdir(path))
+    return info.st_blocks * 512 if info.st_nlink <= 1 else 0
+remaining = size()
 for _, _, paths in sorted(entries):
-    if size() <= target:
+    if remaining <= target:
         break
     for path in paths:
+        freed = allocated(path)
         remove(path)
+        remaining -= freed
 # Empty directories consume blocks too; retain the mounted root.
 for directory, dirs, files in os.walk(root, topdown=False, followlinks=False):
     if directory != root and not os.path.islink(directory):

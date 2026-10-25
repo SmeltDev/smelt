@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/shirou/gopsutil/v4/disk"
 )
 
@@ -180,16 +181,57 @@ func (b *Provider) storageReport(ctx context.Context, mode storageMode) (report 
 	return report, nil
 }
 
-// appendCacheUsage includes persisted measurements even if a filesystem probe failed.
+// appendCacheUsage refreshes stale diagnostics without trimming or mounting a workload.
 func (b *Provider) appendCacheUsage(ctx context.Context, report *StorageReport) error {
 	volumes, err := b.ListCacheVolumes(ctx, "")
 	if err != nil {
 		return err
 	}
+	if len(volumes) == 0 {
+		return nil
+	}
+	unlock, err := b.storageLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for _, vol := range volumes {
-		report.Caches = append(report.Caches, b.cachedUsage(ctx, report.Host.DaemonID, vol.Name))
+		name := vol.Name
+		recordPath := b.measurementPath(report.Host.DaemonID, name)
+		record := readMeasurement(recordPath)
+		inspected, inspectErr := b.cli.VolumeInspect(ctx, name)
+		var refreshErr error
+		if inspectErr == nil && measurementDue(record, volumeIdentity(report.Host.DaemonID, inspected), b.clock()) {
+			refreshErr = b.refreshDiagnosticMeasurement(ctx, report, inspected, recordPath)
+		}
+		usage := b.cachedUsage(ctx, report.Host.DaemonID, name)
+		if refreshErr != nil {
+			usage.Unavailable = "measurement failed: " + refreshErr.Error()
+		}
+		report.Caches = append(report.Caches, usage)
 	}
 	return nil
+}
+
+// refreshDiagnosticMeasurement only reads the volume; diagnostics never trim it.
+func (b *Provider) refreshDiagnosticMeasurement(ctx context.Context, report *StorageReport, vol volume.Volume, recordPath string) error {
+	// Never pull a helper before establishing and checking host storage.
+	if report.HostError != "" {
+		return fmt.Errorf("backing storage unavailable: %s", report.HostError)
+	}
+	if err := b.reportHostFilesystems(ctx, &StorageReport{Host: report.Host}, storageGuard); err != nil {
+		return err
+	}
+	img, err := b.helperImage(ctx)
+	if err != nil {
+		return err
+	}
+	size, err := b.measureVolume(ctx, img, vol.Name)
+	if err != nil {
+		return err
+	}
+	capBytes := b.cachedUsage(ctx, report.Host.DaemonID, vol.Name).Cap
+	return writeMeasurement(recordPath, cacheMeasurement{Identity: volumeIdentity(report.Host.DaemonID, vol), Cap: capBytes, Bytes: size, At: b.clock()})
 }
 
 func (b *Provider) reportHostFilesystems(ctx context.Context, report *StorageReport, mode storageMode) error {
