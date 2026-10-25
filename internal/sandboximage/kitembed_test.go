@@ -202,3 +202,19 @@ func TestLocalKitDoesNotOverrideRefresh(t *testing.T) {
 	assert.Equal(t, f.pulls, 1)
 	assert.Equal(t, f.builds, 0)
 }
+
+func TestRegistryKitPrecedesEmbeddedBuild(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	const ref = KitRegistryRepo + "@sha256:published"
+	f := &localKitFake{fakePuller: fakePuller{ref: ref}, images: map[string]string{}}
+	choice, err := ResolveKit(t.Context(), f, state)
+	assert.NilError(t, err)
+	assert.Equal(t, choice.Ref, ref)
+	assert.Equal(t, choice.Notice, "")
+	assert.Equal(t, f.pulls, 1)
+	assert.Equal(t, f.builds, 0)
+	last, ok := readLastKit(state)
+	assert.Assert(t, ok)
+	assert.Equal(t, last.Ref, ref)
+	assert.Equal(t, last.Notice, "")
+}
