@@ -229,15 +229,18 @@ writes the file into the project and never repairs or regenerates it.
 writing it. It re-runs detection, so hand edits are lost.
 
 The agent CLIs (Claude, Codex, Grok) and lizard come from the agent kit image,
-ghcr.io/smeltdev/smelt-kit, which smelt pulls by tag, resolves to a digest and
-copies into every sandbox image, whatever Dockerfile.smelt says. When the pull
-fails, smelt says so and uses the kit it pulled last; with none, it fails and
-names --kit-from-source. Dockerfile.smelt needs no update when the kit changes.
+ghcr.io/smeltdev/smelt-kit. smelt first checks local revision and version tags,
+then pulls the registry image by digest. If the registry is unavailable, smelt
+builds its embedded kit sources automatically and reuses the local image on
+later runs. A local-build notice is shown once per image and logged on every
+affected run; this command displays it again. If building fails, the last
+cached kit is a final fallback. Dockerfile.smelt needs no update when the kit changes.
 The kit also bundles git, bash, pkill and sha256sum; it needs no package installs.
 
---kit-from-source builds the kit image from the kit/ directory of the project
-(smelt's own source tree) and uses it instead of pulling, for development and
-air-gapped machines.
+--kit-from-source forces a rebuild from this binary's embedded kit sources,
+from any project, retaining Docker layer caching. Cold offline builds still
+require cached base images and download dependencies. Forks must publish their
+own kit or will build locally.
 --update-kit does nothing now and is kept for one release: the kit is no longer
 a section to update. It exits 0 and says why.
 --regenerate and --update-kit are mutually exclusive.
@@ -425,7 +428,7 @@ type imageOptions struct {
 // is reported in the result; only a problem with Docker itself is an error.
 func attemptImage(ctx context.Context, streams iostream.Streams, root string, src sandboximage.ToolchainSource, cfg *config.ProjectConfig, opts imageOptions) (imageAttempt, error) {
 	dockerfile := src.Path
-	built, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Kind: src.Kind, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource, ShowKitNotice: opts.ShowKitNotice})
+	built, err := buildImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Kind: src.Kind, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource, ShowKitNotice: opts.ShowKitNotice})
 	tag := built.Tag
 	var buildErr *sandboximage.BuildError
 	if errors.As(err, &buildErr) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -292,4 +293,49 @@ func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(got.Sandbox.KitNotice, "published kit isn't available (denied)"))
 	}
+}
+
+func TestFactoryImageCommandDisplaysClaimedKitNotice(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	assert.NilError(t, exec.Command("git", "-C", root, "init", "-q").Run())
+	assert.NilError(t, exec.Command("git", "-C", root, "remote", "add", "origin", "https://github.com/smeltdev/smelt.git").Run())
+	t.Chdir(root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"backend":"docker"}}`), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
+	kits := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+	streams, output := capturedStreams()
+	choice, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Assert(t, choice.Notice != "")
+	output.Reset()
+	_, err = kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, output.String(), "", "automatic notice was already claimed")
+
+	stop := errors.New("stop before verification")
+	previous := buildImage
+	t.Cleanup(func() { buildImage = previous })
+	called := false
+	buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+		called = true
+		plan, err := b.toolchainPlan(root)
+		if err != nil {
+			return builtImage{}, err
+		}
+		built, err := ensureSandboxImage(ctx, streams, root, b, plan, kits)
+		if err != nil {
+			return builtImage{}, err
+		}
+		return built, stop
+	}
+	cmd := newFactoryImageCmd()
+	cmd.SetContext(t.Context())
+	cmd.SetOut(streams.Out)
+	cmd.SetErr(streams.Err)
+	cmd.SetArgs(nil)
+	err = cmd.Execute()
+	assert.ErrorIs(t, err, stop)
+	assert.Assert(t, called)
+	assert.Assert(t, strings.Contains(output.String(), choice.Notice), output.String())
 }

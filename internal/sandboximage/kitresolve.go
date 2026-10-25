@@ -25,8 +25,8 @@ const kitDockerfile = "Dockerfile"
 // KitStatePath is where the last resolved kit is remembered, under dataDir.
 func KitStatePath(dataDir string) string { return filepath.Join(dataDir, kitStateFile) }
 
-// ErrKitUnavailable means the kit image could not be pulled and none was
-// pulled before.
+// ErrKitUnavailable means no kit could be acquired or built, and no usable
+// cached image remains.
 var ErrKitUnavailable = errors.New("agent kit image unavailable")
 
 // KitChoice is the kit image a build copies from.
@@ -240,7 +240,7 @@ func (p Plan) LastKitSandboxPlan(statePath string) (Plan, bool) {
 	if !ok {
 		return Plan{}, false
 	}
-	return p.SandboxPlanWithKit(KitChoice{Ref: ref.Ref, Kit: ref.Kit}), true
+	return p.SandboxPlanWithKit(KitChoice{Ref: ref.Ref, Kit: ref.Kit, Notice: ref.Notice}), true
 }
 
 // KitRefresher pulls and reads a published kit without running its agents.

@@ -3,11 +3,18 @@ package sandboximage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -83,7 +90,7 @@ func TestEmbeddedKitContextParity(t *testing.T) {
 	var a, b bytes.Buffer
 	assert.NilError(t, embedded.Tar(&a))
 	assert.NilError(t, tree.Tar(&b))
-	assert.DeepEqual(t, a.Bytes(), b.Bytes())
+	assert.Equal(t, sha256.Sum256(a.Bytes()), sha256.Sum256(b.Bytes()))
 }
 
 func TestDockerEmbeddedFallbackTagsAndReuse(t *testing.T) {
@@ -95,11 +102,72 @@ func TestDockerEmbeddedFallbackTagsAndReuse(t *testing.T) {
 	assert.Equal(t, choice.Ref, "sha256:built")
 	assert.Equal(t, len(docker.builds), 1)
 	assert.DeepEqual(t, docker.builds[0].Tags, []string{KitRevisionRef(), KitLocalRef()})
+	for _, pin := range KitPins() {
+		assert.Equal(t, *docker.builds[0].BuildArgs[pin.Name], pin.Value)
+	}
 	assert.Equal(t, len(docker.pulls), 1)
 	_, err = ResolveKit(t.Context(), builder, state)
 	assert.NilError(t, err)
 	assert.Equal(t, len(docker.builds), 1)
 	assert.Equal(t, len(docker.pulls), 1)
+}
+
+func TestKitNoticeConcurrentClaims(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	claims := make(chan bool, 16)
+	var wg sync.WaitGroup
+	for range cap(claims) {
+		wg.Go(func() { claims <- ClaimKitNotice(state, "sha256:kit") })
+	}
+	wg.Wait()
+	close(claims)
+	count := 0
+	for claimed := range claims {
+		if claimed {
+			count++
+		}
+	}
+	assert.Equal(t, count, 1)
+}
+
+func TestLocalKitRecoversProvenanceAfterAnotherSelection(t *testing.T) {
+	state := KitStatePath(t.TempDir())
+	f := &localKitFake{fakePuller: fakePuller{pullErr: errors.New("denied")}, images: map[string]string{}}
+	first, err := ResolveKit(t.Context(), f, state)
+	assert.NilError(t, err)
+	assert.NilError(t, RememberKit(state, "another-image"))
+	next, err := ResolveKit(t.Context(), f, state)
+	assert.NilError(t, err)
+	assert.Equal(t, next.Notice, first.Notice)
+	plan, ok := (Plan{Tag: "toolchain:1"}).LastKitSandboxPlan(state)
+	assert.Assert(t, ok)
+	assert.Equal(t, plan.KitNotice, first.Notice)
+}
+
+func TestRegistryStreamFailureBuildsEmbeddedKit(t *testing.T) {
+	var built atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			_, _ = w.Write([]byte("{\"error\":\"denied\"}\n"))
+		case strings.HasSuffix(r.URL.Path, "/build"):
+			built.Store(true)
+			_, _ = w.Write([]byte("{\"stream\":\"built\"}\n"))
+		case strings.HasSuffix(r.URL.Path, "/json") && built.Load():
+			_, _ = w.Write([]byte(`{"Id":"sha256:embedded"}`))
+		default:
+			http.Error(w, "missing", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.47"))
+	assert.NilError(t, err)
+	defer func() { _ = cli.Close() }()
+	choice, err := ResolveKit(t.Context(), NewBuilder(cli), KitStatePath(t.TempDir()))
+	assert.NilError(t, err)
+	assert.Equal(t, choice.Ref, "sha256:embedded")
+	assert.Assert(t, strings.Contains(choice.Notice, "published kit isn't available (denied)"))
 }
 
 func TestEmbeddedBuildIgnoresMetadataFailure(t *testing.T) {
