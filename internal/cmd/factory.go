@@ -33,7 +33,7 @@ func newFactoryCmd() *cobra.Command {
 		Short: "Build and manage factory runs",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd(),
+	cmd.AddCommand(newFactoryDoctorCmd(), newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd(),
 		newFactoryStatusCmd(), newFactoryStopCmd(), newFactoryPublishCmd(), newFactoryUpdateCmd(), newFactoryBootstrapCmd(), newFactoryNoteCmd())
 	return cmd
 }
