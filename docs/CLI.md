@@ -241,7 +241,7 @@ smelt
 │       --sandbox-dockerfile <path> # Build the toolchain from a Dockerfile anywhere on this machine; the repo is still the build context (never repaired or regenerated)
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
-│       --kit-from-source           # Build the agent kit image from kit/ here instead of pulling the published one
+│       --kit-from-source           # Force rebuilding the agent kit from embedded sources
 │       --update-kit                # Retired: prints a notice and does nothing (smelt adds the kit itself)
 │       --yes                       # Retired with --update-kit; does nothing
 │
@@ -709,10 +709,16 @@ smelt
   user (root or not). The sandbox tag is a hash of the toolchain tag and the kit digest: a new kit changes
   only that tag and rebuilds only stage 2; a toolchain change changes both. This is unconditional: a
   hand-written Dockerfile gets the kit too, and it needs `git`, `bash`, `pkill` and `sha256sum` in the base
-  (the verify step says which is missing). `smelt factory image` pulls the kit by tag, resolves it to a digest
-  and remembers it in `<data dir>/kit-image.json`. Offline, the last digest pulled is used with a visible
-  notice; with none, it fails with code `factory.kit_unavailable` and points at `--kit-from-source`, which
-  builds `kit/` on this machine (needs a smelt source checkout) instead of pulling. `--update-kit` and
+  (the verify step says which is missing). Kit resolution first checks local `smelt-kit:<kit>-<revision>` and `smelt-kit:<kit>` tags,
+  resolving them to immutable image IDs without pulling. Otherwise it pulls the registry tag by digest.
+  If the registry is denied, missing, or offline, smelt automatically builds its embedded `kit/Dockerfile`
+  and `runtime.sh`, tags the result with both local tags, and reuses it on subsequent runs.
+  A provenance notice appears once per image and is recorded on every affected run;
+  explicit `smelt factory image` displays it again. `--kit-from-source` forces an embedded rebuild
+  from any project, retaining Docker layer caching. An explicitly refreshed kit remains selected.
+  If building fails, the last cached kit is a final fallback. Cold offline builds still need cached
+  base images and download dependencies. Forks must publish their own kit or will build locally.
+  `--update-kit` and
   `--yes` are retired: they print the same notice every time and do nothing. <a id="updating-the-agent-kit"></a>
   There is nothing to update in `Dockerfile.smelt`: run `smelt factory image`, and delete a leftover kit
   section if you like (`--regenerate` writes a file without one).

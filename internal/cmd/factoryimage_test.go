@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,4 +280,16 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, len(entries), 1)
 	assert.Equal(t, entries[0].Name(), "go.mod")
+}
+
+func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	for range 2 {
+		f := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+		got, err := ensureSandboxImage(t.Context(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"}, plan, f)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(got.Sandbox.KitNotice, "published kit isn't available (denied)"))
+	}
 }

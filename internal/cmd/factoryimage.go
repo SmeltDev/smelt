@@ -45,9 +45,10 @@ type imageBuild struct {
 	Rebuild bool
 	// ReadyTimeout bounds the wait for Docker to start; zero is the default.
 	ReadyTimeout time.Duration
-	// KitFromSource builds the agent kit image from the repo's kit/ instead of
-	// pulling the published one.
+	// KitFromSource rebuilds the embedded agent kit.
 	KitFromSource bool
+	// ShowKitNotice displays provenance on explicit image requests.
+	ShowKitNotice bool
 }
 
 // builtImage is a sandbox image that is on the Docker host.
@@ -107,7 +108,7 @@ type imageEnsurer interface {
 // missing and reports where the toolchain came from.
 func ensureSandboxImage(ctx context.Context, streams iostream.Streams, root string, b imageBuild, toolchain sandboximage.Plan, builder imageEnsurer) (builtImage, error) {
 	dockerfile, reason, rebuild := b.Dockerfile, b.Reason, b.Rebuild
-	plan, kitRef, err := withAgentKit(ctx, streams, builder, toolchain, kitSource{Root: root, FromSource: b.KitFromSource})
+	plan, kitRef, err := withAgentKit(ctx, streams, builder, toolchain, kitSource{Root: root, FromSource: b.KitFromSource, ShowNotice: b.ShowKitNotice})
 	if err != nil {
 		return builtImage{}, err
 	}
@@ -135,6 +136,7 @@ func ensureSandboxImage(ctx context.Context, streams iostream.Streams, root stri
 		Dockerfile:   dockerfile,
 		Source:       string(b.Kind),
 		ToolchainTag: plan.Toolchain.Tag,
+		KitNotice:    plan.KitNotice,
 		Kit:          sandboximage.KitLabel(strconv.Itoa(plan.Kit), kitRef),
 	}}, nil
 }
@@ -293,7 +295,7 @@ Dockerfile.smelt instead.`,
 				}
 			}
 			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: src.Path})
-			tag, err := readyImage(ctx, streams, root, src, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource, KeepRepair: keepRepair})
+			tag, err := readyImage(ctx, streams, root, src, cfg, imageOptions{Rebuild: rebuild, KitFromSource: kitFromSource, ShowKitNotice: true, KeepRepair: keepRepair})
 			if err != nil {
 				return err
 			}
@@ -308,7 +310,7 @@ Dockerfile.smelt instead.`,
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "build even when the image exists, without the layer cache")
 	cmd.Flags().BoolVar(&regenerate, "regenerate", false, "render the Dockerfile again from detection, show the diff and confirm before writing")
 	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "deprecated: does nothing, the agent kit is supplied as an image at build time")
-	cmd.Flags().BoolVar(&kitFromSource, "kit-from-source", false, "build the agent kit image from kit/ in the project instead of pulling it")
+	cmd.Flags().BoolVar(&kitFromSource, "kit-from-source", false, "rebuild the agent kit image from this binary’s embedded sources")
 	cmd.Flags().StringVar(&sandboxDockerfile, "sandbox-dockerfile", "", "build the toolchain from this Dockerfile, anywhere on this machine; the project stays the build context")
 	cmd.Flags().BoolVar(&yes, "yes", false, "deprecated: does nothing")
 	cmd.Flags().BoolVar(&keepRepair, "keep-repair", false, "leave the last repair attempt in the Dockerfile when the repair fails, instead of restoring it")
@@ -411,8 +413,10 @@ type imageAttempt struct {
 type imageOptions struct {
 	// Rebuild builds even when the tag exists, without the layer cache.
 	Rebuild bool
-	// KitFromSource builds the agent kit image from kit/ instead of pulling it.
+	// KitFromSource rebuilds the embedded agent kit.
 	KitFromSource bool
+	// ShowKitNotice displays provenance on explicit image requests.
+	ShowKitNotice bool
 	// KeepRepair leaves the last failed repair in the Dockerfile.
 	KeepRepair bool
 }
@@ -421,7 +425,7 @@ type imageOptions struct {
 // is reported in the result; only a problem with Docker itself is an error.
 func attemptImage(ctx context.Context, streams iostream.Streams, root string, src sandboximage.ToolchainSource, cfg *config.ProjectConfig, opts imageOptions) (imageAttempt, error) {
 	dockerfile := src.Path
-	built, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Kind: src.Kind, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource})
+	built, err := buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: dockerfile, Kind: src.Kind, Reason: dockerfile + " changed", Rebuild: opts.Rebuild, KitFromSource: opts.KitFromSource, ShowKitNotice: opts.ShowKitNotice})
 	tag := built.Tag
 	var buildErr *sandboximage.BuildError
 	if errors.As(err, &buildErr) {
@@ -519,7 +523,7 @@ func readyImage(ctx context.Context, streams iostream.Streams, root string, src 
 		Fixer: sandboximage.ClaudeFixer{Token: token},
 		Retry: func(ctx context.Context) (string, error) {
 			var err error
-			final, err = attemptImage(ctx, streams, root, src, cfg, imageOptions{KitFromSource: opts.KitFromSource})
+			final, err = attemptImage(ctx, streams, root, src, cfg, imageOptions{KitFromSource: opts.KitFromSource, ShowKitNotice: opts.ShowKitNotice})
 			return final.Failure, err
 		},
 		Tag: func() string { return final.Tag },

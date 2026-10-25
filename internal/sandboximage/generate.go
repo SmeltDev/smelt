@@ -107,6 +107,8 @@ func (b *Builder) imageUser(ctx context.Context, ref string) (string, error) {
 
 // Plan is a Dockerfile resolved to the image it builds.
 type Plan struct {
+	// KitNotice records how the selected kit was built.
+	KitNotice string
 	// Kit is the selected kit version for an assembled sandbox.
 	Kit     int
 	Context *Context
