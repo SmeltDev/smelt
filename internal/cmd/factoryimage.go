@@ -88,6 +88,22 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 	if err := provider.WaitEngine(ctx, func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }); err != nil {
 		return builtImage{}, dockerUnreachable(err)
 	}
+	cfg, err := config.LoadProjectConfig(root)
+	if err != nil {
+		return builtImage{}, err
+	}
+	provider.CacheKey = config.ProjectHash(root)
+	provider.ProjectPath = root
+	provider.MinFreeBytes = cfg.Factory.MinFreeBytes()
+	provider.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
+	if err := provider.CheckStorage(ctx); err != nil {
+		return builtImage{}, &userError{msg: err.Error(), err: err}
+	}
+	report, reportErr := provider.ReportStorage(ctx)
+	printStorageReport(streams.Out, report, reportErr)
+	if reportErr != nil {
+		return builtImage{}, &userError{msg: reportErr.Error(), err: reportErr}
+	}
 	builder, err := sandboximage.Connect()
 	if err != nil {
 		return builtImage{}, dockerUnreachable(err)
@@ -435,6 +451,9 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root string, sr
 		return imageAttempt{}, dockerUnreachable(err)
 	}
 	defer func() { _ = provider.Close() }()
+	provider.ProjectPath = root
+	provider.MinFreeBytes = cfg.Factory.MinFreeBytes()
+	provider.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
 	provider.ManagedDockerfile = dockerfile
 	status := func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }
 	if err := provider.Ready(ctx, tag, status); err != nil {
