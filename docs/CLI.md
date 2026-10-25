@@ -726,6 +726,13 @@ smelt
   ([visibility settings](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility),
   [Packages API](https://docs.github.com/en/rest/packages/packages)); visibility is a one-time
   administrator bootstrap, not an automated release step.
+  Follow-up: implement supported GHCR visibility automation when GitHub provides a
+  documented mechanism. Before replacing the manual bootstrap, verify the operation
+  and its required credentials against GitHub's documentation, exercise it on a
+  newly published private test package, and confirm anonymous pulls succeed. Keep
+  the release visibility check, make the operation idempotent for public packages,
+  and report actionable permission failures. Automatic first-publish visibility is
+  outside the acceptance criteria for the local kit fallback.
   `--update-kit` and
   `--yes` are retired: they print the same notice every time and do nothing. <a id="updating-the-agent-kit"></a>
   There is nothing to update in `Dockerfile.smelt`: run `smelt factory image`, and delete a leftover kit

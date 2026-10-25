@@ -185,8 +185,18 @@ func TestEmbeddedBuildIgnoresMetadataFailure(t *testing.T) {
 func TestKitCancellationDoesNotBuild(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	f := &localKitFake{fakePuller: fakePuller{pullErr: context.Canceled}, images: map[string]string{}}
+	f := &localKitFake{images: map[string]string{KitRevisionRef(): "sha256:local"}}
 	_, err := ResolveKit(ctx, f, KitStatePath(t.TempDir()))
+	assert.Assert(t, errors.Is(err, context.Canceled))
+	assert.Equal(t, f.pulls, 0)
+	assert.Equal(t, f.builds, 0)
+}
+
+func TestForcedKitBuildHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	f := &localKitFake{images: map[string]string{}}
+	_, err := BuildEmbeddedKit(ctx, f, KitStatePath(t.TempDir()), BuildOptions{}, nil)
 	assert.Assert(t, errors.Is(err, context.Canceled))
 	assert.Equal(t, f.builds, 0)
 }

@@ -61,6 +61,9 @@ type lastKit struct {
 // A refreshed selection takes precedence. The last usable image is a final
 // fallback if acquisition fails, including across CLI upgrades.
 func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, error) {
+	if err := ctx.Err(); err != nil {
+		return KitChoice{}, err
+	}
 	tag, version := KitTagRef(), KitVersion
 	previous, _ := readLastKit(statePath)
 	selected := ""
@@ -325,6 +328,9 @@ func EmbeddedKitContext() (dir string, err error) {
 
 // BuildEmbeddedKit rebuilds this binary's kit without requiring a source checkout.
 func BuildEmbeddedKit(ctx context.Context, b kitBuilder, state string, opts BuildOptions, cause error) (KitChoice, error) {
+	if err := ctx.Err(); err != nil {
+		return KitChoice{}, err
+	}
 	dir, err := EmbeddedKitContext()
 	if err != nil {
 		return KitChoice{}, err
