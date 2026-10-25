@@ -8,10 +8,11 @@ ENV PATH=/home/circleci/.local/bin:$PATH
 # --- toolchain -------------------------------------------------------------
 USER root
 # build-essential supplies the C compiler required by Go's race detector.
-# docker.io supplies the Docker CLI; tests still need a reachable daemon.
+# The Docker CLI (docker-ce-cli), shellcheck and ssh come with the base image;
+# Ubuntu's docker.io would conflict with its containerd.io. Tests still need a
+# reachable Docker daemon.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates procps coreutils bash build-essential \
-    rsync openssh-client docker.io shellcheck \
+    git curl ca-certificates procps coreutils bash build-essential rsync \
  && rm -rf /var/lib/apt/lists/*
 USER circleci
 RUN go install github.com/go-task/task/v3/cmd/task@v3.45.4
