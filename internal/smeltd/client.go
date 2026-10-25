@@ -12,6 +12,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,11 +57,14 @@ func longDaemonClient() (*http.Client, error) {
 const (
 	HeaderDraining = "X-Smelt-Draining"
 	HeaderRevision = "X-Smelt-Revision"
+	HeaderHandover = "X-Smelt-Handover"
+	headerTrue     = "true"
 )
 
 // doPingInfo sends a /ping request with the given client and returns what the
 // daemon says about itself.
 func doPingInfo(client *http.Client) PingInfo {
+	defer client.CloseIdleConnections()
 	resp, err := client.Get("http://smeltd/ping")
 	if err != nil {
 		return PingInfo{}
@@ -76,7 +80,8 @@ func doPingInfo(client *http.Client) PingInfo {
 	info := PingInfo{
 		Reachable: true,
 		Revision:  resp.Header.Get(HeaderRevision),
-		Draining:  resp.Header.Get(HeaderDraining) == "true",
+		Draining:  resp.Header.Get(HeaderDraining) == headerTrue,
+		Handover:  resp.Header.Get(HeaderHandover) == headerTrue,
 	}
 	if body, err := io.ReadAll(io.LimitReader(resp.Body, 512)); err == nil {
 		info.BuildID = strings.TrimSpace(string(body))
@@ -667,12 +672,17 @@ func (c *DaemonClient) EnsureRunning() error {
 			// A draining daemon is on its way out, finishing runs that replacing
 			// it would cancel. Leave it: once it exits the next call launches
 			// the build on disk.
-			if info.Draining || info.BuildID == BuildID() {
+			if info.BuildID == BuildID() || info.Draining && !info.Handover {
 				return nil
+			}
+			if _, err := Handover(); err == nil {
+				return launch()
+			} else if !errors.Is(err, ErrHandoverUnsupported) {
+				return err
 			}
 			// A reachable old daemon may own runs that must finish on its build.
 			// Treat an unreadable list conservatively for the same reason.
-			sessions, listErr := ListSessions("")
+			sessions, listErr := MainSessions("")
 			active := 0
 			for _, session := range sessions {
 				if session.State == SessionRunning {
@@ -797,4 +807,74 @@ func launchDaemon() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("smelt daemon did not start within 5s; check %s", logPath)
+}
+
+// ErrHandoverUnsupported identifies daemons requiring legacy drain waiting.
+var ErrHandoverUnsupported = errors.New("daemon does not support listener handover")
+
+// Handover releases main ownership while preserving existing runs.
+func Handover() (DrainResponse, error) {
+	var out DrainResponse
+	err := sessionCall(http.MethodPost, "/handover", nil, &out)
+	if errors.Is(err, ErrNoSessionAPI) {
+		return out, ErrHandoverUnsupported
+	}
+	return out, err
+}
+
+// DiscoverDaemons returns main first, then private sockets in deterministic order.
+// Only a confirmed missing listener is removed; slow or inaccessible sockets survive.
+func DiscoverDaemons() ([]DaemonStatus, error) {
+	paths, err := localSockets()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]DaemonStatus, 0)
+	for i, path := range paths {
+		before, _ := os.Lstat(path)
+		client := unixClient(path)
+		resp, err := client.Get("http://smeltd/ping")
+		if err != nil {
+			client.CloseIdleConnections()
+			if i > 0 && !errors.Is(classifyDialError(err, path), ErrDaemonUnreachable) {
+				return nil, classifyDialError(err, path)
+			}
+			if i > 0 && errors.Is(classifyDialError(err, path), ErrDaemonUnreachable) {
+				if info, statErr := os.Lstat(path); statErr == nil && before != nil && os.SameFile(before, info) && info.Mode()&os.ModeSocket != 0 {
+					_ = os.Remove(path)
+				}
+			}
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		client.CloseIdleConnections()
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+		pid, _ := strconv.Atoi(resp.Header.Get("X-Smelt-Pid"))
+		active, _ := strconv.Atoi(resp.Header.Get("X-Smelt-Active"))
+		if i == 0 && resp.Header.Get("X-Smelt-Active") == "" {
+			if sessions, err := MainSessions(""); err == nil {
+				for _, s := range sessions {
+					if s.Factory != nil && !s.State.Finished() {
+						active++
+					}
+				}
+			}
+		}
+		if i == 0 && pid == 0 {
+			if p, err := PIDPath(); err == nil {
+				pid, _ = ReadPID(p)
+			}
+		}
+		if i > 0 {
+			expected, err := PIDSocketPath(pid)
+			if err != nil || expected != path {
+				continue
+			}
+		}
+		result = append(result, DaemonStatus{PID: pid, Revision: resp.Header.Get(HeaderRevision), Draining: resp.Header.Get(HeaderDraining) == headerTrue, ActiveRuns: active, Socket: path})
+	}
+	return result, nil
 }

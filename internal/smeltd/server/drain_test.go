@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/factory"
@@ -221,4 +225,110 @@ func TestDrainCommitRechecksOpenDoneChannels(t *testing.T) {
 	finish(entry, smeltd.SessionDone)
 	s.commitDrain(s.drainGeneration, shutdown)
 	assert.Assert(t, called)
+}
+
+func TestHandoverAdmissionRollbackAndContinuation(t *testing.T) {
+	s := newSessionStore(t.Context())
+	first, _, err := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{RunID: "prior"}}, 2)
+	assert.NilError(t, err)
+	_, err = s.handover("/private.sock", func() error { return errors.New("rename failed") })
+	assert.ErrorContains(t, err, "rename failed")
+	assert.Assert(t, !s.isDraining())
+	assert.Equal(t, first.snapshot().Socket, "")
+	result, err := s.handover("/private.sock", func() error { return nil })
+	assert.NilError(t, err)
+	assert.Equal(t, result.Active, 1)
+	assert.Equal(t, first.snapshot().Socket, "/private.sock")
+	_, _, err = s.add(smeltd.Session{ProjectRoot: "/other"}, 2)
+	var handed *handoverError
+	assert.Assert(t, errors.As(err, &handed))
+	_, _, err = s.add(smeltd.Session{ProjectRoot: "/other", Factory: &smeltd.FactoryRun{ContinuesRunID: "prior"}}, 2)
+	assert.Assert(t, errors.As(err, &handed))
+	next, _, err := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{ContinuesRunID: "prior"}}, 2)
+	assert.NilError(t, err)
+	assert.Equal(t, next.snapshot().Socket, "/private.sock")
+	s.undrain()
+	assert.Assert(t, s.isDraining())
+	close(first.done)
+	close(next.done)
+}
+
+func TestHandoverContinuationInvalidatesIdleShutdown(t *testing.T) {
+	s := newSessionStore(t.Context())
+	first, _, err := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{RunID: "prior"}}, 1)
+	assert.NilError(t, err)
+	first.mu.Lock()
+	first.s.State = smeltd.SessionDone
+	first.mu.Unlock()
+	close(first.done)
+	var token uint64
+	s.onIdle = func(g uint64) { token = g }
+	_, err = s.handover("/private.sock", func() error { return nil })
+	assert.NilError(t, err)
+	old := token
+	next, _, err := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{ContinuesRunID: "prior"}}, 1)
+	assert.NilError(t, err)
+	close(next.done)
+	s.ended()
+	called := false
+	s.commitDrain(old, func() { called = true })
+	assert.Assert(t, !called)
+	s.commitDrain(token, func() { called = true })
+	assert.Assert(t, called)
+	_, _, err = s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{ContinuesRunID: "prior"}}, 1)
+	var handed *handoverError
+	assert.Assert(t, errors.As(err, &handed))
+}
+
+func TestHandoverPIDReleaseFailureRestoresListener(t *testing.T) {
+	dir, err := os.MkdirTemp("", "handover")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	main, private := filepath.Join(dir, "main.sock"), filepath.Join(dir, "private.sock")
+	ln, err := net.Listen("unix", main)
+	assert.NilError(t, err)
+	defer func() { _ = ln.Close() }()
+	owner := listenerOwnership{socket: main, pid: filepath.Join(dir, "missing.pid")}
+	err = owner.transfer(private)
+	assert.ErrorContains(t, err, "release daemon pid")
+	_, err = os.Stat(main)
+	assert.NilError(t, err)
+	_, err = os.Stat(private)
+	assert.Assert(t, os.IsNotExist(err))
+}
+
+func TestHandoverReleasesTCPAndLauncherOwnership(t *testing.T) {
+	dir, err := os.MkdirTemp("", "handover")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	main, private := filepath.Join(dir, "main.sock"), filepath.Join(dir, "private.sock")
+	ln, err := net.Listen("unix", main)
+	assert.NilError(t, err)
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	defer func() { _ = ln.Close() }()
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	defer func() { _ = tcp.Close() }()
+	lock := flock.New(filepath.Join(dir, "listener.lock"))
+	ok, err := lock.TryLock()
+	assert.NilError(t, err)
+	assert.Assert(t, ok)
+	defer func() { _ = lock.Close() }()
+	pid := filepath.Join(dir, "daemon.pid")
+	assert.NilError(t, smeltd.WritePID(pid, os.Getpid()))
+	owner := listenerOwnership{socket: main, pid: pid, lock: lock, tcp: tcp}
+	assert.NilError(t, owner.transfer(private))
+	replacement := flock.New(filepath.Join(dir, "listener.lock"))
+	ok, err = replacement.TryLock()
+	assert.NilError(t, err)
+	assert.Assert(t, ok)
+	defer func() { _ = replacement.Close() }()
+	next, err := net.Listen("tcp", tcp.Addr().String())
+	assert.NilError(t, err)
+	defer func() { _ = next.Close() }()
+	_, err = os.Stat(pid)
+	assert.Assert(t, os.IsNotExist(err))
+	conn, err := net.Dial("unix", private)
+	assert.NilError(t, err)
+	assert.NilError(t, conn.Close())
 }

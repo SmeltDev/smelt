@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -31,7 +30,17 @@ type fakeDaemonControl struct {
 	drains      int
 	stopped     []int
 	pings       int
+	statuses    []smeltd.DaemonStatus
+	handover    bool
 }
+
+func (f *fakeDaemonControl) Handover() (smeltd.DrainResponse, error) {
+	if f.handover {
+		return smeltd.DrainResponse{Draining: true, Active: f.active}, nil
+	}
+	return smeltd.DrainResponse{}, smeltd.ErrHandoverUnsupported
+}
+func (f *fakeDaemonControl) Daemons() ([]smeltd.DaemonStatus, error) { return f.statuses, nil }
 
 func (f *fakeDaemonControl) Ping() (smeltd.PingInfo, error) {
 	if f.draining && f.exitAfter > 0 {
@@ -75,42 +84,48 @@ func runDaemonGroup(t *testing.T, opts daemonOptions, args ...string) (string, e
 }
 
 func TestDaemonStatus(t *testing.T) {
-	two := 2
-	tests := []struct {
-		name   string
-		daemon fakeDaemonControl
-		binary string
-		want   daemonStatus
-		text   []string
-	}{
-		{"matching revisions", fakeDaemonControl{reachable: true, revision: "dabe728", active: 2}, "dabe728",
-			daemonStatus{Running: true, Pid: 4242, Active: &two, Revision: "dabe728", BinaryRevision: "dabe728"},
-			[]string{"running (pid 4242)", "daemon revision:  dabe728", "binary revision:  dabe728", "active runs:      2"}},
-		{"differing revisions", fakeDaemonControl{reachable: true, revision: "aaaaaaa", active: 2, draining: true}, "dabe728",
-			daemonStatus{Running: true, Pid: 4242, Draining: true, Active: &two, Revision: "aaaaaaa", BinaryRevision: "dabe728", Differs: true},
-			[]string{"aaaaaaa", "dabe728", "different build", "draining"}},
-		{"an old daemon reports no revision", fakeDaemonControl{reachable: true, active: 2}, "dabe728",
-			daemonStatus{Running: true, Pid: 4242, Active: &two, BinaryRevision: "dabe728", Differs: true},
-			[]string{"daemon revision:  unknown"}},
-		{"not running", fakeDaemonControl{}, "dabe728", daemonStatus{}, []string{"not running"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			opts := fakeOpts(&tc.daemon, tc.binary)
-			out, err := runDaemonGroup(t, opts, "status")
-			assert.NilError(t, err)
-			for _, want := range tc.text {
-				assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
-			}
+	f := &fakeDaemonControl{statuses: []smeltd.DaemonStatus{
+		{PID: 91234, Revision: "339d682", ActiveRuns: 2, Socket: "/tmp/daemon.sock"},
+		{PID: 86001, Revision: "9bab973", Draining: true, ActiveRuns: 1, Socket: "/tmp/smeltd-86001.sock"},
+	}}
+	out, err := runDaemonGroup(t, fakeOpts(f, "339d682"), "status")
+	assert.NilError(t, err)
+	assert.Equal(t, out, "running (pid 91234)  revision 339d682 (this binary) · active runs: 2\ndraining (pid 86001) revision 9bab973 · active runs: 1 · exits when they finish\n")
+	out, err = runDaemonGroup(t, fakeOpts(f, "339d682"), "status", "--json")
+	assert.NilError(t, err)
+	assert.Equal(t, out, `[
+  {
+    "pid": 91234,
+    "revision": "339d682",
+    "draining": false,
+    "active_runs": 2,
+    "socket": "/tmp/daemon.sock"
+  },
+  {
+    "pid": 86001,
+    "revision": "9bab973",
+    "draining": true,
+    "active_runs": 1,
+    "socket": "/tmp/smeltd-86001.sock"
+  }
+]
+`)
+	f.statuses = []smeltd.DaemonStatus{}
+	out, err = runDaemonGroup(t, fakeOpts(f, "x"), "status", "--json")
+	assert.NilError(t, err)
+	assert.Equal(t, out, "[]\n")
+	out, err = runDaemonGroup(t, fakeOpts(f, "x"), "status")
+	assert.NilError(t, err)
+	assert.Equal(t, out, "not running\n")
+}
 
-			out, err = runDaemonGroup(t, opts, "status", "--json")
-			assert.NilError(t, err)
-			var got daemonStatus
-			assert.NilError(t, json.Unmarshal([]byte(out), &got), out)
-			assert.DeepEqual(t, got, tc.want)
-			assert.Assert(t, strings.Contains(out, `"differs"`), "differs is always present: %s", out)
-		})
-	}
+func TestDaemonRestartHandoverReturnsImmediately(t *testing.T) {
+	f := &fakeDaemonControl{reachable: true, active: 2, handover: true}
+	out, err := runDaemonGroup(t, fakeOpts(f, "x"), "restart", "--when-idle", "--timeout", "1ns")
+	assert.NilError(t, err)
+	assert.Equal(t, f.drains, 0)
+	assert.Equal(t, f.pings, 0)
+	assert.Assert(t, strings.Contains(out, "released its listener"))
 }
 
 func TestRevisionsDiffer(t *testing.T) {

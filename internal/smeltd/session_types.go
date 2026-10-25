@@ -575,6 +575,8 @@ type Round struct {
 // Session is the record of one factory run. It holds state only; text is in
 // SessionDetail.
 type Session struct {
+	// Socket is the local daemon that owns this live session.
+	Socket      string `json:"socket,omitempty"`
 	ID          string `json:"id"`
 	ProjectRoot string `json:"project_root"`
 	Branch      string `json:"branch,omitempty"`

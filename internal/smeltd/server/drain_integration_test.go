@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
@@ -27,6 +29,12 @@ func TestDrainDaemonProcess(t *testing.T) {
 	cfg := (&fakeBackend{}).config()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		opts.OnStart(opts.Prompt, factory.Worktree{Branch: "smelt/" + opts.Prompt})
+		data, err := config.ProjectDataDir(opts.Root)
+		assert.NilError(t, err)
+		assert.NilError(t, os.MkdirAll(filepath.Join(data, "factory"), 0o700))
+		record, err := json.Marshal(factory.Record{RunID: opts.Prompt, Prompt: opts.Prompt})
+		assert.NilError(t, err)
+		assert.NilError(t, os.WriteFile(filepath.Join(data, "factory", opts.Prompt+".json"), record, 0o600))
 		path := filepath.Join(os.Getenv("SMELT_TEST_RELEASE_DIR"), opts.Prompt)
 		assert.NilError(t, os.WriteFile(path+".started", nil, 0o600))
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -55,7 +63,7 @@ type drainProcess struct {
 // Bound every subprocess, including CLI builds, even when a test has no deadline.
 func drainCommand(t *testing.T, name string, args ...string) *exec.Cmd {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	t.Cleanup(cancel)
 	command := exec.CommandContext(ctx, name, args...)
 	command.WaitDelay = 2 * time.Second
@@ -66,6 +74,16 @@ func startDrainProcess(t *testing.T) *drainProcess {
 	t.Helper()
 	exe, err := os.Executable()
 	assert.NilError(t, err)
+	binary := filepath.Join(t.TempDir(), "daemon-test")
+	input, err := os.Open(exe)
+	assert.NilError(t, err)
+	output, err := os.OpenFile(binary, os.O_CREATE|os.O_WRONLY, 0o700)
+	assert.NilError(t, err)
+	_, err = io.Copy(output, input)
+	assert.NilError(t, err)
+	assert.NilError(t, input.Close())
+	assert.NilError(t, output.Close())
+	exe = binary
 	logPath := filepath.Join(t.TempDir(), "daemon.log")
 	logFile, err := os.Create(logPath)
 	assert.NilError(t, err)
@@ -115,92 +133,132 @@ func drainProject(t *testing.T) string {
 	return root
 }
 
-func TestDrainRealDaemonKilledRequester(t *testing.T) {
+func TestHandoverOverlappingDaemonProcesses(t *testing.T) {
 	root := drainProject(t)
 	release := t.TempDir()
 	t.Setenv("SMELT_TEST_RELEASE_DIR", release)
-	p := startDrainProcess(t)
 	cli := filepath.Join(t.TempDir(), "smelt")
 	build := drainCommand(t, "go", "build", "-o", cli, "../../..")
-	out, err := build.CombinedOutput()
-	assert.NilError(t, err, "%s", out)
-	for _, name := range []string{"first", "second"} {
-		_, err := smeltd.StartFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: name})
+	output, err := build.CombinedOutput()
+	assert.NilError(t, err, "%s", output)
+	command := func(args ...string) (string, error) {
+		c := drainCommand(t, cli, append([]string{"--no-daemon"}, args...)...)
+		c.Dir = root
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+
+	old := startDrainProcess(t)
+	main, err := smeltd.SocketPath()
+	assert.NilError(t, err)
+	private, err := smeltd.PIDSocketPath(old.cmd.Process.Pid)
+	assert.NilError(t, err)
+	start := func(name string) string {
+		id, err := smeltd.StartFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: name})
 		assert.NilError(t, err)
 		waitUntil(t, "run start", func() bool { _, err := os.Stat(filepath.Join(release, name+".started")); return err == nil })
+		return id
 	}
-	requester := drainCommand(t, cli, "daemon", "restart", "--when-idle")
-	assert.NilError(t, requester.Start())
-	t.Cleanup(func() {
-		if requester.ProcessState == nil {
-			_ = requester.Process.Kill()
-			_ = requester.Wait()
-		}
-	})
-	waitUntil(t, "drain request", func() bool { info, err := smeltd.Status(); return err == nil && info.Draining })
-	assert.NilError(t, requester.Process.Kill())
-	assert.Assert(t, requester.Wait() != nil)
-	// The CLI is a different executable from the daemon's test binary.
-	status := drainCommand(t, cli, "factory", "status", "first")
-	status.Dir = root
-	out, err = status.CombinedOutput()
-	assert.NilError(t, err, "%s", out)
-	assert.Assert(t, strings.Contains(string(out), "Run first: running"), "%s", out)
-	info, err := smeltd.Status()
+	first := start("first")
+	// This run finishes, but remains discoverable for continuation while another is active.
+	prior := start("prior")
+	assert.NilError(t, os.WriteFile(filepath.Join(release, "prior"), nil, 0o600))
+	waitUntil(t, "prior completion", func() bool { d, err := smeltd.FetchSession(prior); return err == nil && d.State.Finished() })
+	before, err := smeltd.Status()
 	assert.NilError(t, err)
-	assert.Equal(t, info.BuildID, smeltd.BuildID(), "status must keep the original daemon")
+	text, err := command("daemon", "restart", "--when-idle")
+	assert.NilError(t, err, "%s", text)
+	assert.Assert(t, strings.Contains(text, "released its listener"))
+	_, err = os.Stat(main)
+	assert.Assert(t, os.IsNotExist(err))
 	pidPath, err := smeltd.PIDPath()
 	assert.NilError(t, err)
-	pid, err := smeltd.ReadPID(pidPath)
+	_, err = os.Stat(pidPath)
+	assert.Assert(t, os.IsNotExist(err))
+	replacement := startDrainProcess(t)
+	after, err := smeltd.Status()
 	assert.NilError(t, err)
-	assert.Equal(t, pid, p.cmd.Process.Pid)
-	for i, name := range []string{"first", "second"} {
-		assert.NilError(t, os.WriteFile(filepath.Join(release, name), nil, 0o600))
-		waitUntil(t, "run completion", func() bool { _, err := os.Stat(filepath.Join(release, name+".finished")); return err == nil })
-		if i == 0 {
-			waitUntil(t, "one remaining run", func() bool {
-				sessions, err := smeltd.ListSessions(root)
-				if err != nil {
-					return false
-				}
-				n := 0
-				for _, s := range sessions {
-					if !s.State.Finished() {
-						n++
-					}
-				}
-				return n == 1
-			})
-			waitUntil(t, "drain progress", func() bool {
-				data, err := os.ReadFile(p.logPath)
-				return err == nil && strings.Contains(string(data), "draining: 1 runs left")
-			})
-			info, err := smeltd.Status()
-			assert.NilError(t, err)
-			assert.Assert(t, info.Reachable && info.Draining)
-			// Hold the other run past the shutdown delay. A daemon that treats the
-			// first completion as idle would cancel it before it is released.
-			select {
-			case err := <-p.exited:
-				t.Fatalf("daemon exited with the second run active: %v", err)
-			case <-time.After(2 * drainFlushDelay):
-			}
-		}
+	assert.Assert(t, before.BuildID != after.BuildID)
+	second := start("second") // admitted before the original is released
+	daemons, err := smeltd.DiscoverDaemons()
+	assert.NilError(t, err)
+	assert.Equal(t, len(daemons), 2)
+	assert.Equal(t, daemons[0].PID, replacement.cmd.Process.Pid)
+	assert.Equal(t, daemons[1].PID, old.cmd.Process.Pid)
+	assert.Equal(t, daemons[1].Draining, true)
+	text, err = command("factory", "status", "first")
+	assert.NilError(t, err, "%s", text)
+	assert.Assert(t, strings.Contains(text, "Run first: running"), "%s", text)
+	text, err = command("factory", "list", "--json")
+	assert.NilError(t, err, "%s", text)
+	assert.Assert(t, strings.Contains(text, "first") && strings.Contains(text, "second"), "%s", text)
+	text, err = command("factory", "update", "first", "--next-round", "--base", "main")
+	assert.NilError(t, err, "%s", text)
+	for _, args := range [][]string{{"factory", "update", "first"}, {"factory", "publish", "first", "--push"}} {
+		text, err = command(args...)
+		assert.Assert(t, err != nil)
+		assert.Assert(t, strings.Contains(text, "Run first is still running"), "%s", text)
 	}
+
+	sessions, err := smeltd.ListSessions(root)
+	assert.NilError(t, err)
+	assert.Equal(t, len(sessions), 3)
+	detail, err := smeltd.FetchSession(first)
+	assert.NilError(t, err)
+	assert.Equal(t, detail.Socket, private)
+	assert.Equal(t, detail.Factory.RunID, "first") // status/follow/update/publish use this lookup
+	continued, err := smeltd.StartFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Continue: "prior", Prompt: "continued"})
+	assert.NilError(t, err)
+	waitUntil(t, "continuation start", func() bool {
+		d, err := smeltd.FetchSession(continued)
+		return err == nil && d.Factory.RunID == "continued"
+	})
+	detail, err = smeltd.FetchSession(continued)
+	assert.NilError(t, err)
+	assert.Equal(t, detail.Socket, private)
+	text, err = command("factory", "stop", "continued")
+	assert.NilError(t, err, "%s", text)
+	assert.Assert(t, strings.Contains(text, "has stopped"), "%s", text)
+	waitUntil(t, "continuation stopped", func() bool { d, err := smeltd.FetchSession(continued); return err == nil && d.State.Finished() })
+	assert.NilError(t, os.WriteFile(filepath.Join(release, "first"), nil, 0o600))
 	select {
-	case err := <-p.exited:
+	case err := <-old.exited:
 		assert.NilError(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("daemon did not exit after both runs completed")
+		t.Fatal("old daemon did not exit")
 	}
-	data, err := os.ReadFile(p.logPath)
+	_, err = os.Stat(private)
+	assert.Assert(t, os.IsNotExist(err))
+	detail, err = smeltd.FetchSession(second)
 	assert.NilError(t, err)
-	previous := -1
-	for _, line := range []string{"drain requested (2 active runs)", "draining: 1 runs left", "draining: 0 runs left", "drained: exiting"} {
-		index := strings.Index(string(data), line)
-		assert.Assert(t, index > previous, "missing or out of order %q in %s", line, data)
-		previous = index
-	}
+	assert.Assert(t, !detail.State.Finished())
+	pid, err := smeltd.ReadPID(pidPath)
+	assert.NilError(t, err)
+	assert.Equal(t, pid, replacement.cmd.Process.Pid)
+	assert.NilError(t, smeltd.CancelSession(second))
+}
+
+func TestHandoverCrashSocketDiscovery(t *testing.T) {
+	root := drainProject(t)
+	t.Setenv("SMELT_TEST_RELEASE_DIR", t.TempDir())
+	old := startDrainProcess(t)
+	_, err := smeltd.StartFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "crash"})
+	assert.NilError(t, err)
+	_, err = smeltd.Handover()
+	assert.NilError(t, err)
+	private, err := smeltd.PIDSocketPath(old.cmd.Process.Pid)
+	assert.NilError(t, err)
+	replacement := startDrainProcess(t)
+	assert.NilError(t, old.cmd.Process.Kill())
+	<-old.exited
+	_, err = os.Stat(private)
+	assert.NilError(t, err)
+	daemons, err := smeltd.DiscoverDaemons()
+	assert.NilError(t, err)
+	assert.Equal(t, len(daemons), 1)
+	assert.Equal(t, daemons[0].PID, replacement.cmd.Process.Pid)
+	_, err = os.Stat(private)
+	assert.Assert(t, os.IsNotExist(err))
 }
 
 // The straightforward killed-requester sequence is protected already. This

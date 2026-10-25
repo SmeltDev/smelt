@@ -2,16 +2,20 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
@@ -91,6 +95,7 @@ type daemon struct {
 	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
 	sessions *sessionStore
 	rcfg     ReviewConfig
+	handover func() (smeltd.DrainResponse, error)
 }
 
 // RunDaemon is the smelt daemon entry point, called by the hidden _daemon subcommand.
@@ -101,18 +106,7 @@ type daemon struct {
 // error without a runner). ghClient may be nil; PR monitoring is skipped when
 // no GitHub credentials are available.
 func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client, opts ...Option) error {
-	var tcpLn net.Listener
-	if addr := smeltd.TCPListenAddr(); addr != "" {
-		if smeltd.TCPToken() == "" {
-			return fmt.Errorf("SMELT_DAEMON_TCP_ADDR requires SMELT_DAEMON_TCP_TOKEN to be set")
-		}
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("listen tcp on %s: %w", addr, err)
-		}
-		tcpLn = ln
-	}
-	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient, opts...)
+	return runDaemon(ctx, nil, client, authMessage, runner, ghClient, opts...)
 }
 
 // drainFlushDelay is how long a finished drain waits before stopping the
@@ -127,10 +121,26 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	for _, opt := range opts {
 		opt(&dopts)
 	}
-	if _, err := smeltd.EnsureDir(); err != nil {
-		return fmt.Errorf("ensure daemon dir: %w", err)
+	dir, err := smeltd.EnsureDir()
+	if err != nil {
+		return err
 	}
-
+	ownership := flock.New(filepath.Join(dir, "listener.lock"))
+	locked, err := ownership.TryLock()
+	if err != nil {
+		return fmt.Errorf("lock daemon listener: %w", err)
+	}
+	if !locked {
+		return nil
+	}
+	defer func() { _ = ownership.Close() }()
+	tcpLn, err = configuredTCPListener(tcpLn)
+	if err != nil {
+		return err
+	}
+	if tcpLn != nil {
+		defer func() { _ = tcpLn.Close() }()
+	}
 	pidPath, err := smeltd.PIDPath()
 	if err != nil {
 		return err
@@ -156,13 +166,10 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sockPath, err)
 	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
 	defer func() { _ = ln.Close() }()
 	sockInfo, _ := os.Stat(sockPath)
-	defer func() {
-		if cur, err := os.Stat(sockPath); err == nil && sockInfo != nil && os.SameFile(sockInfo, cur) {
-			_ = os.Remove(sockPath)
-		}
-	}()
+	defer removeOwnedSockets(sockPath, sockInfo)
 
 	// The signal-aware context is built first because the output store derives
 	// every streamer from it: a streamer must not be able to outlive the daemon
@@ -187,6 +194,14 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		live:     newLivenessChecker(nil),
 		sessions: newSessionStore(ctx),
 		rcfg:     dopts.review,
+	}
+	d.handover = func() (smeltd.DrainResponse, error) {
+		private, err := smeltd.PIDSocketPath(os.Getpid())
+		if err != nil {
+			return smeltd.DrainResponse{}, err
+		}
+		owner := listenerOwnership{socket: sockPath, pid: pidPath, lock: ownership, tcp: tcpLn}
+		return d.sessions.handover(private, func() error { return owner.transfer(private) })
 	}
 	d.sessions.onIdle = func(generation uint64) {
 		time.AfterFunc(drainFlushDelay, func() {
@@ -219,6 +234,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	go d.pollLoop(ctx)
 	go d.checkConflictsLoop(ctx)
 
+	mainSocket, _ := smeltd.SocketPath()
 	srv := newServer(d)
 	go func() {
 		<-ctx.Done()
@@ -226,7 +242,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	}()
 
 	if tcpLn != nil {
-		log.Printf("smelt daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, tcpLn.Addr())
+		log.Printf("smelt daemon started pid=%d socket=%s tcp=%s", os.Getpid(), mainSocket, tcpLn.Addr())
 		// The TCP server wraps the same handler with bearer-token auth so the
 		// Unix socket (bound to the local user's filesystem) stays unauthenticated
 		// while the TCP listener enforces a shared secret.
@@ -244,11 +260,64 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 			}
 		}()
 	} else {
-		log.Printf("smelt daemon started pid=%d socket=%s", os.Getpid(), sockPath)
+		log.Printf("smelt daemon started pid=%d socket=%s", os.Getpid(), mainSocket)
 	}
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("smeltd serve: %w", err)
+	}
+	return nil
+}
+
+func configuredTCPListener(existing net.Listener) (net.Listener, error) {
+	if existing != nil || smeltd.TCPListenAddr() == "" {
+		return existing, nil
+	}
+	if smeltd.TCPToken() == "" {
+		return nil, fmt.Errorf("SMELT_DAEMON_TCP_ADDR requires SMELT_DAEMON_TCP_TOKEN to be set")
+	}
+	ln, err := net.Listen("tcp", smeltd.TCPListenAddr())
+	if err != nil {
+		return nil, fmt.Errorf("listen tcp: %w", err)
+	}
+	return ln, nil
+}
+
+func removeOwnedSockets(main string, original os.FileInfo) {
+	private, _ := smeltd.PIDSocketPath(os.Getpid())
+	for _, path := range []string{main, private} {
+		if cur, err := os.Stat(path); err == nil && original != nil && os.SameFile(original, cur) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// listenerOwnership releases only the resources used to admit new local work.
+type listenerOwnership struct {
+	socket string
+	pid    string
+	lock   *flock.Flock
+	tcp    net.Listener
+}
+
+func (o listenerOwnership) transfer(private string) error {
+	if _, err := os.Lstat(private); err == nil {
+		return fmt.Errorf("handover socket already exists: %s", private)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(o.socket, private); err != nil {
+		return fmt.Errorf("move daemon socket: %w", err)
+	}
+	if err := os.Remove(o.pid); err != nil {
+		return errors.Join(fmt.Errorf("release daemon pid: %w", err), os.Rename(private, o.socket))
+	}
+	if o.tcp != nil {
+		_ = o.tcp.Close()
+	}
+	if err := o.lock.Unlock(); err != nil {
+		rollback := errors.Join(smeltd.WritePID(o.pid, os.Getpid()), os.Rename(private, o.socket))
+		return errors.Join(fmt.Errorf("release listener lock: %w", err), rollback)
 	}
 	return nil
 }

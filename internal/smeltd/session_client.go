@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"sort"
 	"strings"
 )
 
@@ -50,10 +51,18 @@ func (e *SessionRefused) Error() string { return e.Message }
 // ErrDaemonUnavailable; a daemon that answered with an error is a
 // SessionRefused.
 func sessionCall(method, path string, in, out any) error {
+	return sessionCallAt("", method, path, in, out)
+}
+
+func sessionCallAt(socket, method, path string, in, out any) error {
 	client, err := daemonClient()
+	if socket != "" && TCPRemoteAddr() == "" {
+		client, err = unixClient(socket), nil
+	}
 	if err != nil {
 		return err
 	}
+	defer client.CloseIdleConnections()
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -102,7 +111,27 @@ func sessionCall(method, path string, in, out any) error {
 // without waiting for it. It is followed and cancelled like any other session.
 func StartFactory(req FactoryRequest) (string, error) {
 	var resp SessionStartResponse
-	if err := sessionCall(http.MethodPost, "/factory", req, &resp); err != nil {
+	socket := ""
+	if req.Continue != "" {
+		sessions, err := ListSessions(req.ProjectRoot)
+		if err != nil && !errors.Is(err, ErrDaemonUnavailable) {
+			return "", err
+		}
+		for _, s := range sessions {
+			if s.Factory != nil && (s.Factory.RunID == strings.TrimSpace(req.Continue) || s.Factory.Branch == strings.TrimSpace(req.Continue)) {
+				socket = s.Socket
+				break
+			}
+		}
+	}
+	err := sessionCallAt(socket, http.MethodPost, "/factory", req, &resp)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Code == CodeDaemonHandover {
+		if err = EnsureRunning(); err == nil {
+			err = sessionCall(http.MethodPost, "/factory", req, &resp)
+		}
+	}
+	if err != nil {
 		return "", err
 	}
 	return resp.ID, nil
@@ -111,7 +140,7 @@ func StartFactory(req FactoryRequest) (string, error) {
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail
-	if err := sessionCall(http.MethodGet, "/factory/"+neturl.PathEscape(id), nil, &detail); err != nil {
+	if err := routedSessionCall(id, http.MethodGet, "/factory/"+neturl.PathEscape(id), nil, &detail); err != nil {
 		return SessionDetail{}, err
 	}
 	return detail, nil
@@ -119,13 +148,13 @@ func FetchSession(id string) (SessionDetail, error) {
 
 // ListSessions returns the daemon's sessions, newest first per project. An empty
 // root lists every project's.
-func ListSessions(root string) ([]Session, error) {
+func listSessionsAt(socket, root string) ([]Session, error) {
 	path := "/factory"
 	if root != "" {
 		path += "?root=" + neturl.QueryEscape(root)
 	}
 	var list SessionList
-	if err := sessionCall(http.MethodGet, path, nil, &list); err != nil {
+	if err := sessionCallAt(socket, http.MethodGet, path, nil, &list); err != nil {
 		return nil, err
 	}
 	return list.Sessions, nil
@@ -134,13 +163,127 @@ func ListSessions(root string) ([]Session, error) {
 // CancelSession stops a session. It is the only thing that does: a viewer that
 // quits merely detaches.
 func CancelSession(id string) error {
-	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
+	return routedSessionCall(id, http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }
 
 // QueueSync asks the live session id to merge the remote-tracking base into
 // its branch at the end of the current round, and returns the queued sync.
 func QueueSync(id, base string) (BaseSync, error) {
 	var queued BaseSync
-	err := sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/sync", SyncRequest{Base: base}, &queued)
+	err := routedSessionCall(id, http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/sync", SyncRequest{Base: base}, &queued)
 	return queued, err
+}
+
+// MainSessions lists only the main daemon, for lifecycle decisions.
+func MainSessions(root string) ([]Session, error) { return listSessionsAt("", root) }
+
+// ListSessions merges live local daemon sessions, newest first.
+func ListSessions(root string) ([]Session, error) {
+	if TCPRemoteAddr() != "" {
+		return listSessionsAt("", root)
+	}
+	daemons, err := DiscoverDaemons()
+	if err != nil {
+		return nil, err
+	}
+	if len(daemons) == 0 {
+		return listSessionsAt("", root)
+	}
+	var sessions []Session
+	visited, seen := make(map[string]bool), make(map[string]bool)
+	for pass := 0; pass < 2; pass++ {
+		for _, d := range daemons {
+			if visited[d.Socket] {
+				continue
+			}
+			visited[d.Socket] = true
+			list, err := sessionsFromDaemon(d.Socket, root)
+			if err != nil {
+				return nil, err
+			}
+			for _, session := range list {
+				if seen[session.ID] {
+					continue
+				}
+				seen[session.ID] = true
+				sessions = append(sessions, session)
+			}
+		}
+		// A main listener may have moved while its list request was in flight.
+		// Include newly created private sockets without duplicating its sessions.
+		paths, err := localSockets()
+		if err != nil {
+			return nil, err
+		}
+		added := false
+		for _, path := range paths[1:] {
+			if !visited[path] {
+				added = true
+				break
+			}
+		}
+		if !added {
+			break
+		}
+		daemons, err = DiscoverDaemons()
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].StartedAt.After(sessions[j].StartedAt) })
+	return sessions, nil
+}
+
+func sessionsFromDaemon(socket, root string) ([]Session, error) {
+	list, err := listSessionsAt(socket, root)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+		return nil, nil
+	}
+	if errors.Is(err, ErrDaemonUnavailable) && !errors.Is(err, ErrNoSessionAPI) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Socket == "" {
+			list[i].Socket = socket
+		}
+	}
+	return list, nil
+}
+
+func routedSessionCall(id, method, path string, in, out any) error {
+	if TCPRemoteAddr() != "" {
+		return sessionCall(method, path, in, out)
+	}
+	socket, err := sessionOwner(id)
+	if err != nil {
+		return err
+	}
+	err = sessionCallAt(socket, method, path, in, out)
+	// Reads can safely rediscover an owner if transfer raced discovery. Never
+	// replay a mutation after a transport failure: its response may have been lost.
+	var refused *SessionRefused
+	if method == http.MethodGet && (errors.Is(err, ErrDaemonUnavailable) || errors.As(err, &refused) && refused.Status == http.StatusNotFound) {
+		owner, lookupErr := sessionOwner(id)
+		if lookupErr == nil && owner != socket {
+			return sessionCallAt(owner, method, path, in, out)
+		}
+	}
+	return err
+}
+
+func sessionOwner(id string) (string, error) {
+	sessions, err := ListSessions("")
+	if err != nil {
+		return "", err
+	}
+	for _, s := range sessions {
+		if s.ID == id {
+			return s.Socket, nil
+		}
+	}
+	return "", nil
 }

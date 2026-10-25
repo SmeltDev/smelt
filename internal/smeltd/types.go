@@ -222,4 +222,18 @@ type PingInfo struct {
 	// Revision is the daemon's VCS revision, empty when unknown or not reported.
 	Revision string
 	Draining bool
+	// Handover indicates listener transfer support, including while draining.
+	Handover bool
+}
+
+// CodeDaemonHandover means a start was refused before admission and may be retried.
+const CodeDaemonHandover = "daemon.handover"
+
+// DaemonStatus identifies a live local daemon and its owned socket.
+type DaemonStatus struct {
+	PID        int    `json:"pid"`
+	Revision   string `json:"revision"`
+	Draining   bool   `json:"draining"`
+	ActiveRuns int    `json:"active_runs"`
+	Socket     string `json:"socket"`
 }

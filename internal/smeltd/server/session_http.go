@@ -62,6 +62,12 @@ func (d *daemon) handleFactoryStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project_root required", http.StatusBadRequest)
 		return
 	}
+	// This response is safe to retry: no session has been admitted. The store
+	// checks again at admission for transfers racing request validation.
+	if req.Continue == "" && d.sessions.hasHandedOver() {
+		writeAPIError(w, admissionRefusal(&handoverError{}))
+		return
+	}
 	sess, err := d.startFactory(req)
 	if err != nil {
 		writeAPIError(w, err)

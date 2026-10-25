@@ -346,27 +346,43 @@ startup, which also replaces a daemon from another build. A dashboard that
 keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
 if it has gone away but never replaces one that answers.
 
-**Drain mode.** `POST /drain` sets a flag on the session store, under the same
-mutex that admits a session, so a drain cannot race a start. While it is set,
-`POST /factory` answers 503 with `{"code":"daemon.draining","active":N}`; the
-active runs are untouched. When the last session's `done` channel closes (not
-when its state turns finished, which is before the run has committed its work),
-or at once with none, the store's idle hook schedules shutdown after a short
-response-flush delay. Entries remain tracked until `done` closes, even if their
-state is already finished and retention would otherwise evict them. At the end
-of the delay, shutdown rechecks the drain generation, flag and all tracked
-`done` channels under the admission mutex, and cancels the root context while
-holding that mutex. `DELETE /drain` invalidates pending callbacks and admits
-runs again; after shutdown commits, admission stays closed. Killing the
-requesting CLI leaves drain enabled; an explicit restart timeout cancels drain.
-The daemon logs drain requests, remaining-run transitions and committed exit.
-Only factory sessions count. `/ping` keeps the build ID as its body, which clients and daemons of other
-builds compare whole, and adds `X-Smelt-Draining` and `X-Smelt-Revision` headers;
-a daemon without them reads as not draining, revision unknown. `EnsureRunning`
-leaves a draining daemon alone even when its build differs: replacing it would
-cancel the runs the drain is waiting for. Once it exits, the next call launches
-the binary on disk. The revision comes from `internal/version`, which reads the
-binary's build info (also used by `--version`).
+**Listener handover and session ownership.** `POST /handover` transfers the
+main listener to a validated `smeltd-<pid>.sock`. Under the session admission
+mutex, it renames the Unix socket, releases the PID file and local listener
+lock, records the private socket on every session, and closes admission for
+unrelated runs. It acknowledges only after ownership release; filesystem
+failures roll back before admission changes. Unix listener automatic unlinking
+is disabled so closing the old listener cannot remove a replacement's socket.
+Configured TCP listeners are released too. A local file lock serializes competing
+launchers; the replacement owns the main socket and PID while the old process
+continues serving its runs on its private listener.
+
+The session client discovers main and private local sockets, merges live
+session records, and routes fetch, cancel and queued sync requests to the owner.
+`StartFactory` resolves a continuation by project and run identity before
+submission. The old store admits continuations only for its own retained
+sessions, after normal persisted-record validation. Once the owner exits,
+continuations use persisted history through the main daemon. No durable registry
+is introduced. Only confirmed stale private sockets are removed; slow or
+inaccessible sockets are preserved, and responding private sockets must report
+the PID encoded in their path. Status lists all local daemons; stop controls
+only the main one. Remote clients retain their externally managed lifecycle.
+
+A start racing transfer is refused before admission with `daemon.handover`; the
+client ensures the main daemon and retries that refusal once. Accepted starts
+are never replayed. Stale-build startup negotiates handover before falling back
+to legacy drain and inspects only main-daemon sessions for replacement safety.
+
+**Legacy drain and idle shutdown.** `POST /drain` still closes admission with
+`daemon.draining` for compatibility. Unsupported handover falls back to drain
+waiting, including timeout cancellation and exit 75. A draining daemon exits
+only once all tracked `done` channels close, after commit and teardown, rather
+than when session state becomes terminal. Idle shutdown rechecks admission,
+drain generation and done channels under the same mutex after a response-flush
+delay. Continuation admission invalidates earlier idle callbacks. After shutdown
+commits, admission stays closed. Cleanup removes only sockets with this
+listener's inode and a PID file still naming this process. `/ping` retains its
+build-ID body and reports revision, draining, PID and active count in headers.
 
 The split is in the imports, not yet everywhere at runtime:
 
