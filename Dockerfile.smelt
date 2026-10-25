@@ -24,6 +24,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 UV_INST
 # --- dependencies: rebuilt when these files change -------------------------
 COPY --chown=circleci go.mod go.sum /tmp/smelt-deps/
 RUN cd /tmp/smelt-deps && go mod download && rm -rf /tmp/smelt-deps
-# Warm the uv cache so `uv run --project harness` can build its venv in the bind-mounted repo without re-downloading.
+# Keep the harness venv outside the repo: a .venv copied in from the host (a
+# CI runner's or a Mac's) points at a Python this image doesn't have, and uv
+# then fails with "Failed to spawn: pylint".
+ENV UV_PROJECT_ENVIRONMENT=/home/circleci/.cache/smelt-harness-venv
+# Warm the uv cache so `uv run --project harness` can build that venv without re-downloading.
 COPY --chown=circleci harness/pyproject.toml harness/uv.lock /tmp/smelt-harness-deps/
 RUN cd /tmp/smelt-harness-deps && uv sync --frozen --no-install-project && rm -rf /tmp/smelt-harness-deps
