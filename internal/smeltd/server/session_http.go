@@ -9,9 +9,11 @@ import (
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
-// maxRequestBytes bounds a session request body. A request names a project and
-// a few options; anything larger is not one.
-const maxRequestBytes = 64 * 1024
+// maxRequestBytes bounds a session request body. A factory start carries the
+// whole prompt (a spec with diffs can be hundreds of kilobytes), and the API
+// is only on the user's own socket, so the bound is generous; it only stops a
+// runaway body.
+const maxRequestBytes = 32 << 20
 
 // registerSessionRoutes adds the session API to mux. It sits behind the
 // transport's normal auth: the Unix socket is user-local, and the TCP listener
