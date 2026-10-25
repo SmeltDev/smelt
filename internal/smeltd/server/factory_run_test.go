@@ -678,8 +678,9 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 		wantGoMod bool
 	}{
 		{"default", &config.ProjectConfig{}, true, false},
+		{"custom limits", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &config.FactoryCacheConfig{MaxGB: new(2.5)}, MinFreeGB: new(3.5)}}, true, false},
 		{"go project", &config.ProjectConfig{Environment: &envspec.Environment{Stack: envspec.StackGo}}, true, true},
-		{"cache off", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &off}, Environment: &envspec.Environment{Stack: envspec.StackGo}}, false, false},
+		{"cache off", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &config.FactoryCacheConfig{Enabled: &off}}, Environment: &envspec.Environment{Stack: envspec.StackGo}}, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -692,6 +693,9 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 				assert.Equal(t, p.CacheKey, config.ProjectHash(root))
 			}
 			assert.Equal(t, p.GoStack, tt.wantGoMod)
+			assert.Equal(t, p.CacheMaxBytes, tt.cfg.Factory.CacheMaxBytes())
+			assert.Equal(t, p.MinFreeBytes, tt.cfg.Factory.MinFreeBytes())
+			assert.Equal(t, p.ProjectPath, root)
 		})
 	}
 }

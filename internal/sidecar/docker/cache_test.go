@@ -63,7 +63,10 @@ func (f *fakeDocker) VolumeList(context.Context, volume.ListOptions) (volume.Lis
 	return res, nil
 }
 
-func (f *fakeDocker) VolumeRemove(_ context.Context, name string, _ bool) error {
+func (f *fakeDocker) VolumeRemove(_ context.Context, name string, force bool) error {
+	if force {
+		return errors.New("forced cache removal is forbidden")
+	}
 	if err := f.volumeErrs[name]; err != nil {
 		return err
 	}
@@ -349,19 +352,21 @@ func TestMatchCacheVolume(t *testing.T) {
 func TestListAndRemoveCacheVolumes(t *testing.T) {
 	f := newFakeDocker()
 	f.volumes = []string{"smelt-cache-abc", "smelt-cache-abc-0", "smelt-cache-abc-1001", "smelt-gomod-abc-1001", "smelt-cache-abcd-1001"}
-	listed, err := f.provider().ListCacheVolumes(context.Background(), "abc")
+	provider := f.provider()
+	provider.workRoot = t.TempDir()
+	listed, err := provider.ListCacheVolumes(context.Background(), "abc")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, listed, []CacheVolume{
 		{"smelt-cache-abc", true}, {"smelt-cache-abc-0", false}, {"smelt-cache-abc-1001", false}, {"smelt-gomod-abc-1001", false}})
 
 	f.volumeErrs = map[string]error{"smelt-gomod-abc-1001": errors.Join(errors.New("no such volume"), cerrdefs.ErrNotFound)}
-	removed, err := f.provider().RemoveCacheVolumes(context.Background(), "abc")
+	removed, err := provider.RemoveCacheVolumes(context.Background(), "abc")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, removed, []string{"smelt-cache-abc", "smelt-cache-abc-0", "smelt-cache-abc-1001"})
 
 	f.volumeErrs = map[string]error{"smelt-cache-abc-0": errors.New("volume is in use")}
 	f.removedVolumes = nil
-	removed, err = f.provider().RemoveCacheVolumes(context.Background(), "abc")
+	removed, err = provider.RemoveCacheVolumes(context.Background(), "abc")
 	assert.ErrorContains(t, err, "volume is in use")
 	assert.DeepEqual(t, removed, []string{"smelt-cache-abc", "smelt-cache-abc-1001", "smelt-gomod-abc-1001"})
 }
@@ -369,3 +374,16 @@ func TestListAndRemoveCacheVolumes(t *testing.T) {
 func (f *fakeDocker) ContainerRemove(context.Context, string, container.RemoveOptions) error {
 	return nil
 }
+
+func TestAllProjectCacheInventory(t *testing.T) {
+	f := &fakeDocker{volumes: []string{"smelt-cache-abc", "smelt-cache-abc-1001", "smelt-gomod-def", "smelt-gomod-def-0", "unrelated", "smelt-cache-abc-other"}}
+	b := NewWithClient(f, "image", t.TempDir())
+	vols, err := b.ListCacheVolumes(context.Background(), "")
+	assert.NilError(t, err)
+	assert.Equal(t, len(vols), 4)
+	removed, err := b.RemoveCacheVolumes(context.Background(), "")
+	assert.NilError(t, err)
+	assert.Equal(t, len(removed), 4)
+}
+
+func (f *fakeDocker) DaemonHost() string { return "unix:///test-docker.sock" }

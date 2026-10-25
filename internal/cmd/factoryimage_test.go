@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,4 +282,34 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, len(entries), 1)
 	assert.Equal(t, entries[0].Name(), "go.mod")
+}
+
+func TestImageStorageDiscoveryRefusesBeforeImageWork(t *testing.T) {
+	root := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{}`), 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM alpine:3.20\n"), 0o600))
+	imageWork := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/_ping"):
+			w.Header().Set("API-Version", "1.47")
+			_, _ = w.Write([]byte("OK"))
+		case strings.HasSuffix(r.URL.Path, "/info"):
+			_, _ = w.Write([]byte(`{"ID":"id","ServerVersion":"27.0.0","OperatingSystem":"Docker Desktop","DockerRootDir":"/var/lib/docker"}`))
+		case strings.HasSuffix(r.URL.Path, "/images/json"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			imageWork++
+			http.Error(w, "unexpected image work", 500)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("DOCKER_HOST", server.URL)
+	t.Setenv("DOCKER_API_VERSION", "1.47")
+	_, err := buildSandboxImage(context.Background(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"})
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
+	assert.Equal(t, imageWork, 0)
 }
