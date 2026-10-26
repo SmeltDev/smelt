@@ -156,15 +156,12 @@ func storageProvider(t *testing.T) (*Provider, *storageEngine, string) {
 // The fake engine uses HTTP transport. Discovery input is overridden with a
 // fixture resolver independently of transport, just as a Unix socket would be.
 func TestDiskRefusal(t *testing.T) {
-	for _, low := range []string{"project", "workspace", "backing", "VM", "discovery", "probe"} {
+	for _, low := range []string{"project", "workspace", "backing", "VM", "probe"} {
 		t.Run(low, func(t *testing.T) {
 			b, f, relocated := storageProvider(t)
 			b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
 			if low == "VM" {
 				f.vmKB = 1
-			}
-			if low == "discovery" {
-				b.endpoint = "ssh://remote"
 			}
 			b.freeBytes = func(_ context.Context, path string) (int64, error) {
 				if low == "probe" {
@@ -177,7 +174,7 @@ func TestDiskRefusal(t *testing.T) {
 			}
 			_, err := b.Create(context.Background(), "run", "image", "/repo")
 			assert.Assert(t, err != nil)
-			if low != "discovery" && low != "probe" {
+			if low != "probe" {
 				assert.Assert(t, strings.HasPrefix(err.Error(), "disk almost full: "), err.Error())
 				assert.Assert(t, strings.HasSuffix(err.Error(), " free; run smelt factory clean --caches"))
 			}
@@ -187,11 +184,20 @@ func TestDiskRefusal(t *testing.T) {
 			}
 			_, imageErr := b.resolveImage(context.Background(), "image", nil)
 			assert.Assert(t, imageErr != nil)
-			if low != "discovery" && low != "probe" {
+			if low != "probe" {
 				assert.Assert(t, strings.HasPrefix(imageErr.Error(), "disk almost full: "), imageErr.Error())
 			}
 		})
 	}
+}
+
+// A host that won't say where Docker keeps its data (here a remote engine; on
+// macOS, privacy rules hiding Docker Desktop's settings) still runs.
+func TestDiskDiscoveryFailureAllowsRuns(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "ssh://remote"
+	assert.NilError(t, b.CheckStorage(context.Background()))
+	assert.Equal(t, f.helpers, 0)
 }
 
 func TestStorageReport(t *testing.T) {

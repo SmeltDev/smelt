@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -126,7 +127,14 @@ func (b *Provider) CheckStorage(ctx context.Context) error {
 	if b.MinFreeBytes <= 0 {
 		return nil
 	}
-	_, err := b.storageReport(ctx, storageGuard)
+	report, err := b.storageReport(ctx, storageGuard)
+	if err != nil && report.HostError != "" {
+		// Finding Docker's backing storage is best effort: macOS privacy rules
+		// can hide Docker Desktop's settings, and a remote engine has no local
+		// disk to find. Only a measured low-space result refuses a run.
+		log.Printf("smelt: couldn't check Docker's free disk space (%s); runs aren't protected from a full disk, see smelt factory doctor", report.HostError)
+		return nil
+	}
 	return err
 }
 
