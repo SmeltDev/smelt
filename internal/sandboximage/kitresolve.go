@@ -2,6 +2,7 @@ package sandboximage
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,17 +11,22 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/image"
+
+	"github.com/smeltdev/smelt/internal/version"
+	"github.com/smeltdev/smelt/kit"
 )
 
 // kitStateFile is the file, in smelt's data dir, that remembers the last kit
 // image a pull resolved to.
 const kitStateFile = "kit-image.json"
 
+const kitDockerfile = "Dockerfile"
+
 // KitStatePath is where the last resolved kit is remembered, under dataDir.
 func KitStatePath(dataDir string) string { return filepath.Join(dataDir, kitStateFile) }
 
-// ErrKitUnavailable means the kit image could not be pulled and none was
-// pulled before.
+// ErrKitUnavailable means no kit could be acquired or built, and no usable
+// cached image remains.
 var ErrKitUnavailable = errors.New("agent kit image unavailable")
 
 // KitChoice is the kit image a build copies from.
@@ -33,6 +39,8 @@ type KitChoice struct {
 	// PullErr is why.
 	Offline bool
 	PullErr error
+	// Notice records source build provenance independently of terminal output.
+	Notice string
 }
 
 // kitPuller is the part of a Builder ResolveKit uses.
@@ -46,13 +54,16 @@ type lastKit struct {
 	Kit      int    `json:"kit"`
 	Ref      string `json:"ref"`
 	Selected string `json:"selected,omitempty"`
+	Notice   string `json:"notice,omitempty"`
 }
 
-// ResolveKit pulls the kit image for this smelt's KitVersion, resolves its tag
-// to a digest and remembers it in statePath. When the pull fails it falls back
-// to the digest pulled last time including across CLI upgrades, provided that image
-// is still on the Docker host, and says so in the result.
+// ResolveKit checks local images, then the registry, then embedded sources.
+// A refreshed selection takes precedence. The last usable image is a final
+// fallback if acquisition fails, including across CLI upgrades.
 func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, error) {
+	if err := ctx.Err(); err != nil {
+		return KitChoice{}, err
+	}
 	tag, version := KitTagRef(), KitVersion
 	previous, _ := readLastKit(statePath)
 	selected := ""
@@ -65,19 +76,65 @@ func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, 
 		tag, version = previous.Ref, previous.Kit
 		selected = previous.Selected
 	}
+	if selected == "" {
+		if choice, ok := resolveLocalKit(ctx, p, statePath, previous); ok {
+			return choice, nil
+		}
+	}
 	ref, pullErr := p.PullKit(ctx, tag)
 	if pullErr == nil {
 		// Remembering is best effort: the build does not depend on it.
 		_ = writeLastKit(statePath, lastKit{Kit: version, Ref: ref, Selected: selected})
 		return KitChoice{Ref: ref, Kit: version}, nil
 	}
+	if ctx.Err() != nil {
+		return KitChoice{}, ctx.Err()
+	}
+	if selected == "" {
+		if builder, ok := p.(kitBuilder); ok {
+			choice, err := BuildEmbeddedKit(ctx, builder, statePath, BuildOptions{}, pullErr)
+			if err == nil {
+				return choice, nil
+			}
+			pullErr = errors.Join(pullErr, err)
+		}
+	}
+	if ctx.Err() != nil {
+		return KitChoice{}, ctx.Err()
+	}
 	last, ok := readLastKit(statePath)
 	if ok {
 		if have, err := p.Exists(ctx, last.Ref); err == nil && have {
-			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr}, nil
+			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr, Notice: last.Notice}, nil
 		}
 	}
 	return KitChoice{}, fmt.Errorf("%w: %s: %w", ErrKitUnavailable, tag, pullErr)
+}
+
+// resolveLocalKit checks revision-specific and imported version tags in order.
+func resolveLocalKit(ctx context.Context, p kitPuller, statePath string, previous lastKit) (KitChoice, bool) {
+	local, ok := p.(interface {
+		LocalKit(context.Context, string) (string, error)
+	})
+	if !ok {
+		return KitChoice{}, false
+	}
+	for _, tag := range []string{KitRevisionRef(), KitLocalRef()} {
+		ref, err := local.LocalKit(ctx, tag)
+		if err != nil || ref == "" {
+			continue
+		}
+		notice := ""
+		if previous.Ref == ref {
+			notice = previous.Notice
+		}
+		if raw, err := os.ReadFile(kitProvenancePath(statePath, ref)); err == nil {
+			notice = string(raw)
+		}
+		_ = writeLastKit(statePath, lastKit{Kit: KitVersion, Ref: ref, Notice: notice})
+		return KitChoice{Ref: ref, Kit: KitVersion, Notice: notice}, true
+	}
+	return KitChoice{}, false
 }
 
 // RememberKit records a locally built kit for offline reuse.
@@ -92,6 +149,9 @@ func writeLastKit(path string, state lastKit) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
+	}
+	if state.Notice != "" {
+		_ = os.WriteFile(kitProvenancePath(path, state.Ref), []byte(state.Notice), 0o600)
 	}
 	return os.WriteFile(path, raw, 0o644)
 }
@@ -148,7 +208,7 @@ func (b *Builder) PullKit(ctx context.Context, tagRef string) (string, error) {
 // KitLocalRef. It returns the image's ID, which a Dockerfile can COPY from and
 // which changes whenever the kit does.
 func (b *Builder) BuildKit(ctx context.Context, kitDir string, opts BuildOptions) (string, error) {
-	c, err := ReadContext(kitDir, "Dockerfile")
+	c, err := ReadContext(kitDir, kitDockerfile)
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +216,10 @@ func (b *Builder) BuildKit(ctx context.Context, kitDir string, opts BuildOptions
 	for _, a := range KitPins() {
 		args[a.Name] = &a.Value
 	}
-	opts.Context, opts.Slug, opts.Tag, opts.BuildArgs = c, "kit", KitLocalRef(), args
+	revision := KitRevision()
+	args["SMELT_VERSION"] = &revision
+	opts.Context, opts.Slug, opts.Tag, opts.BuildArgs = c, "kit", KitRevisionRef(), args
+	opts.ExtraTags = []string{KitLocalRef()}
 	if err := b.Build(ctx, opts); err != nil {
 		return "", err
 	}
@@ -182,7 +245,7 @@ func (p Plan) LastKitSandboxPlan(statePath string) (Plan, bool) {
 	if !ok {
 		return Plan{}, false
 	}
-	return p.SandboxPlanWithKit(KitChoice{Ref: ref.Ref, Kit: ref.Kit}), true
+	return p.SandboxPlanWithKit(KitChoice{Ref: ref.Ref, Kit: ref.Kit, Notice: ref.Notice}), true
 }
 
 // KitRefresher pulls and reads a published kit without running its agents.
@@ -213,7 +276,111 @@ func RefreshKit(ctx context.Context, p KitRefresher, statePath, tag string) (Kit
 // SandboxPlanWithKit plans an image with the selected kit's actual version.
 func (p Plan) SandboxPlanWithKit(choice KitChoice) Plan {
 	return Plan{
-		Context: &Context{Dockerfile: "Dockerfile", Content: sandboxDockerfile(p.Tag, choice)},
-		Slug:    p.Slug, Tag: SandboxTag(p.Tag, choice.Ref), Toolchain: &p, Kit: choice.Kit,
+		Context:   &Context{Dockerfile: kitDockerfile, Content: sandboxDockerfile(p.Tag, choice)},
+		KitNotice: choice.Notice,
+		Slug:      p.Slug, Tag: SandboxTag(p.Tag, choice.Ref), Toolchain: &p, Kit: choice.Kit,
 	}
+}
+
+// KitRevision identifies this binary, including builds without VCS metadata.
+func KitRevision() string {
+	if r := version.Current().Revision; r != "" {
+		return strings.Map(func(c rune) rune {
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+				return c
+			}
+			return '-'
+		}, r)
+	}
+	h := sha256.New()
+	for _, name := range []string{kitDockerfile, "runtime.sh"} {
+		data, _ := kit.Files.ReadFile(name)
+		_, _ = h.Write(data)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+}
+
+// KitRevisionRef is the local tag specific to this binary's source revision.
+func KitRevisionRef() string { return KitLocalRef() + "-" + KitRevision() }
+
+type kitBuilder interface {
+	BuildKit(context.Context, string, BuildOptions) (string, error)
+}
+
+// EmbeddedKitContext materializes the canonical kit inputs. The caller removes dir.
+func EmbeddedKitContext() (dir string, err error) {
+	dir, err = os.MkdirTemp("", "smelt-kit-")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{kitDockerfile, "runtime.sh"} {
+		data, readErr := kit.Files.ReadFile(name)
+		if readErr == nil {
+			readErr = os.WriteFile(filepath.Join(dir, name), data, 0o644)
+		}
+		if readErr != nil {
+			_ = os.RemoveAll(dir)
+			return "", readErr
+		}
+	}
+	return dir, nil
+}
+
+// BuildEmbeddedKit rebuilds this binary's kit without requiring a source checkout.
+func BuildEmbeddedKit(ctx context.Context, b kitBuilder, state string, opts BuildOptions, cause error) (KitChoice, error) {
+	if err := ctx.Err(); err != nil {
+		return KitChoice{}, err
+	}
+	dir, err := EmbeddedKitContext()
+	if err != nil {
+		return KitChoice{}, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	ref, err := b.BuildKit(ctx, dir, opts)
+	if err != nil {
+		return KitChoice{}, err
+	}
+	notice := fmt.Sprintf("using a locally built agent kit (kit %d, smelt %s)", KitVersion, KitRevision())
+	if cause != nil {
+		notice += ": the published kit isn't available (" + kitFailureReason(cause) + ")"
+	}
+	_ = writeLastKit(state, lastKit{Kit: KitVersion, Ref: ref, Notice: notice})
+	return KitChoice{Ref: ref, Kit: KitVersion, Notice: notice}, nil
+}
+
+func kitFailureReason(err error) string {
+	s := strings.ToLower(err.Error())
+	for _, reason := range []string{"denied", "not found", "unauthorized"} {
+		if strings.Contains(s, reason) {
+			return reason
+		}
+	}
+	return "offline or registry unavailable"
+}
+
+// ClaimKitNotice atomically claims the automatic notice for an immutable image.
+// Failure to persist a stamp must never prevent use of the image.
+func ClaimKitNotice(state, ref string) bool {
+	sum := sha256.Sum256([]byte(ref))
+	path := filepath.Join(filepath.Dir(state), fmt.Sprintf("kit-notice-%x", sum))
+	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
+		return true
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return !errors.Is(err, os.ErrExist)
+	}
+	_ = f.Close()
+	return true
+}
+
+// LocalKit resolves a local tag to an immutable image ID without pulling.
+func (b *Builder) LocalKit(ctx context.Context, tag string) (string, error) {
+	info, err := b.cli.ImageInspect(ctx, tag)
+	return info.ID, err
+}
+
+func kitProvenancePath(state, ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return filepath.Join(filepath.Dir(state), fmt.Sprintf("kit-source-%x", sum))
 }

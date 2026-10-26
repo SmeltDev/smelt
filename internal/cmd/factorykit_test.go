@@ -109,17 +109,18 @@ func TestFactoryImageKitFlags(t *testing.T) {
 
 // fakeKits is a kitProvider with canned answers.
 type fakeKits struct {
-	ref     string
-	pullErr error
-	have    bool
-	built   int
+	ref      string
+	pullErr  error
+	have     bool
+	built    int
+	buildErr error
 }
 
 func (f *fakeKits) PullKit(context.Context, string) (string, error) { return f.ref, f.pullErr }
 func (f *fakeKits) Exists(context.Context, string) (bool, error)    { return f.have, nil }
 func (f *fakeKits) BuildKit(context.Context, string, sandboximage.BuildOptions) (string, error) {
 	f.built++
-	return "sha256:built", nil
+	return "sha256:built", f.buildErr
 }
 
 func TestWithAgentKitAddsTheKitWhetherOrNotTheFileHasASection(t *testing.T) {
@@ -150,7 +151,7 @@ func TestWithAgentKitOffline(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Nothing cached: the error names the flag that works without a registry.
-	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{pullErr: offline}, toolchain, kitSource{Root: root})
+	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{pullErr: offline, buildErr: errors.New("cannot build")}, toolchain, kitSource{Root: root})
 	var ue *userError
 	assert.Assert(t, asUserError(err, &ue), "%v", err)
 	assert.Equal(t, ue.code, "factory.kit_unavailable")
@@ -160,7 +161,7 @@ func TestWithAgentKitOffline(t *testing.T) {
 	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{ref: ref}, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
 	streams, out := capturedStreams()
-	got, _, err := withAgentKit(t.Context(), streams, &fakeKits{pullErr: offline, have: true}, toolchain, kitSource{Root: root})
+	got, _, err := withAgentKit(t.Context(), streams, &fakeKits{pullErr: offline, have: true, buildErr: errors.New("cannot build")}, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
 	assert.Equal(t, got.Tag, sandboximage.SandboxTag(toolchain.Tag, ref))
 	assert.Assert(t, strings.Contains(out.String(), "using the kit pulled last: "+ref), out.String())
@@ -171,13 +172,6 @@ func TestWithAgentKitFromSource(t *testing.T) {
 	toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
 	assert.NilError(t, err)
 
-	_, _, err = withAgentKit(t.Context(), iostream.Streams{}, &fakeKits{}, toolchain, kitSource{Root: root, FromSource: true})
-	var ue *userError
-	assert.Assert(t, asUserError(err, &ue), "%v", err)
-	assert.Equal(t, ue.code, "command.invalid_args")
-
-	assert.NilError(t, os.MkdirAll(filepath.Join(root, "kit"), 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "kit", "Dockerfile"), []byte("FROM scratch\n"), 0o644))
 	kits := &fakeKits{}
 	streams, _ := capturedStreams()
 	got, _, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root, FromSource: true})
@@ -188,6 +182,23 @@ func TestWithAgentKitFromSource(t *testing.T) {
 	reused, _, err := withAgentKit(t.Context(), streams, kits, toolchain, kitSource{Root: root})
 	assert.NilError(t, err)
 	assert.Equal(t, reused.Tag, got.Tag)
-	assert.Equal(t, kits.built, 1)
+	assert.Equal(t, kits.built, 2)
 
+}
+
+func TestLocalKitNoticeSuppressionAndExplicitDisplay(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	kits := &fakeKits{pullErr: errors.New("denied")}
+	streams, out := capturedStreams()
+	first, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out.String(), "using a locally built agent kit"))
+	out.Reset()
+	next, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, next.Notice, first.Notice)
+	assert.Equal(t, out.String(), "")
+	_, err = kitImageRef(t.Context(), streams, kits, kitSource{Root: root, ShowNotice: true})
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out.String(), first.Notice))
 }

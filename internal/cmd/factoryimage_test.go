@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,4 +281,119 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, len(entries), 1)
 	assert.Equal(t, entries[0].Name(), "go.mod")
+}
+
+func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	for range 2 {
+		f := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+		got, err := ensureSandboxImage(t.Context(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"}, plan, f)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(got.Sandbox.KitNotice, "published kit isn't available (denied)"))
+	}
+}
+
+func TestFactoryImageCommandDisplaysClaimedKitNotice(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	assert.NilError(t, exec.Command("git", "-C", root, "init", "-q").Run())
+	assert.NilError(t, exec.Command("git", "-C", root, "remote", "add", "origin", "https://github.com/smeltdev/smelt.git").Run())
+	t.Chdir(root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"backend":"docker"}}`), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
+	kits := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+	streams, output := capturedStreams()
+	choice, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Assert(t, choice.Notice != "")
+	output.Reset()
+	_, err = kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, output.String(), "", "automatic notice was already claimed")
+
+	stop := errors.New("stop before verification")
+	previous := buildImage
+	t.Cleanup(func() { buildImage = previous })
+	called := false
+	buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+		called = true
+		plan, err := b.toolchainPlan(root)
+		if err != nil {
+			return builtImage{}, err
+		}
+		built, err := ensureSandboxImage(ctx, streams, root, b, plan, kits)
+		if err != nil {
+			return builtImage{}, err
+		}
+		return built, stop
+	}
+	cmd := newFactoryImageCmd()
+	cmd.SetContext(t.Context())
+	cmd.SetOut(streams.Out)
+	cmd.SetErr(streams.Err)
+	cmd.SetArgs(nil)
+	err = cmd.Execute()
+	assert.ErrorIs(t, err, stop)
+	assert.Assert(t, called)
+	assert.Assert(t, strings.Contains(output.String(), choice.Notice), output.String())
+}
+
+// localKitEnsurer offers an existing local kit as well as source builds.
+type localKitEnsurer struct{ fakeEnsurer }
+
+func (*localKitEnsurer) LocalKit(context.Context, string) (string, error) {
+	return "sha256:cached", nil
+}
+
+func TestFactoryImageCommandForcesKitRebuildWithLocalKit(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	assert.NilError(t, exec.Command("git", "-C", root, "init", "-q").Run())
+	assert.NilError(t, exec.Command("git", "-C", root, "remote", "add", "origin", "https://github.com/smeltdev/smelt.git").Run())
+	t.Chdir(root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"backend":"docker"}}`), 0o644))
+
+	for _, force := range []bool{false, true} {
+		name := "reuse local kit"
+		if force {
+			name = "force source rebuild"
+		}
+		t.Run(name, func(t *testing.T) {
+			kits := &localKitEnsurer{}
+			stop := errors.New("stop before verification")
+			previous := buildImage
+			t.Cleanup(func() { buildImage = previous })
+			called := false
+			buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+				called = true
+				assert.Equal(t, b.KitFromSource, force)
+				plan, err := b.toolchainPlan(root)
+				assert.NilError(t, err)
+				built, err := ensureSandboxImage(ctx, streams, root, b, plan, kits)
+				assert.NilError(t, err)
+				return built, stop
+			}
+			streams, _ := capturedStreams()
+			cmd := newFactoryImageCmd()
+			cmd.SetContext(t.Context())
+			cmd.SetOut(streams.Out)
+			cmd.SetErr(streams.Err)
+			args := []string{}
+			if force {
+				args = append(args, "--kit-from-source")
+			}
+			cmd.SetArgs(args)
+			assert.ErrorIs(t, cmd.Execute(), stop)
+			assert.Assert(t, called)
+			if force {
+				assert.Equal(t, kits.built, 1)
+				assert.Assert(t, strings.Contains(kits.plan.Context.Content, "COPY --from=sha256:built"))
+			} else {
+				assert.Equal(t, kits.built, 0)
+				assert.Assert(t, strings.Contains(kits.plan.Context.Content, "COPY --from=sha256:cached"))
+			}
+		})
+	}
 }

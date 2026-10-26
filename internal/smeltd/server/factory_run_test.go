@@ -1115,3 +1115,27 @@ func TestSandboxSourcesMatchTheToolchainKinds(t *testing.T) {
 	assert.Equal(t, smeltd.SandboxFromConfig, string(sandboximage.ToolchainConfig))
 	assert.Equal(t, smeltd.SandboxFromRepo, string(sandboximage.ToolchainRepo))
 }
+
+func TestKitProvenanceWarnings(t *testing.T) {
+	req := smeltd.FactoryRequest{Sandbox: &smeltd.FactorySandbox{KitNotice: "built locally"}}
+	assert.DeepEqual(t, warnings(req), []string{"built locally"})
+	assert.Equal(t, req.KitWarning, "")
+	req.KitWarning = "old kit"
+	assert.DeepEqual(t, warnings(req), []string{"old kit", "built locally"})
+}
+
+func TestFactorySessionRecordsLocalKitOnEveryRun(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
+	for range 2 {
+		sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag", Sandbox: &smeltd.FactorySandbox{KitNotice: "built locally", Source: smeltd.SandboxFromRepo, Dockerfile: "Dockerfile.smelt", ToolchainTag: "toolchain:1", Kit: "6@sha256:abc"}})
+		assert.NilError(t, err)
+		detail := waitForSessionEnd(t, d, sess.ID)
+		assert.DeepEqual(t, got.Warnings, []string{"built locally"})
+		assert.Assert(t, !detail.Factory.KitOutdated)
+	}
+}

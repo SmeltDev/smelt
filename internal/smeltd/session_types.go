@@ -824,6 +824,8 @@ const (
 
 // FactorySandbox is where a run's toolchain came from.
 type FactorySandbox struct {
+	// KitNotice records locally built kit provenance for every run.
+	KitNotice string `json:"kit_notice,omitempty"`
 	// Dockerfile is the absolute path for SandboxFromCaller, else repo-relative.
 	Dockerfile string `json:"dockerfile"`
 	// Source is SandboxFromCaller, SandboxFromConfig or SandboxFromRepo.

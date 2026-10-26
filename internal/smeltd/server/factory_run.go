@@ -866,10 +866,14 @@ func (r *factoryRecorder) recordHarnessRateLimit(name harness.Name, rl *harness.
 
 // warnings are what the client flagged about the run's setup, for its log.
 func warnings(req smeltd.FactoryRequest) []string {
-	if req.KitWarning == "" {
-		return nil
+	var result []string
+	if req.KitWarning != "" {
+		result = append(result, req.KitWarning)
 	}
-	return []string{req.KitWarning}
+	if req.Sandbox != nil && req.Sandbox.KitNotice != "" {
+		result = append(result, req.Sandbox.KitNotice)
+	}
+	return result
 }
 
 type factoryHarnesses struct {

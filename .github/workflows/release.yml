@@ -67,3 +67,22 @@ jobs:
       - name: Build, push and sign the kit
         shell: bash
         run: kit/publish.sh "${GITHUB_REF_NAME#v}" | tee -a "$GITHUB_STEP_SUMMARY"
+      # GitHub exposes visibility changes only in package settings, not its
+      # supported Packages REST API. Never assume packages:write makes it public.
+      # After the first publish, a repository owner sets the package to Public
+      # in package settings, then reruns this job. Fork owners do the same for
+      # their own package or rely on automatic local source builds. See
+      # docs/CLI.md and https://docs.github.com/en/rest/packages/packages.
+      - name: Verify the kit is public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          visibility=$(gh api orgs/smeltdev/packages/container/smelt-kit --jq .visibility) || {
+            echo '::error::Cannot read kit visibility. Grant this repository Actions access to the package and retry.'
+            exit 1
+          }
+          if [ "$visibility" != public ]; then
+            echo '::error::A package admin must open https://github.com/orgs/smeltdev/packages/container/smelt-kit/settings and change visibility to Public, then rerun this job. GitHub has no supported API to automate this first-publish step.'
+            exit 1
+          fi
