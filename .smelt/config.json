@@ -38,7 +38,7 @@
     "backend": "docker",
     "dockerfile": "Dockerfile.smelt",
     "log": true,
-    "maxConcurrent": 2,
+    "maxConcurrent": 1,
     "maxAttempts": 10
   },
   "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
