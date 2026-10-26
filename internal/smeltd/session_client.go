@@ -240,7 +240,7 @@ func sessionsFromDaemon(socket, root string) ([]Session, error) {
 	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
 		return nil, nil
 	}
-	if errors.Is(err, ErrDaemonUnavailable) && !errors.Is(err, ErrNoSessionAPI) {
+	if errors.Is(err, ErrDaemonUnavailable) && errors.Is(classifyDialError(err, socket), ErrDaemonUnreachable) {
 		return nil, nil
 	}
 	if err != nil {

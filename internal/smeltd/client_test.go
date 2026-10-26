@@ -730,3 +730,28 @@ func TestListSessionsIncludesListenerTransferredDuringListing(t *testing.T) {
 	assert.Equal(t, len(sessions), 1)
 	assert.Equal(t, sessions[0].Socket, private)
 }
+
+// A daemon that answers discovery but loses its list response must not make
+// its runs disappear from the merged list or send their mutations elsewhere.
+func TestListSessionsReportsFailedOwnerResponse(t *testing.T) {
+	startTestDaemon(t, BuildID(), func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/factory" {
+			http.NotFound(w, r)
+			return
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	})
+	_, err := ListSessions("")
+	assert.Assert(t, errors.Is(err, ErrDaemonUnavailable), "got %v", err)
+}
+
+func TestDiscoveryReportsUnresponsiveMainSocket(t *testing.T) {
+	hangingDaemon(t)
+	_, err := DiscoverDaemons()
+	assert.Assert(t, errors.Is(err, ErrDaemonTimeout), "got %v", err)
+}

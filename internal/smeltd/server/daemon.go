@@ -113,6 +113,18 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 // server, so the response that triggered it is not cut off.
 const drainFlushDelay = 200 * time.Millisecond
 
+// handoverFunc moves the daemon's listener to its per-pid socket, recording the
+// socket on its sessions, when a newer build asks for the main socket.
+func handoverFunc(d *daemon, owner listenerOwnership) func() (smeltd.DrainResponse, error) {
+	return func() (smeltd.DrainResponse, error) {
+		private, err := smeltd.PIDSocketPath(os.Getpid())
+		if err != nil {
+			return smeltd.DrainResponse{}, err
+		}
+		return d.sessions.handover(private, func() error { return owner.transfer(private) })
+	}
+}
+
 // runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
 // TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
 // a listener to discover a free port.
@@ -156,20 +168,11 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		}
 	}()
 
-	sockPath, err := smeltd.SocketPath()
+	ln, sockPath, closeSocket, err := bindMainSocket()
 	if err != nil {
 		return err
 	}
-	_ = os.Remove(sockPath)
-
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", sockPath, err)
-	}
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
-	defer func() { _ = ln.Close() }()
-	sockInfo, _ := os.Stat(sockPath)
-	defer removeOwnedSockets(sockPath, sockInfo)
+	defer closeSocket()
 
 	// The signal-aware context is built first because the output store derives
 	// every streamer from it: a streamer must not be able to outlive the daemon
@@ -195,14 +198,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		sessions: newSessionStore(ctx),
 		rcfg:     dopts.review,
 	}
-	d.handover = func() (smeltd.DrainResponse, error) {
-		private, err := smeltd.PIDSocketPath(os.Getpid())
-		if err != nil {
-			return smeltd.DrainResponse{}, err
-		}
-		owner := listenerOwnership{socket: sockPath, pid: pidPath, lock: ownership, tcp: tcpLn}
-		return d.sessions.handover(private, func() error { return owner.transfer(private) })
-	}
+	d.handover = handoverFunc(d, listenerOwnership{socket: sockPath, pid: pidPath, lock: ownership, tcp: tcpLn})
 	d.sessions.onIdle = func(generation uint64) {
 		time.AfterFunc(drainFlushDelay, func() {
 			d.sessions.commitDrain(generation, func() {
@@ -241,32 +237,64 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		_ = srv.Close()
 	}()
 
+	logStarted(mainSocket, tcpLn)
 	if tcpLn != nil {
-		log.Printf("smelt daemon started pid=%d socket=%s tcp=%s", os.Getpid(), mainSocket, tcpLn.Addr())
-		// The TCP server wraps the same handler with bearer-token auth so the
-		// Unix socket (bound to the local user's filesystem) stays unauthenticated
-		// while the TCP listener enforces a shared secret.
-		tcpSrv := &http.Server{
-			Handler:           withBearerAuth(srv.Handler, smeltd.TCPToken()),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			<-ctx.Done()
-			_ = tcpSrv.Close()
-		}()
-		go func() {
-			if serveErr := tcpSrv.Serve(tcpLn); serveErr != nil && ctx.Err() == nil {
-				log.Printf("smeltd tcp: %v", serveErr)
-			}
-		}()
-	} else {
-		log.Printf("smelt daemon started pid=%d socket=%s", os.Getpid(), mainSocket)
+		serveTCP(ctx, srv, tcpLn)
 	}
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("smeltd serve: %w", err)
 	}
 	return nil
+}
+
+// bindMainSocket listens on the main socket without unlinking it on close, so
+// a handover can rename it; the returned cleanup removes only the socket this
+// daemon created.
+func bindMainSocket() (net.Listener, string, func(), error) {
+	sockPath, err := smeltd.SocketPath()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("listen on %s: %w", sockPath, err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	sockInfo, _ := os.Stat(sockPath)
+	return ln, sockPath, func() {
+		_ = ln.Close()
+		removeOwnedSockets(sockPath, sockInfo)
+	}, nil
+}
+
+// logStarted records where the daemon listens.
+func logStarted(socket string, tcpLn net.Listener) {
+	if tcpLn == nil {
+		log.Printf("smelt daemon started pid=%d socket=%s", os.Getpid(), socket)
+		return
+	}
+	log.Printf("smelt daemon started pid=%d socket=%s tcp=%s", os.Getpid(), socket, tcpLn.Addr())
+}
+
+// serveTCP serves the same handler as the Unix socket behind bearer-token auth,
+// so the socket (bound to the local user's filesystem) stays unauthenticated
+// while the TCP listener enforces a shared secret.
+func serveTCP(ctx context.Context, srv *http.Server, tcpLn net.Listener) {
+	tcpSrv := &http.Server{
+		Handler:           withBearerAuth(srv.Handler, smeltd.TCPToken()),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		_ = tcpSrv.Close()
+	}()
+	go func() {
+		if serveErr := tcpSrv.Serve(tcpLn); serveErr != nil && ctx.Err() == nil {
+			log.Printf("smeltd tcp: %v", serveErr)
+		}
+	}()
 }
 
 func configuredTCPListener(existing net.Listener) (net.Listener, error) {
