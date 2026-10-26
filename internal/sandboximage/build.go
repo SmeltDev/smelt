@@ -60,9 +60,11 @@ func NewBuilder(cli dockerAPI) *Builder { return &Builder{cli: cli} }
 
 // BuildOptions says what to build.
 type BuildOptions struct {
-	Context *Context
-	Slug    string
-	Tag     string
+	// ExtraTags are additional names for the built image.
+	ExtraTags []string
+	Context   *Context
+	Slug      string
+	Tag       string
 	// NoCache rebuilds every layer.
 	NoCache bool
 	// BuildArgs are the Dockerfile's ARG values.
@@ -107,7 +109,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) error {
 		return fmt.Errorf("prepare build context: %w", err)
 	}
 	resp, err := b.cli.ImageBuild(ctx, &tarball, build.ImageBuildOptions{
-		Tags:       []string{opts.Tag},
+		Tags:       append([]string{opts.Tag}, opts.ExtraTags...),
 		Dockerfile: opts.Context.Dockerfile,
 		Labels:     map[string]string{LabelSandbox: opts.Slug},
 		NoCache:    opts.NoCache,

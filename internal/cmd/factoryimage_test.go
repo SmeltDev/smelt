@@ -1,14 +1,11 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -286,90 +283,117 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.Equal(t, entries[0].Name(), "go.mod")
 }
 
-func TestImageStorageDiscoveryRefusesBeforeImageWork(t *testing.T) {
-	root := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{}`), 0o600))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM alpine:3.20\n"), 0o600))
-	imageWork := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/_ping"):
-			w.Header().Set("API-Version", "1.47")
-			_, _ = w.Write([]byte("OK"))
-		case strings.HasSuffix(r.URL.Path, "/info"):
-			_, _ = w.Write([]byte(`{"ID":"id","ServerVersion":"27.0.0","OperatingSystem":"Docker Desktop","DockerRootDir":"/var/lib/docker"}`))
-		case strings.HasSuffix(r.URL.Path, "/images/json"):
-			_, _ = w.Write([]byte(`[]`))
-		default:
-			imageWork++
-			http.Error(w, "unexpected image work", 500)
-		}
-	}))
-	defer server.Close()
-	t.Setenv("DOCKER_HOST", server.URL)
-	t.Setenv("DOCKER_API_VERSION", "1.47")
-	_, err := buildSandboxImage(context.Background(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"})
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
-	assert.Equal(t, imageWork, 0)
+func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	plan, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	for range 2 {
+		f := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+		got, err := ensureSandboxImage(t.Context(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"}, plan, f)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(got.Sandbox.KitNotice, "published kit isn't available (denied)"))
+	}
 }
 
-func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
-	root := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"minFreeGB":0.000001,"cache":{"maxGB":3}}}`), 0o600))
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM alpine:3.20\n"), 0o600))
-	socket := filepath.Join(t.TempDir(), "docker.sock")
-	listener, err := net.Listen("unix", socket)
+func TestFactoryImageCommandDisplaysClaimedKitNotice(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	assert.NilError(t, exec.Command("git", "-C", root, "init", "-q").Run())
+	assert.NilError(t, exec.Command("git", "-C", root, "remote", "add", "origin", "https://github.com/smeltdev/smelt.git").Run())
+	t.Chdir(root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"backend":"docker"}}`), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
+	kits := &fakeEnsurer{fakeKits: fakeKits{pullErr: errors.New("denied")}}
+	streams, output := capturedStreams()
+	choice, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
 	assert.NilError(t, err)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/_ping"):
-			w.Header().Set("API-Version", "1.47")
-			_, _ = w.Write([]byte("OK"))
-		case strings.HasSuffix(r.URL.Path, "/info"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"ID": "image-report-engine", "ServerVersion": "27.0.0", "OperatingSystem": "Linux", "DockerRootDir": root})
-		case strings.HasSuffix(r.URL.Path, "/images/json"):
-			_, _ = w.Write([]byte(`[]`))
-		case strings.HasSuffix(r.URL.Path, "/volumes"):
-			_, _ = w.Write([]byte(`{"Volumes":[{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}]}`))
-		case strings.Contains(r.URL.Path, "/volumes/"):
-			_, _ = w.Write([]byte(`{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}`))
-		case strings.HasSuffix(r.URL.Path, "/json") && strings.Contains(r.URL.Path, "/images/"):
-			_, _ = w.Write([]byte(`{"Id":"sha256:local"}`))
-		case strings.HasSuffix(r.URL.Path, "/containers/create"):
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"Id":"helper"}`))
-		case strings.HasSuffix(r.URL.Path, "/start"), r.Method == http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
-		case strings.HasSuffix(r.URL.Path, "/wait"):
-			_, _ = w.Write([]byte(`{"StatusCode":0}`))
-		case strings.HasSuffix(r.URL.Path, "/logs"):
-			out := "20000000"
-			w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
-			_, _ = w.Write(append([]byte{1, 0, 0, 0, 0, 0, 0, byte(len(out))}, []byte(out)...))
-		default:
-			// Stop subsequent kit/image work; storage output must already exist.
-			http.Error(w, `{"message":"stop image work"}`, http.StatusInternalServerError)
+	assert.Assert(t, choice.Notice != "")
+	output.Reset()
+	_, err = kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, output.String(), "", "automatic notice was already claimed")
+
+	stop := errors.New("stop before verification")
+	previous := buildImage
+	t.Cleanup(func() { buildImage = previous })
+	called := false
+	buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+		called = true
+		plan, err := b.toolchainPlan(root)
+		if err != nil {
+			return builtImage{}, err
 		}
-	}))
-	server.Listener.Close()
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-	t.Setenv("DOCKER_HOST", "unix://"+socket)
-	t.Setenv("DOCKER_API_VERSION", "1.47")
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	var output bytes.Buffer
-	streams := discardStreams()
-	streams.Out = &output
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_, _ = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})
-	assert.Assert(t, strings.Contains(output.String(), "smelt-cache-abcdef123456"), output.String())
-	assert.Assert(t, strings.Contains(output.String(), "20.48 GB"), output.String())
-	assert.Assert(t, strings.Contains(output.String(), "3.00 GB"), output.String())
+		built, err := ensureSandboxImage(ctx, streams, root, b, plan, kits)
+		if err != nil {
+			return builtImage{}, err
+		}
+		return built, stop
+	}
+	cmd := newFactoryImageCmd()
+	cmd.SetContext(t.Context())
+	cmd.SetOut(streams.Out)
+	cmd.SetErr(streams.Err)
+	cmd.SetArgs(nil)
+	err = cmd.Execute()
+	assert.ErrorIs(t, err, stop)
+	assert.Assert(t, called)
+	assert.Assert(t, strings.Contains(output.String(), choice.Notice), output.String())
+}
+
+// localKitEnsurer offers an existing local kit as well as source builds.
+type localKitEnsurer struct{ fakeEnsurer }
+
+func (*localKitEnsurer) LocalKit(context.Context, string) (string, error) {
+	return "sha256:cached", nil
+}
+
+func TestFactoryImageCommandForcesKitRebuildWithLocalKit(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	assert.NilError(t, exec.Command("git", "-C", root, "init", "-q").Run())
+	assert.NilError(t, exec.Command("git", "-C", root, "remote", "add", "origin", "https://github.com/smeltdev/smelt.git").Run())
+	t.Chdir(root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"backend":"docker"}}`), 0o644))
+
+	for _, force := range []bool{false, true} {
+		name := "reuse local kit"
+		if force {
+			name = "force source rebuild"
+		}
+		t.Run(name, func(t *testing.T) {
+			kits := &localKitEnsurer{}
+			stop := errors.New("stop before verification")
+			previous := buildImage
+			t.Cleanup(func() { buildImage = previous })
+			called := false
+			buildImage = func(ctx context.Context, streams iostream.Streams, root string, b imageBuild) (builtImage, error) {
+				called = true
+				assert.Equal(t, b.KitFromSource, force)
+				plan, err := b.toolchainPlan(root)
+				assert.NilError(t, err)
+				built, err := ensureSandboxImage(ctx, streams, root, b, plan, kits)
+				assert.NilError(t, err)
+				return built, stop
+			}
+			streams, _ := capturedStreams()
+			cmd := newFactoryImageCmd()
+			cmd.SetContext(t.Context())
+			cmd.SetOut(streams.Out)
+			cmd.SetErr(streams.Err)
+			args := []string{}
+			if force {
+				args = append(args, "--kit-from-source")
+			}
+			cmd.SetArgs(args)
+			assert.ErrorIs(t, cmd.Execute(), stop)
+			assert.Assert(t, called)
+			if force {
+				assert.Equal(t, kits.built, 1)
+				assert.Assert(t, strings.Contains(kits.plan.Context.Content, "COPY --from=sha256:built"))
+			} else {
+				assert.Equal(t, kits.built, 0)
+				assert.Assert(t, strings.Contains(kits.plan.Context.Content, "COPY --from=sha256:cached"))
+			}
+		})
+	}
 }

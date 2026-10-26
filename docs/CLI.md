@@ -241,7 +241,7 @@ smelt
 │       --sandbox-dockerfile <path> # Build the toolchain from a Dockerfile anywhere on this machine; the repo is still the build context (never repaired or regenerated)
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
-│       --kit-from-source           # Build the agent kit image from kit/ here instead of pulling the published one
+│       --kit-from-source           # Force rebuilding the agent kit from embedded sources
 │       --update-kit                # Retired: prints a notice and does nothing (smelt adds the kit itself)
 │       --yes                       # Retired with --update-kit; does nothing
 │
@@ -534,46 +534,6 @@ smelt
   `GOCACHE`, `GOMODCACHE`, `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at `/tmp/smelt-cache-<uid>` in the
   container for that member's commands, so the run goes on, with a cold cache. The CircleCI backend is
   unaffected.
-- **Cache limits and disk safety (Docker only).** `factory.cache` accepts the old boolean or
-  `{"enabled":true,"maxGB":10}`. `maxGB` caps each volume independently; `factory.minFreeGB`
-  defaults to 10 too. Both use decimal GB and must be positive. Before mounting a workload,
-  smelt measures each volume with `du` in a throwaway container, at most hourly, with successful
-  measurements persisted by engine and volume identity. Processes coordinate maintenance and mounting.
-  A recreated volume is measured again. Above its cap, the home cache runs `go clean -cache`,
-  `uv cache prune`, and `golangci-lint cache clean` against explicit paths in that order, stopping
-  when the target is reached, then evicts remaining entries by access time (ties by path) to 70%
-  of the cap. Module volumes use access-time eviction only. Missing cache tools are reported;
-  trimming requires Python 3, `du` and a shell in the workload image. Symlinks are never followed
-  outside the cache, and mount roots are retained. Measured bytes freed are logged. Trimming
-  refuses volumes held by another container; stop its runs before retrying.
-  Hourly pre-mount maintenance is not a live quota: an active build can exceed the cap or fill a disk.
-- `factory clean --caches [--project <12-character project hash>]` removes all recognized factory
-  caches, or exactly the selected project's, including legacy names. Singular `--cache` retains
-  current-project selection. Both support `--yes` and `--dry-run`, confirmation, and non-forced
-  Docker volume removal; attached volumes are refused. They accept no run arguments or `--force`.
-- `factory image` and `factory doctor` share a storage report: volume size, effective configured cap,
-  measurement age (or explicit unavailable status), endpoint, daemon root, and backing-storage evidence.
-  The current project uses its configured cap; other projects show their last measured policy
-  (or the default when no measurement is available).
-  Before image work or provisioning, smelt checks the project, workspace, Docker filesystem and
-  the host filesystem holding Docker's backing storage. Any measured filesystem below `minFreeGB`
-  refuses startup with `disk almost full: <free> free; run smelt factory clean --caches`.
-  A local Linux engine uses its inspected Docker root. Local Docker Desktop on macOS/Linux uses
-  `settings-store.json` (legacy `settings.json`) and its configured `dataFolder`/`DataFolder` to
-  validate `Docker.raw` or `Docker.qcow2`, resolving symlinks before checking the containing
-  filesystem. Relocated images are honored; smelt never substitutes the project filesystem.
-  Missing, inaccessible, ambiguous or unsupported storage discovery fails closed and names
-  `factory doctor` and the Desktop Disk image location setting. Remote engines and Windows
-  Desktop are unsupported by host storage discovery. Docker's filesystem probe uses
-  `alpine:3.21`, pulling this small helper when absent after the host checks pass. This
-  supports an empty daemon and does not depend on workload images providing a shell.
-  Offline, load that image with `docker load` before retrying.
-  Desktop references: [settings files](https://docs.docker.com/desktop/settings-and-maintenance/settings/),
-  [disk image locations](https://docs.docker.com/desktop/settings-and-maintenance/backup-and-restore/),
-  [legacy settings example](https://github.com/docker/enable-macos-virtualization-framework/blob/main/settings.json).
-- Ordinary factory containers are removed through pool teardown on completion, failure or cancellation;
-  `--keep-sidecars` explicitly retains them. Verification and storage helpers have cancellation-independent,
-  bounded cleanup. Deletion errors can still leave containers behind; this does not sweep unrelated orphans.
 - `factory status --json` lists the implementer's tool calls as `factory.activity`: `{round, tool, detail, outcome, exit_code, error}`, newest last, the latest 500. `outcome` is `ok`, `failed` or `""` when the agent does not say; `exit_code` and `error` (the first line of the output, up to 200 characters) are set for failed calls where the agent reports them (claude and codex).
 - **Where the time went.** At the end of a run `factory build` prints, the run log records and
   `factory status --json` carries (as `factory.timing`, in milliseconds, with the `line`) one line:
@@ -749,10 +709,31 @@ smelt
   user (root or not). The sandbox tag is a hash of the toolchain tag and the kit digest: a new kit changes
   only that tag and rebuilds only stage 2; a toolchain change changes both. This is unconditional: a
   hand-written Dockerfile gets the kit too, and it needs `git`, `bash`, `pkill` and `sha256sum` in the base
-  (the verify step says which is missing). `smelt factory image` pulls the kit by tag, resolves it to a digest
-  and remembers it in `<data dir>/kit-image.json`. Offline, the last digest pulled is used with a visible
-  notice; with none, it fails with code `factory.kit_unavailable` and points at `--kit-from-source`, which
-  builds `kit/` on this machine (needs a smelt source checkout) instead of pulling. `--update-kit` and
+  (the verify step says which is missing). Kit resolution first checks local `smelt-kit:<kit>-<revision>` and `smelt-kit:<kit>` tags,
+  resolving them to immutable image IDs without pulling. Otherwise it pulls the registry tag by digest.
+  If the registry is denied, missing, or offline, smelt automatically builds its embedded `kit/Dockerfile`
+  and `runtime.sh`, tags the result with both local tags, and reuses it on subsequent runs.
+  A provenance notice appears once per image and is recorded on every affected run;
+  explicit `smelt factory image` displays it again. `--kit-from-source` forces an embedded rebuild
+  from any project, retaining Docker layer caching. An explicitly refreshed kit remains selected.
+  If building fails, the last cached kit is a final fallback. Cold offline builds still need cached
+  base images and download dependencies. Forks must publish their own kit or will build locally.
+  After the first kit publish to GHCR, a repository owner must open the package settings
+  and set its visibility to Public, then rerun the release job. Each fork must do the same
+  for its own package or rely on the automatic local source build. The workflow
+  checks visibility and fails until this is done. Repository permission inheritance does not
+  inherit public visibility. GitHub's supported Packages API has no visibility update operation
+  ([visibility settings](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility),
+  [Packages API](https://docs.github.com/en/rest/packages/packages)); visibility is a one-time
+  administrator bootstrap, not an automated release step.
+  Follow-up: implement supported GHCR visibility automation when GitHub provides a
+  documented mechanism. Before replacing the manual bootstrap, verify the operation
+  and its required credentials against GitHub's documentation, exercise it on a
+  newly published private test package, and confirm anonymous pulls succeed. Keep
+  the release visibility check, make the operation idempotent for public packages,
+  and report actionable permission failures. Automatic first-publish visibility is
+  outside the acceptance criteria for the local kit fallback.
+  `--update-kit` and
   `--yes` are retired: they print the same notice every time and do nothing. <a id="updating-the-agent-kit"></a>
   There is nothing to update in `Dockerfile.smelt`: run `smelt factory image`, and delete a leftover kit
   section if you like (`--regenerate` writes a file without one).

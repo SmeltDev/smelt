@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +14,6 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 )
@@ -186,64 +183,4 @@ func TestFactoryListShowsAFinishedRun(t *testing.T) {
 	assert.Equal(t, raw[0]["run_id"], "20261010-100000")
 	assert.Equal(t, raw[0]["state"], "finished")
 	assert.Assert(t, entries[0].WorktreeExists)
-}
-
-func TestCleanCacheSelectionArgs(t *testing.T) {
-	for _, args := range [][]string{{"--project", "abcdef123456"}, {"--cache", "--caches"}, {"--caches", "--force"}, {"--caches", "run"}, {"--caches", "--project", "../bad"}} {
-		cmd := newFactoryCleanCmd()
-		cmd.SetArgs(args)
-		assert.Assert(t, cmd.Execute() != nil)
-	}
-}
-
-func TestCleanCachesSelectionAndAttachedRefusal(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		args    []string
-		names   []string
-		removes int
-		wantErr bool
-	}{
-		{"all dry run", []string{"--caches", "--dry-run"}, []string{"smelt-cache-aaaaaaaaaaaa-1001", "smelt-gomod-bbbbbbbbbbbb", "unrelated"}, 0, false},
-		{"exact project", []string{"--caches", "--project", "aaaaaaaaaaaa", "--yes"}, []string{"smelt-cache-aaaaaaaaaaaa-1001", "smelt-gomod-bbbbbbbbbbbb"}, 1, true},
-		{"all projects refuse attached", []string{"--caches", "--yes"}, []string{"smelt-cache-aaaaaaaaaaaa-1001", "smelt-gomod-bbbbbbbbbbbb"}, 2, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			removed := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				switch {
-				case strings.HasSuffix(r.URL.Path, "/_ping"):
-					w.Header().Set("API-Version", "1.47")
-					_, _ = w.Write([]byte("OK"))
-				case strings.HasSuffix(r.URL.Path, "/info"):
-					_, _ = w.Write([]byte(`{"ID":"engine"}`))
-				case strings.HasSuffix(r.URL.Path, "/volumes"):
-					volumes := make([]map[string]string, 0, len(tc.names))
-					for _, name := range tc.names {
-						volumes = append(volumes, map[string]string{"Name": name})
-					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"Volumes": volumes})
-				case r.Method == http.MethodDelete:
-					removed++
-					assert.Assert(t, r.URL.Query().Get("force") != "1" && r.URL.Query().Get("force") != "true")
-					w.WriteHeader(http.StatusConflict)
-					_, _ = w.Write([]byte(`{"message":"volume is in use"}`))
-				default:
-					http.Error(w, "unexpected request", 500)
-				}
-			}))
-			defer server.Close()
-			t.Setenv("DOCKER_HOST", server.URL)
-			t.Setenv("DOCKER_API_VERSION", "1.47")
-			t.Setenv(brand.Env("DOCKER_WORKROOT"), t.TempDir())
-			out, _, err := runFactoryCleanCmd(t, tc.args...)
-			assert.Equal(t, err != nil, tc.wantErr)
-			assert.Equal(t, removed, tc.removes)
-			if tc.name == "all dry run" {
-				assert.Assert(t, strings.Contains(out, "smelt-gomod-bbbbbbbbbbbb"))
-				assert.Assert(t, !strings.Contains(out, "unrelated"))
-			}
-		})
-	}
 }

@@ -48,6 +48,8 @@ func TestTailKeepsLastLines(t *testing.T) {
 
 // fakeDocker is a daemon that has some images and answers builds with a canned stream.
 type fakeDocker struct {
+	imageIDs map[string]string
+	pulls    []string
 	images   map[string]bool
 	stream   string
 	builds   []build.ImageBuildOptions
@@ -57,19 +59,28 @@ type fakeDocker struct {
 
 func (f *fakeDocker) ImageBuild(_ context.Context, r io.Reader, o build.ImageBuildOptions) (build.ImageBuildResponse, error) {
 	f.builds = append(f.builds, o)
+	if f.imageIDs != nil {
+		for _, tag := range o.Tags {
+			f.imageIDs[tag] = "sha256:built"
+		}
+	}
 	f.context, _ = io.ReadAll(r)
 	f.contexts = append(f.contexts, f.context)
 	return build.ImageBuildResponse{Body: io.NopCloser(strings.NewReader(f.stream))}, nil
 }
 
 func (f *fakeDocker) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
+	if id := f.imageIDs[ref]; id != "" {
+		return image.InspectResponse{ID: id}, nil
+	}
 	if f.images[ref] {
 		return image.InspectResponse{}, nil
 	}
 	return image.InspectResponse{}, errdefs.ErrNotFound
 }
 
-func (f *fakeDocker) ImagePull(context.Context, string, image.PullOptions) (io.ReadCloser, error) {
+func (f *fakeDocker) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
+	f.pulls = append(f.pulls, ref)
 	return nil, errors.New("no network")
 }
 

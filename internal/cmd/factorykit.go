@@ -78,8 +78,9 @@ func noteUpdateKitRetired(streams iostream.Streams) {
 
 // kitSource says where the agent kit image comes from.
 type kitSource struct {
-	Root string
-	// FromSource builds it from Root/kit instead of pulling the published one.
+	Root       string
+	ShowNotice bool
+	// FromSource rebuilds the embedded kit instead of resolving an existing image.
 	FromSource bool
 }
 
@@ -104,19 +105,27 @@ func withAgentKit(ctx context.Context, streams iostream.Streams, kits kitProvide
 // kitImageRef resolves the kit image to copy from, telling the user when it is
 // the one pulled last because the registry could not be reached.
 func kitImageRef(ctx context.Context, streams iostream.Streams, kits kitProvider, src kitSource) (sandboximage.KitChoice, error) {
-	if src.FromSource {
-		ref, err := buildKitFromSource(ctx, streams, kits, src.Root)
-		return sandboximage.KitChoice{Ref: ref, Kit: sandboximage.KitVersion}, err
-	}
 	dir, err := config.AppData()
 	if err != nil {
 		return sandboximage.KitChoice{}, &userError{msg: "Could not find smelt's data directory.", err: err}
 	}
-	choice, err := sandboximage.ResolveKit(ctx, kits, sandboximage.KitStatePath(dir))
+	state := sandboximage.KitStatePath(dir)
+	var choice sandboximage.KitChoice
+	if src.FromSource {
+		choice, err = sandboximage.BuildEmbeddedKit(ctx, kits, state, sandboximage.BuildOptions{
+			LogPath:  kitBuildLog(src.Root),
+			Progress: func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) },
+		}, nil)
+	} else {
+		choice, err = sandboximage.ResolveKit(ctx, kits, state)
+	}
+	if choice.Notice != "" && (sandboximage.ClaimKitNotice(state, choice.Ref) || src.ShowNotice) {
+		streams.ErrPrintln(ui.ErrWarning(choice.Notice))
+	}
 	if errors.Is(err, sandboximage.ErrKitUnavailable) {
 		return sandboximage.KitChoice{}, newUserError("Could not get the selected agent kit image.").
 			withCode("factory.kit_unavailable").
-			withSuggestion("Check the network, or build the kit from smelt's source tree with: smelt factory image --kit-from-source").
+			withSuggestion("Check Docker and the build log, or retry with: smelt factory image --kit-from-source").
 			wrap(err)
 	}
 	if err != nil {
@@ -126,41 +135,6 @@ func kitImageRef(ctx context.Context, streams iostream.Streams, kits kitProvider
 		streams.ErrPrintln(ui.ErrWarning(fmt.Sprintf("Could not pull the agent kit (%v); using the kit pulled last: %s (kit v%d)", choice.PullErr, choice.Ref, choice.Kit)))
 	}
 	return choice, nil
-}
-
-// buildKitFromSource builds the kit image from root/kit and returns its ID.
-func buildKitFromSource(ctx context.Context, streams iostream.Streams, kits kitProvider, root string) (string, error) {
-	kitDir := filepath.Join(root, "kit")
-	if _, err := os.Stat(filepath.Join(kitDir, "Dockerfile")); err != nil {
-		return "", newUserError("--kit-from-source needs kit/Dockerfile in the project, which smelt's own source tree has.").
-			withCode("command.invalid_args").
-			withSuggestion("Run it from a checkout of smelt, or leave the flag out to pull the published kit.").
-			withExitCode(ExitBadArgs).
-			wrap(err)
-	}
-	streams.ErrPrintf("Building the agent kit image %s from %s\n", sandboximage.KitLocalRef(), kitDir)
-	id, err := kits.BuildKit(ctx, kitDir, sandboximage.BuildOptions{
-		LogPath:  kitBuildLog(root),
-		Progress: func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) },
-	})
-	var buildErr *sandboximage.BuildError
-	if errors.As(err, &buildErr) {
-		return "", newUserError("Building the agent kit image failed.").
-			withCode("factory.kit_build_failed").
-			withDetail(buildErr.LogTail).
-			wrap(err)
-	}
-	if err != nil {
-		return "", &userError{msg: "Could not build the agent kit image.", err: err}
-	}
-	dir, err := config.AppData()
-	if err != nil {
-		return "", err
-	}
-	if err := sandboximage.RememberKit(sandboximage.KitStatePath(dir), id); err != nil {
-		return "", fmt.Errorf("remember source-built kit: %w", err)
-	}
-	return id, nil
 }
 
 // kitBuildLog is where the full log of a kit build is kept.

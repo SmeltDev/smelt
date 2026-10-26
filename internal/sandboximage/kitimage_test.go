@@ -260,6 +260,10 @@ func TestPullKitStreamErrorUsesOfflineFallback(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/images/create"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"errorDetail":{"message":"registry unavailable"},"error":"registry unavailable"}` + "\n"))
+		case strings.HasSuffix(r.URL.Path, "/json") && !strings.Contains(r.URL.Path, "cached-kit"):
+			http.Error(w, "missing", http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/build"):
+			http.Error(w, "build unavailable", http.StatusInternalServerError)
 		case strings.HasSuffix(r.URL.Path, "/json"):
 			assert.Equal(t, r.URL.Path, "/v1.47/images/cached-kit/json")
 			w.Header().Set("Content-Type", "application/json")

@@ -678,9 +678,8 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 		wantGoMod bool
 	}{
 		{"default", &config.ProjectConfig{}, true, false},
-		{"custom limits", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &config.FactoryCacheConfig{MaxGB: new(2.5)}, MinFreeGB: new(3.5)}}, true, false},
 		{"go project", &config.ProjectConfig{Environment: &envspec.Environment{Stack: envspec.StackGo}}, true, true},
-		{"cache off", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &config.FactoryCacheConfig{Enabled: &off}}, Environment: &envspec.Environment{Stack: envspec.StackGo}}, false, false},
+		{"cache off", &config.ProjectConfig{Factory: &config.FactoryConfig{Cache: &off}, Environment: &envspec.Environment{Stack: envspec.StackGo}}, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -693,9 +692,6 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 				assert.Equal(t, p.CacheKey, config.ProjectHash(root))
 			}
 			assert.Equal(t, p.GoStack, tt.wantGoMod)
-			assert.Equal(t, p.CacheMaxBytes, tt.cfg.Factory.CacheMaxBytes())
-			assert.Equal(t, p.MinFreeBytes, tt.cfg.Factory.MinFreeBytes())
-			assert.Equal(t, p.ProjectPath, root)
 		})
 	}
 }
@@ -1118,4 +1114,28 @@ func TestSandboxSourcesMatchTheToolchainKinds(t *testing.T) {
 	assert.Equal(t, smeltd.SandboxFromCaller, string(sandboximage.ToolchainCaller))
 	assert.Equal(t, smeltd.SandboxFromConfig, string(sandboximage.ToolchainConfig))
 	assert.Equal(t, smeltd.SandboxFromRepo, string(sandboximage.ToolchainRepo))
+}
+
+func TestKitProvenanceWarnings(t *testing.T) {
+	req := smeltd.FactoryRequest{Sandbox: &smeltd.FactorySandbox{KitNotice: "built locally"}}
+	assert.DeepEqual(t, warnings(req), []string{"built locally"})
+	assert.Equal(t, req.KitWarning, "")
+	req.KitWarning = "old kit"
+	assert.DeepEqual(t, warnings(req), []string{"old kit", "built locally"})
+}
+
+func TestFactorySessionRecordsLocalKitOnEveryRun(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
+	for range 2 {
+		sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag", Sandbox: &smeltd.FactorySandbox{KitNotice: "built locally", Source: smeltd.SandboxFromRepo, Dockerfile: "Dockerfile.smelt", ToolchainTag: "toolchain:1", Kit: "6@sha256:abc"}})
+		assert.NilError(t, err)
+		detail := waitForSessionEnd(t, d, sess.ID)
+		assert.DeepEqual(t, got.Warnings, []string{"built locally"})
+		assert.Assert(t, !detail.Factory.KitOutdated)
+	}
 }
