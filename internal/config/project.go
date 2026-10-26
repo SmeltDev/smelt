@@ -278,7 +278,9 @@ type FactoryConfig struct {
 	FocusedRechecks *bool `json:"focusedRechecks,omitempty"`
 	// Cache keeps the docker backend's build and module caches in volumes that
 	// outlive sidecars. Unset means true.
-	Cache *bool `json:"cache,omitempty"`
+	Cache *FactoryCacheConfig `json:"cache,omitempty"`
+	// MinFreeGB is the required free decimal GB on Docker and host storage.
+	MinFreeGB *float64 `json:"minFreeGB,omitempty"`
 	// Quality tunes the built-in quality check of a run. Unset means the check
 	// is on with its default limits.
 	Quality *QualityConfig `json:"quality,omitempty"`
@@ -429,7 +431,7 @@ func (f *FactoryConfig) QualityEnabled() bool {
 // CacheEnabled reports whether docker sidecars share per-project cache volumes;
 // the default is yes.
 func (f *FactoryConfig) CacheEnabled() bool {
-	return f == nil || f.Cache == nil || *f.Cache
+	return f == nil || f.Cache == nil || f.Cache.Enabled == nil || *f.Cache.Enabled
 }
 
 // PlanEnabled reports whether runs plan before implementing; the default is yes.
@@ -701,6 +703,9 @@ func (f *FactoryConfig) validate() error {
 		}
 	}
 	if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
+		return err
+	}
+	if err := f.validateStorage(); err != nil {
 		return err
 	}
 	if err := f.validateLimits(); err != nil {

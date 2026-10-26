@@ -534,6 +534,46 @@ smelt
   `GOCACHE`, `GOMODCACHE`, `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at `/tmp/smelt-cache-<uid>` in the
   container for that member's commands, so the run goes on, with a cold cache. The CircleCI backend is
   unaffected.
+- **Cache limits and disk safety (Docker only).** `factory.cache` accepts the old boolean or
+  `{"enabled":true,"maxGB":10}`. `maxGB` caps each volume independently; `factory.minFreeGB`
+  defaults to 10 too. Both use decimal GB and must be positive. Before mounting a workload,
+  smelt measures each volume with `du` in a throwaway container, at most hourly, with successful
+  measurements persisted by engine and volume identity. Processes coordinate maintenance and mounting.
+  A recreated volume is measured again. Above its cap, the home cache runs `go clean -cache`,
+  `uv cache prune`, and `golangci-lint cache clean` against explicit paths in that order, stopping
+  when the target is reached, then evicts remaining entries by access time (ties by path) to 70%
+  of the cap. Module volumes use access-time eviction only. Missing cache tools are reported;
+  trimming requires Python 3, `du` and a shell in the workload image. Symlinks are never followed
+  outside the cache, and mount roots are retained. Measured bytes freed are logged. Trimming
+  refuses volumes held by another container; stop its runs before retrying.
+  Hourly pre-mount maintenance is not a live quota: an active build can exceed the cap or fill a disk.
+- `factory clean --caches [--project <12-character project hash>]` removes all recognized factory
+  caches, or exactly the selected project's, including legacy names. Singular `--cache` retains
+  current-project selection. Both support `--yes` and `--dry-run`, confirmation, and non-forced
+  Docker volume removal; attached volumes are refused. They accept no run arguments or `--force`.
+- `factory image` and `factory doctor` share a storage report: volume size, effective configured cap,
+  measurement age (or explicit unavailable status), endpoint, daemon root, and backing-storage evidence.
+  The current project uses its configured cap; other projects show their last measured policy
+  (or the default when no measurement is available).
+  Before image work or provisioning, smelt checks the project, workspace, Docker filesystem and
+  the host filesystem holding Docker's backing storage. Any measured filesystem below `minFreeGB`
+  refuses startup with `disk almost full: <free> free; run smelt factory clean --caches`.
+  A local Linux engine uses its inspected Docker root. Local Docker Desktop on macOS/Linux uses
+  `settings-store.json` (legacy `settings.json`) and its configured `dataFolder`/`DataFolder` to
+  validate `Docker.raw` or `Docker.qcow2`, resolving symlinks before checking the containing
+  filesystem. Relocated images are honored; smelt never substitutes the project filesystem.
+  Missing, inaccessible, ambiguous or unsupported storage discovery fails closed and names
+  `factory doctor` and the Desktop Disk image location setting. Remote engines and Windows
+  Desktop are unsupported by host storage discovery. Docker's filesystem probe uses
+  `alpine:3.21`, pulling this small helper when absent after the host checks pass. This
+  supports an empty daemon and does not depend on workload images providing a shell.
+  Offline, load that image with `docker load` before retrying.
+  Desktop references: [settings files](https://docs.docker.com/desktop/settings-and-maintenance/settings/),
+  [disk image locations](https://docs.docker.com/desktop/settings-and-maintenance/backup-and-restore/),
+  [legacy settings example](https://github.com/docker/enable-macos-virtualization-framework/blob/main/settings.json).
+- Ordinary factory containers are removed through pool teardown on completion, failure or cancellation;
+  `--keep-sidecars` explicitly retains them. Verification and storage helpers have cancellation-independent,
+  bounded cleanup. Deletion errors can still leave containers behind; this does not sweep unrelated orphans.
 - `factory status --json` lists the implementer's tool calls as `factory.activity`: `{round, tool, detail, outcome, exit_code, error}`, newest last, the latest 500. `outcome` is `ok`, `failed` or `""` when the agent does not say; `exit_code` and `error` (the first line of the output, up to 200 characters) are set for failed calls where the agent reports them (claude and codex).
 - **Where the time went.** At the end of a run `factory build` prints, the run log records and
   `factory status --json` carries (as `factory.timing`, in milliseconds, with the `line`) one line:

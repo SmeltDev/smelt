@@ -30,6 +30,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -68,7 +69,8 @@ type Provider struct {
 	cli       client.APIClient
 	baseImage string
 	// workRoot is where per-member workspace directories and snapshots live.
-	workRoot string
+	workRoot    string
+	storageRoot string
 	// ManagedDockerfile is the project's factory.dockerfile, empty when the
 	// project has none. It only changes the hint for a missing local image.
 	ManagedDockerfile string
@@ -77,6 +79,13 @@ type Provider struct {
 	// sidecar starts with the build cache earlier ones filled. It is a short
 	// hash of the project (config.ProjectHash). Empty mounts none.
 	CacheKey string
+	// CacheMaxBytes caps each volume; MinFreeBytes guards every storage filesystem.
+	CacheMaxBytes, MinFreeBytes int64
+	// ProjectPath is the host project filesystem checked before writes.
+	ProjectPath string
+	discovery   *hostDiscovery
+	endpoint    string
+	freeBytes   func(context.Context, string) (int64, error)
 	// GoStack also mounts the Go module cache, for a Go project.
 	GoStack bool
 	// StopGrace is how long a cancelled command gets to exit on SIGTERM before
@@ -136,7 +145,7 @@ func New() (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Provider{cli: cli, baseImage: defaultBaseImage, members: map[string]member{}}
+	b := &Provider{cli: cli, baseImage: defaultBaseImage, members: map[string]member{}, CacheMaxBytes: config.DefaultStorageGB * 1e9, MinFreeBytes: config.DefaultStorageGB * 1e9}
 	if img := os.Getenv(EnvImage); img != "" {
 		b.baseImage = img
 	}
@@ -149,6 +158,11 @@ func New() (*Provider, error) {
 		root = filepath.Join(cache, brand.AppDir, "docker")
 	}
 	b.workRoot = root
+	cache, cacheErr := os.UserCacheDir()
+	if cacheErr != nil {
+		cache = os.TempDir()
+	}
+	b.storageRoot = filepath.Join(cache, brand.AppDir, "docker", "storage")
 	return b, nil
 }
 
@@ -188,6 +202,15 @@ func (b *Provider) hostDir(id string) (string, bool) {
 // a fresh container from that image; a smeltfs snapshot ref restores the
 // snapshot's workspace into the new host directory (and runs the base image).
 func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (sidecar.Instance, error) {
+	if err := b.CheckStorage(ctx); err != nil {
+		return sidecar.Instance{}, err
+	}
+	unlock, err := b.lockCaches(ctx)
+	if err != nil {
+		return sidecar.Instance{}, err
+	}
+	defer unlock()
+
 	if repoPath == "" {
 		return sidecar.Instance{}, errors.New("docker: create needs a repoPath")
 	}
@@ -234,6 +257,10 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	}
 
 	caches := b.cacheLayout(ctx, containerImage)
+	if err := b.maintainCaches(ctx, containerImage, caches); err != nil {
+		_ = os.RemoveAll(hostDir)
+		return sidecar.Instance{}, err
+	}
 	created, err := b.cli.ContainerCreate(ctx, &container.Config{
 		Image:      containerImage,
 		Cmd:        []string{"sleep", "infinity"},
@@ -585,4 +612,11 @@ func randomSuffix() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+func (b *Provider) lockCaches(ctx context.Context) (func(), error) {
+	if b.CacheMaxBytes > 0 && b.CacheKey != "" {
+		return b.storageLock(ctx)
+	}
+	return func() {}, nil
 }
