@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,12 +21,27 @@ func newServer(d *daemon) *http.Server {
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(smeltd.HeaderDraining, strconv.FormatBool(d.sessions.isDraining()))
 		w.Header().Set(smeltd.HeaderRevision, version.Current().Label())
+		w.Header().Set(smeltd.HeaderHandover, strconv.FormatBool(d.handover != nil))
+		w.Header().Set("X-Smelt-Pid", strconv.Itoa(os.Getpid()))
+		w.Header().Set("X-Smelt-Active", strconv.Itoa(d.sessions.activeCount()))
 		// The body carries this daemon's build identity. A daemon predating the
 		// identity answers with an empty body, which reads as a mismatch — which
 		// is right, since that is exactly the daemon a client needs to replace.
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, smeltd.BuildID())
+	})
+	mux.HandleFunc("POST /handover", func(w http.ResponseWriter, r *http.Request) {
+		if d.handover == nil {
+			http.NotFound(w, r)
+			return
+		}
+		result, err := d.handover()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("POST /drain", d.handleDrain)
 	mux.HandleFunc("DELETE /drain", d.handleUndrain)

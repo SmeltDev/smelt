@@ -170,7 +170,8 @@ type sessionStore struct {
 
 	// draining refuses new sessions; it is read and set under mu, the lock add
 	// admits a session under, so a drain cannot race a start.
-	draining bool
+	draining    bool
+	ownerSocket string
 	// onIdle runs when the last active session has ended while draining. Set
 	// before the store is shared and never reassigned.
 	onIdle func(uint64)
@@ -245,7 +246,7 @@ func (s *sessionStore) drain() int {
 func (s *sessionStore) undrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.drainCommitted {
+	if s.drainCommitted || s.ownerSocket != "" {
 		return
 	}
 	s.draining = false
@@ -302,8 +303,15 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining {
-		return nil, nil, &drainingError{active: s.activeLocked()}
+		if s.ownerSocket == "" {
+			return nil, nil, &drainingError{active: s.activeLocked()}
+		}
+		if s.drainCommitted || !s.ownsContinuationLocked(sess) {
+			return nil, nil, &handoverError{}
+		}
+		s.drainGeneration++
 	}
+	sess.Socket = s.ownerSocket
 	active := 0
 	for _, id := range s.byProject[sess.ProjectRoot] {
 		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
@@ -428,4 +436,62 @@ func (s *sessionStore) stopAll() {
 // running.
 func newStages() []smeltd.Stage {
 	return []smeltd.Stage{{ID: smeltd.StageFactoryLoop, State: smeltd.StageRunning}}
+}
+
+// handoverError refuses only starts that have not been admitted.
+type handoverError struct{}
+
+func (*handoverError) Error() string { return "daemon handed over; retry on the main socket" }
+
+func (s *sessionStore) ownsContinuationLocked(sess smeltd.Session) bool {
+	if sess.Factory == nil || sess.Factory.ContinuesRunID == "" {
+		return false
+	}
+	for _, e := range s.sessions {
+		old := e.snapshot()
+		if old.ProjectRoot == sess.ProjectRoot && old.Factory != nil && old.Factory.RunID == sess.Factory.ContinuesRunID {
+			return true
+		}
+	}
+	return false
+}
+
+// handover serializes release and annotation with admission and idle shutdown.
+// release must roll back filesystem changes before returning an error.
+func (s *sessionStore) handover(socket string, release func() error) (smeltd.DrainResponse, error) {
+	s.mu.Lock()
+	if s.ownerSocket != "" {
+		result := smeltd.DrainResponse{Draining: true, Active: s.activeLocked()}
+		s.mu.Unlock()
+		return result, nil
+	}
+	if s.drainCommitted {
+		s.mu.Unlock()
+		return smeltd.DrainResponse{}, fmt.Errorf("daemon shutdown already committed")
+	}
+	if err := release(); err != nil {
+		s.mu.Unlock()
+		return smeltd.DrainResponse{}, err
+	}
+	s.ownerSocket = socket
+	for _, e := range s.sessions {
+		e.mu.Lock()
+		e.s.Socket = socket
+		e.mu.Unlock()
+	}
+	s.draining = true
+	s.drainGeneration++
+	active, generation := s.activeLocked(), s.drainGeneration
+	s.drainRemaining = active
+	s.mu.Unlock()
+	if active == 0 {
+		s.fireIdle(generation)
+	}
+	return smeltd.DrainResponse{Draining: true, Active: active}, nil
+}
+
+func (s *sessionStore) hasHandedOver() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ownerSocket != ""
 }

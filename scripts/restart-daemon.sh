@@ -2,8 +2,9 @@
 # Restart the smelt daemon so the next smelt command starts it from the freshly
 # built binary. A running daemon keeps the code it started with.
 #
-# Without --force the daemon is drained: it takes no new factory runs, lets the
-# active ones finish, then exits (`smelt daemon restart --when-idle`). With
+# Without --force the daemon hands over its main listener: the next command
+# starts the new build while existing runs finish in their original process.
+# Older daemons fall back to draining and waiting (`restart --when-idle`). With
 # --force it is stopped at once, which cancels active runs
 # (`smelt daemon stop --force`).
 #

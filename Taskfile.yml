@@ -7,7 +7,7 @@ vars:
 
 tasks:
   build:
-    desc: Build the smelt binary, then drain the daemon (active factory runs finish, no new ones start) so it restarts from the build
+    desc: Build the smelt binary, then hand over the daemon listener (existing runs finish while new runs use the build)
     cmds:
       - go build -o dist/smelt .
       - ./scripts/restart-daemon.sh

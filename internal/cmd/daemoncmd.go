@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -26,6 +25,8 @@ const drainPollInterval = time.Second
 type daemonControl interface {
 	// Ping reports what the daemon says about itself.
 	Ping() (smeltd.PingInfo, error)
+	Handover() (smeltd.DrainResponse, error)
+	Daemons() ([]smeltd.DaemonStatus, error)
 	// Pid is the daemon's process ID, false when none is running.
 	Pid() (int, bool, error)
 	// Active is the number of factory runs in progress.
@@ -49,8 +50,11 @@ func (localDaemon) Pid() (int, bool, error) {
 	return pid, running, err
 }
 
+func (localDaemon) Handover() (smeltd.DrainResponse, error) { return smeltd.Handover() }
+func (localDaemon) Daemons() ([]smeltd.DaemonStatus, error) { return smeltd.DiscoverDaemons() }
+
 func (localDaemon) Active() (int, error) {
-	sessions, err := smeltd.ListSessions("")
+	sessions, err := smeltd.MainSessions("")
 	if err != nil {
 		return 0, err
 	}
@@ -88,9 +92,8 @@ func newDaemonGroupCmdWith(opts daemonOptions) *cobra.Command {
 		Long: `Inspect and restart the smelt daemon.
 
 A running daemon keeps the code it started with. After upgrading smelt,
-'smelt daemon restart --when-idle' lets it finish its factory runs, refuses new
-ones meanwhile, and exits; the next smelt command starts the daemon from the
-binary now on disk.`,
+'smelt daemon restart --when-idle' releases the main listener while existing
+runs finish on their original daemon. The next command starts the new build.`,
 		RunE: groupRunE,
 	}
 	cmd.AddCommand(newDaemonStatusCmd(opts), newDaemonRestartCmd(opts), newDaemonStopCmd(opts))
@@ -101,21 +104,26 @@ func newDaemonStatusCmd(opts daemonOptions) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   statusCmdName,
-		Short: "Show the daemon's pid, its revision against this binary's, and active runs",
+		Short: "Show all local daemons, their revisions and active runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := requireLocalDaemon("smelt daemon"); err != nil {
 				return err
 			}
-			st, err := readDaemonStatus(opts)
+			statuses, err := opts.Daemon.Daemons()
 			if err != nil {
 				return err
 			}
 			streams := iostream.FromCmd(cmd)
 			if jsonOut {
-				return printDaemonStatusJSON(streams, st)
+				return iostream.PrintJSON(streams.Out, statuses)
 			}
-			streams.Printf("%s", st.text())
+			if len(statuses) == 0 {
+				streams.Println("not running")
+			}
+			for _, st := range statuses {
+				streams.Printf("%s", daemonStatusText(st, opts.Build.Label()))
+			}
 			return nil
 		},
 	}
@@ -130,13 +138,12 @@ func newDaemonRestartCmd(opts daemonOptions) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "restart --when-idle",
-		Short: "Let active runs finish, then restart the daemon on the binary on disk",
-		Long: `Put the daemon in drain mode: it accepts no new factory runs, lets the active
-ones finish, then exits. The next smelt command starts the daemon from the
-binary now on disk. With no active runs it exits at once.
+		Short: "Release the main listener while active runs finish",
+		Long: `Hand over the main listener while active runs finish on their original daemon.
+Returns after ownership is released. The next command starts the new build.
 
-If runs are still active after --timeout, the daemon keeps running and stops
-draining; runs are never killed. The default is to wait as long as it takes.`,
+Older daemons without handover support drain and wait for active runs. For those
+builds, --timeout cancels draining if runs remain; the default waits indefinitely.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !whenIdle {
@@ -152,8 +159,8 @@ draining; runs are never killed. The default is to wait as long as it takes.`,
 			return runDaemonRestart(cmd.Context(), iostream.FromCmd(cmd), opts, timeout)
 		},
 	}
-	cmd.Flags().BoolVar(&whenIdle, "when-idle", false, "Drain: finish active runs, accept no new ones, then restart")
-	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Stop draining and leave the daemon running if runs are still active after this long (default: no limit)")
+	cmd.Flags().BoolVar(&whenIdle, "when-idle", false, "Release the listener while existing runs finish")
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "For legacy daemons, cancel draining if runs remain after this long (default: no limit)")
 	return cmd
 }
 
@@ -176,83 +183,25 @@ cannot be told, because stopping it cancels its runs. --force stops it anyway.`,
 	return cmd
 }
 
-// daemonStatus is what 'daemon status' reports.
-type daemonStatus struct {
-	Running  bool   `json:"running"`
-	Pid      int    `json:"pid,omitempty"`
-	Draining bool   `json:"draining,omitempty"`
-	Active   *int   `json:"active_runs,omitempty"`
-	Revision string `json:"revision,omitempty"`
-	// BinaryRevision is this binary's.
-	BinaryRevision string `json:"binary_revision,omitempty"`
-	Differs        bool   `json:"differs,omitempty"`
-}
-
-// revisionsDiffer reports whether a daemon runs a different build than the
-// binary. A daemon that reports no revision is one that predates the report, so
-// it cannot be shown to match.
+// revisionsDiffer treats an unknown revision as a mismatch.
 func revisionsDiffer(daemonRev, binaryRev string) bool {
 	return daemonRev == "" || daemonRev != binaryRev
 }
 
-func readDaemonStatus(opts daemonOptions) (daemonStatus, error) {
-	info, err := opts.Daemon.Ping()
-	if err != nil {
-		return daemonStatus{}, fmt.Errorf("ask the daemon: %w", err)
-	}
-	if !info.Reachable {
-		return daemonStatus{}, nil
-	}
-	pid, _, err := opts.Daemon.Pid()
-	if err != nil {
-		return daemonStatus{}, fmt.Errorf("read the daemon's pid: %w", err)
-	}
-	st := daemonStatus{
-		Running:        true,
-		Pid:            pid,
-		Draining:       info.Draining,
-		Revision:       info.Revision,
-		BinaryRevision: opts.Build.Label(),
-		Differs:        revisionsDiffer(info.Revision, opts.Build.Label()),
-	}
-	// Active runs are best-effort: a busy daemon that is slow to list them still
-	// has a pid and a revision worth showing.
-	if n, err := opts.Daemon.Active(); err == nil {
-		st.Active = &n
-	}
-	return st, nil
-}
-
-func (st daemonStatus) text() string {
-	if !st.Running {
-		return "not running\n"
-	}
-	out := fmt.Sprintf("running (pid %d)\n", st.Pid)
-	out += fmt.Sprintf("daemon revision:  %s\nbinary revision:  %s\n", orUnknown(st.Revision), orUnknown(st.BinaryRevision))
-	if st.Differs {
-		out += "The daemon runs a different build than this binary; restart it with 'smelt daemon restart --when-idle'.\n"
-	}
+func daemonStatusText(st smeltd.DaemonStatus, binary string) string {
+	state, gap := "running", "  "
 	if st.Draining {
-		out += "draining: finishing active runs, then exiting\n"
+		state, gap = "draining", " "
 	}
-	if st.Active != nil {
-		out += fmt.Sprintf("active runs:      %d\n", *st.Active)
+	out := fmt.Sprintf("%s (pid %d)%srevision %s", state, st.PID, gap, orUnknown(st.Revision))
+	if !revisionsDiffer(st.Revision, binary) {
+		out += " (this binary)"
 	}
-	return out
-}
-
-func printDaemonStatusJSON(streams iostream.Streams, st daemonStatus) error {
-	// differs is always present so a tool need not infer false from absence.
-	doc := struct {
-		daemonStatus
-		Differs bool `json:"differs"`
-	}{st, st.Differs}
-	raw, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode status: %w", err)
+	out += fmt.Sprintf(" · active runs: %d", st.ActiveRuns)
+	if st.Draining {
+		out += " · exits when they finish"
 	}
-	streams.Println(string(raw))
-	return nil
+	return out + "\n"
 }
 
 // drainState is what a poll of a draining daemon means.
@@ -290,6 +239,14 @@ func runDaemonRestart(ctx context.Context, streams iostream.Streams, opts daemon
 	if !info.Reachable {
 		streams.Println("The smelt daemon is not running; the next smelt command starts it from the binary on disk.")
 		return nil
+	}
+	_, err = opts.Daemon.Handover()
+	if err == nil {
+		streams.Println("The daemon released its listener; the next smelt command starts it from the binary on disk. Existing runs finish on their original daemon.")
+		return nil
+	}
+	if !errors.Is(err, smeltd.ErrHandoverUnsupported) {
+		return sessionError(err)
 	}
 	resp, err := opts.Daemon.Drain()
 	if errors.Is(err, smeltd.ErrDrainUnsupported) {

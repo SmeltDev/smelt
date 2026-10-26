@@ -12,6 +12,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,11 +57,14 @@ func longDaemonClient() (*http.Client, error) {
 const (
 	HeaderDraining = "X-Smelt-Draining"
 	HeaderRevision = "X-Smelt-Revision"
+	HeaderHandover = "X-Smelt-Handover"
+	headerTrue     = "true"
 )
 
 // doPingInfo sends a /ping request with the given client and returns what the
 // daemon says about itself.
 func doPingInfo(client *http.Client) PingInfo {
+	defer client.CloseIdleConnections()
 	resp, err := client.Get("http://smeltd/ping")
 	if err != nil {
 		return PingInfo{}
@@ -76,7 +80,8 @@ func doPingInfo(client *http.Client) PingInfo {
 	info := PingInfo{
 		Reachable: true,
 		Revision:  resp.Header.Get(HeaderRevision),
-		Draining:  resp.Header.Get(HeaderDraining) == "true",
+		Draining:  resp.Header.Get(HeaderDraining) == headerTrue,
+		Handover:  resp.Header.Get(HeaderHandover) == headerTrue,
 	}
 	if body, err := io.ReadAll(io.LimitReader(resp.Body, 512)); err == nil {
 		info.BuildID = strings.TrimSpace(string(body))
@@ -661,43 +666,62 @@ func (c *DaemonClient) EnsureRunning() error {
 	if err != nil {
 		return fmt.Errorf("check running: %w", err)
 	}
-	if running {
-		info := pingInfo(sockPath)
-		if info.Reachable {
-			// A draining daemon is on its way out, finishing runs that replacing
-			// it would cancel. Leave it: once it exits the next call launches
-			// the build on disk.
-			if info.Draining || info.BuildID == BuildID() {
-				return nil
-			}
-			// A reachable old daemon may own runs that must finish on its build.
-			// Treat an unreadable list conservatively for the same reason.
-			sessions, listErr := ListSessions("")
-			active := 0
-			for _, session := range sessions {
-				if session.State == SessionRunning {
-					active++
-				}
-			}
-			// A daemon without the session API has no runs to protect.
-			if errors.Is(listErr, ErrNoSessionAPI) {
-				listErr = nil
-			}
-			if listErr != nil || active > 0 {
-				// A daemon too old to drain still serves its runs; it is
-				// replaced by the next command after it ends.
-				_, _ = Drain()
-				c.warnStale(active, listErr)
-				return nil
-			}
-			// A daemon from another build is replaced rather than reused: see
-			// BuildID for why reusing it degrades silently.
-			if stopErr := replaceDaemon(pid, sockPath); stopErr != nil {
-				return fmt.Errorf("replace stale smelt daemon: %w", stopErr)
-			}
-		}
+	if !running {
+		return launch()
+	}
+	info := pingInfo(sockPath)
+	if !info.Reachable {
+		return launch()
+	}
+	// A draining daemon is on its way out, finishing runs that replacing it
+	// would cancel. Leave it: once it exits the next call launches the build
+	// on disk.
+	if info.BuildID == BuildID() || info.Draining && !info.Handover {
+		return nil
+	}
+	return c.replaceStale(pid, sockPath)
+}
+
+// replaceStale deals with a reachable daemon from another build: it hands the
+// main socket over, drains it, or replaces it when it has no runs to protect.
+func (c *DaemonClient) replaceStale(pid int, sockPath string) error {
+	if _, err := Handover(); err == nil {
+		return launch()
+	} else if !errors.Is(err, ErrHandoverUnsupported) {
+		return err
+	}
+	// A reachable old daemon may own runs that must finish on its build. An
+	// unreadable list is treated conservatively for the same reason.
+	sessions, listErr := MainSessions("")
+	active, listErr := activeRuns(sessions, listErr)
+	if listErr != nil || active > 0 {
+		// A daemon too old to drain still serves its runs; it is replaced by
+		// the next command after it ends.
+		_, _ = Drain()
+		c.warnStale(active, listErr)
+		return nil
+	}
+	// A daemon from another build is replaced rather than reused: see BuildID
+	// for why reusing it degrades silently.
+	if stopErr := replaceDaemon(pid, sockPath); stopErr != nil {
+		return fmt.Errorf("replace stale smelt daemon: %w", stopErr)
 	}
 	return launch()
+}
+
+// activeRuns counts running sessions. A daemon without the session API has no
+// runs to protect, so that error is not reported.
+func activeRuns(sessions []Session, listErr error) (int, error) {
+	active := 0
+	for _, session := range sessions {
+		if session.State == SessionRunning {
+			active++
+		}
+	}
+	if errors.Is(listErr, ErrNoSessionAPI) {
+		listErr = nil
+	}
+	return active, listErr
 }
 
 // warnStale tells an interactive user, once, that the daemon is an older build.
@@ -797,4 +821,103 @@ func launchDaemon() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("smelt daemon did not start within 5s; check %s", logPath)
+}
+
+// ErrHandoverUnsupported identifies daemons requiring legacy drain waiting.
+var ErrHandoverUnsupported = errors.New("daemon does not support listener handover")
+
+// Handover releases main ownership while preserving existing runs.
+func Handover() (DrainResponse, error) {
+	var out DrainResponse
+	err := sessionCall(http.MethodPost, "/handover", nil, &out)
+	if errors.Is(err, ErrNoSessionAPI) {
+		return out, ErrHandoverUnsupported
+	}
+	return out, err
+}
+
+// DiscoverDaemons returns main first, then private sockets in deterministic order.
+// Only a confirmed missing listener is removed; slow or inaccessible sockets survive.
+func DiscoverDaemons() ([]DaemonStatus, error) {
+	paths, err := localSockets()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]DaemonStatus, 0)
+	for i, path := range paths {
+		status, ok, err := probeDaemon(path, i == 0)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			result = append(result, status)
+		}
+	}
+	return result, nil
+}
+
+// probeDaemon pings one socket. ok is false when nothing usable listens there;
+// a confirmed-stale private socket is removed on the way.
+func probeDaemon(path string, main bool) (DaemonStatus, bool, error) {
+	before, _ := os.Lstat(path)
+	client := unixClient(path)
+	defer client.CloseIdleConnections()
+	resp, err := client.Get("http://smeltd/ping")
+	if err != nil {
+		classified := classifyDialError(err, path)
+		if !errors.Is(classified, ErrDaemonUnreachable) {
+			return DaemonStatus{}, false, classified
+		}
+		if !main {
+			removeIfStale(path, before)
+		}
+		return DaemonStatus{}, false, nil
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return DaemonStatus{}, false, nil
+	}
+	status := statusFromHeaders(resp.Header, path)
+	if main {
+		fillMainStatus(&status, resp.Header.Get("X-Smelt-Active") == "")
+		return status, true, nil
+	}
+	expected, err := PIDSocketPath(status.PID)
+	return status, err == nil && expected == path, nil
+}
+
+// statusFromHeaders reads the daemon metadata a ping response carries.
+func statusFromHeaders(h http.Header, path string) DaemonStatus {
+	pid, _ := strconv.Atoi(h.Get("X-Smelt-Pid"))
+	active, _ := strconv.Atoi(h.Get("X-Smelt-Active"))
+	return DaemonStatus{PID: pid, Revision: h.Get(HeaderRevision), Draining: h.Get(HeaderDraining) == headerTrue, ActiveRuns: active, Socket: path}
+}
+
+// fillMainStatus covers a main daemon too old to report its pid or active runs
+// in the ping headers.
+func fillMainStatus(status *DaemonStatus, countRuns bool) {
+	if countRuns {
+		if sessions, err := MainSessions(""); err == nil {
+			for _, s := range sessions {
+				if s.Factory != nil && !s.State.Finished() {
+					status.ActiveRuns++
+				}
+			}
+		}
+	}
+	if status.PID == 0 {
+		if p, err := PIDPath(); err == nil {
+			status.PID, _ = ReadPID(p)
+		}
+	}
+}
+
+// removeIfStale removes path when it is still the socket file seen before the
+// failed dial, so a socket a new daemon just bound is never deleted.
+func removeIfStale(path string, before os.FileInfo) {
+	info, err := os.Lstat(path)
+	if err == nil && before != nil && os.SameFile(before, info) && info.Mode()&os.ModeSocket != 0 {
+		_ = os.Remove(path)
+	}
 }

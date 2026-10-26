@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/smeltdev/smelt/internal/brand"
 )
@@ -112,4 +114,51 @@ func TCPRemoteAddr() string {
 // TCP request and clients include it in every request header.
 func TCPToken() string {
 	return os.Getenv(EnvTCPToken)
+}
+
+// PIDSocketPath returns the validated private socket for a handed-over daemon.
+func PIDSocketPath(pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("invalid daemon pid %d", pid)
+	}
+	d, err := daemonDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(d, fmt.Sprintf("smeltd-%d.sock", pid))
+	return path, checkSocketPath(path)
+}
+
+// localSockets lists private sockets in filename order, after the main socket.
+func localSockets() ([]string, error) {
+	main, err := SocketPath()
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{main}
+	entries, err := os.ReadDir(filepath.Dir(main))
+	if os.IsNotExist(err) {
+		return paths, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "smeltd-") || !strings.HasSuffix(name, ".sock") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "smeltd-"), ".sock"))
+		if err != nil {
+			continue
+		}
+		path, err := PIDSocketPath(pid)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Base(path) == name {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }

@@ -2,7 +2,9 @@ package smeltd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -545,4 +547,211 @@ func TestSessionRefusedParsesTheDrainingBody(t *testing.T) {
 	plain := refusalOf(http.StatusServiceUnavailable, "daemon has no credentials")
 	assert.Equal(t, plain.Code, "")
 	assert.Equal(t, plain.Message, "daemon has no credentials")
+}
+
+func TestEnsureRunningHandsOverBeforeReadingSessions(t *testing.T) {
+	handed := false
+	startTestDaemon(t, "old", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/handover" {
+			handed = true
+			_, _ = io.WriteString(w, `{"draining":true,"active":2}`)
+			return
+		}
+		t.Errorf("unexpected request %s", r.URL.Path)
+		http.NotFound(w, r)
+	})
+	launches := stubLaunch(t)
+	assert.NilError(t, EnsureRunning())
+	assert.Assert(t, handed)
+	assert.Equal(t, *launches, 1)
+}
+
+func TestSessionOwnershipRouting(t *testing.T) {
+	dir := socketDir(t)
+	t.Setenv(EnvDir, dir)
+	main, err := SocketPath()
+	assert.NilError(t, err)
+	private, err := PIDSocketPath(os.Getpid())
+	assert.NilError(t, err)
+	var calls []string
+	serve := func(path string, privateOwner bool) {
+		ln, err := net.Listen("unix", path)
+		assert.NilError(t, err)
+		srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/ping" {
+				w.Header().Set("X-Smelt-Pid", fmt.Sprint(os.Getpid()))
+				_, _ = io.WriteString(w, "build")
+				return
+			}
+			if r.Method == http.MethodGet && r.URL.Path == "/factory" {
+				id := "new"
+				if privateOwner {
+					id = "old"
+				}
+				_ = json.NewEncoder(w).Encode(SessionList{Sessions: []Session{{ID: id, ProjectRoot: "/repo", Factory: &FactoryRun{RunID: id}}}})
+				return
+			}
+			if !privateOwner {
+				t.Errorf("owner request reached main: %s", r.URL.Path)
+				http.Error(w, "wrong owner", 500)
+				return
+			}
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch r.URL.Path {
+			case "/factory/old":
+				_ = json.NewEncoder(w).Encode(SessionDetail{Session: Session{ID: "old"}})
+			case "/factory/old/sync":
+				_, _ = io.WriteString(w, `{"base":"main"}`)
+			case "/factory":
+				var req FactoryRequest
+				assert.NilError(t, json.NewDecoder(r.Body).Decode(&req))
+				assert.Equal(t, req.Continue, "old")
+				assert.Equal(t, req.ProjectRoot, "/repo")
+				_, _ = io.WriteString(w, `{"id":"continued"}`)
+			default:
+				w.WriteHeader(http.StatusOK)
+			}
+		})}
+		go func() { _ = srv.Serve(ln) }()
+		t.Cleanup(func() { _ = srv.Close() })
+	}
+	serve(main, false)
+	serve(private, true)
+	sessions, err := ListSessions("/repo")
+	assert.NilError(t, err)
+	assert.Equal(t, len(sessions), 2)
+	detail, err := FetchSession("old")
+	assert.NilError(t, err)
+	assert.Equal(t, detail.ID, "old")
+	assert.NilError(t, CancelSession("old"))
+	_, err = QueueSync("old", "main")
+	assert.NilError(t, err)
+	id, err := StartFactory(FactoryRequest{ProjectRoot: "/repo", Continue: "old"})
+	assert.NilError(t, err)
+	assert.Equal(t, id, "continued")
+	assert.DeepEqual(t, calls, []string{"GET /factory/old", "POST /factory/old/cancel", "POST /factory/old/sync", "POST /factory"})
+}
+
+func TestDiscoverRemovesOnlyConfirmedStaleSockets(t *testing.T) {
+	t.Setenv(EnvDir, socketDir(t))
+	path, err := PIDSocketPath(os.Getpid())
+	assert.NilError(t, err)
+	ln, err := net.Listen("unix", path)
+	assert.NilError(t, err)
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	assert.NilError(t, ln.Close())
+	daemons, err := DiscoverDaemons()
+	assert.NilError(t, err)
+	assert.Equal(t, len(daemons), 0)
+	_, err = os.Lstat(path)
+	assert.Assert(t, os.IsNotExist(err))
+	assert.NilError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
+	_, err = DiscoverDaemons()
+	assert.NilError(t, err)
+	_, err = os.Stat(path)
+	assert.NilError(t, err)
+}
+
+func TestStartFactoryRetriesOnlyHandoverRefusal(t *testing.T) {
+	for _, code := range []string{CodeDaemonHandover, CodeDaemonDraining, "accepted"} {
+		t.Run(code, func(t *testing.T) {
+			calls := 0
+			startTestDaemon(t, BuildID(), func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/factory" {
+					http.NotFound(w, r)
+					return
+				}
+				calls++
+				if calls == 1 && code != "accepted" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": "retry"})
+					return
+				}
+				_, _ = io.WriteString(w, `{"id":"started"}`)
+			})
+			id, err := StartFactory(FactoryRequest{ProjectRoot: "/repo", Prompt: "work"})
+			if code == CodeDaemonDraining {
+				var refused *SessionRefused
+				assert.Assert(t, errors.As(err, &refused))
+				assert.Equal(t, calls, 1)
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, id, "started")
+			want := 1
+			if code == CodeDaemonHandover {
+				want = 2
+			}
+			assert.Equal(t, calls, want)
+		})
+	}
+}
+
+func TestDiscoveryPreservesAnUnresponsivePrivateSocket(t *testing.T) {
+	hangingDaemon(t)
+	main, err := SocketPath()
+	assert.NilError(t, err)
+	private, err := PIDSocketPath(os.Getpid())
+	assert.NilError(t, err)
+	assert.NilError(t, os.Rename(main, private))
+	_, err = DiscoverDaemons()
+	assert.Assert(t, errors.Is(err, ErrDaemonTimeout), "got %v", err)
+	_, err = os.Stat(private)
+	assert.NilError(t, err)
+}
+
+func TestListSessionsIncludesListenerTransferredDuringListing(t *testing.T) {
+	t.Setenv(EnvDir, socketDir(t))
+	main, err := SocketPath()
+	assert.NilError(t, err)
+	private, err := PIDSocketPath(os.Getpid())
+	assert.NilError(t, err)
+	ln, err := net.Listen("unix", main)
+	assert.NilError(t, err)
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	moved := false
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ping" {
+			w.Header().Set("X-Smelt-Pid", fmt.Sprint(os.Getpid()))
+			w.Header().Set("X-Smelt-Active", "1")
+			_, _ = io.WriteString(w, "old")
+			return
+		}
+		if !moved {
+			assert.NilError(t, os.Rename(main, private))
+			moved = true
+		}
+		_ = json.NewEncoder(w).Encode(SessionList{Sessions: []Session{{ID: "old", Socket: private}}})
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	sessions, err := ListSessions("")
+	assert.NilError(t, err)
+	assert.Equal(t, len(sessions), 1)
+	assert.Equal(t, sessions[0].Socket, private)
+}
+
+// A daemon that answers discovery but loses its list response must not make
+// its runs disappear from the merged list or send their mutations elsewhere.
+func TestListSessionsReportsFailedOwnerResponse(t *testing.T) {
+	startTestDaemon(t, BuildID(), func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/factory" {
+			http.NotFound(w, r)
+			return
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	})
+	_, err := ListSessions("")
+	assert.Assert(t, errors.Is(err, ErrDaemonUnavailable), "got %v", err)
+}
+
+func TestDiscoveryReportsUnresponsiveMainSocket(t *testing.T) {
+	hangingDaemon(t)
+	_, err := DiscoverDaemons()
+	assert.Assert(t, errors.Is(err, ErrDaemonTimeout), "got %v", err)
 }
