@@ -369,7 +369,7 @@ func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	var output bytes.Buffer
 	streams := discardStreams()
-	streams.Out = &output
+	streams.Err = &output
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, _ = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})

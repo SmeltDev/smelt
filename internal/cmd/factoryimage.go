@@ -101,7 +101,8 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 		return builtImage{}, &userError{msg: err.Error(), err: err}
 	}
 	report, reportErr := provider.ReportStorage(ctx)
-	printStorageReport(streams.Out, report, reportErr)
+	// stdout carries --json output; the report is progress, so it goes to stderr.
+	printStorageReport(streams.Err, report, reportErr)
 	// Not finding Docker's backing storage is reported above and doesn't stop
 	// the build; CheckStorage already refused if space was measured low.
 	if reportErr != nil && report.HostError == "" {
