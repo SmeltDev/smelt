@@ -557,3 +557,25 @@ func TestConfiguredMinFreeBytes(t *testing.T) {
 	assert.NilError(t, json.Unmarshal([]byte(`{"minFreeGB":3}`), &f))
 	assert.Equal(t, f.MinFreeBytes(), int64(3000000000))
 }
+
+func TestCommandChangedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"all","changed":"check {files} {dirs}"}]}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.Commands[0].Changed, "check {files} {dirs}")
+	assert.NilError(t, SaveProjectConfig(dir, cfg))
+	again, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, again.Commands, cfg.Commands)
+	for _, template := range []string{"check {pkgs}", "check {unknown_1}"} {
+		cfg.Commands[0].Changed = template
+		err := SaveProjectConfig(dir, cfg)
+		assert.ErrorContains(t, err, "supported placeholders are {files} and {dirs}")
+		writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"all","changed":"`+template+`"}]}`)
+		_, err = LoadProjectConfig(dir)
+		assert.ErrorContains(t, err, "supported placeholders are {files} and {dirs}")
+	}
+	cfg.Commands[0].Changed = "echo ${HOME} {a,b} {1..3}; awk '{print $1}'"
+	assert.NilError(t, SaveProjectConfig(dir, cfg))
+}

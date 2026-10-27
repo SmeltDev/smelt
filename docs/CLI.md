@@ -463,6 +463,29 @@ smelt
   the run log). High findings are never downgraded. Downgraded findings are listed under "Low findings" in
   the PR body and commit message, across all rounds. `focusedRechecks: false` restores full reviews every
   round that are only asked to hold back.
+- **Changed-command templates.** A project may add an optional `changed` string next to
+  `run` in a validation command, for example
+  `{"name":"test","run":"go test -race ./...","changed":"go test -race {dirs}","role":"gate"}`.
+  Factory rounds run this variant instead of `run`. Standalone validation keeps using `run`.
+  `{files}` expands to sorted repository-relative Git paths, each shell-quoted.
+  `{dirs}` expands to their sorted distinct directories, each shell-quoted and prefixed
+  with `./`; a file at the repository root contributes `./`. Unknown identifier
+  placeholders such as `{pkgs}` are rejected; shell brace expressions remain available.
+  Paths include all changes since the previous completed check snapshot (the factory
+  baseline in round one), including deletions and both sides of renames. There is no
+  language detection or path filter: docs-only edits also supply paths. Projects own
+  tool-specific filtering and handling of deleted paths. Snapshots include gate edits,
+  so those edits are not attributed to the next implementation round.
+  With no changed paths, the variant produces no check and runs no command.
+  After all gates, reviews, and quality checks allow a round to pass, factory runs the
+  full `run` of every command declaring `changed`, even with no changed paths.
+  Full failures, timeouts, and SARIF ratchet failures fail the round with normal
+  output and feedback; a later candidate-passing round retries the full commands.
+  Both phases count as gate time. Logs and status retain labels such as
+  `test (changed: 3 dirs)` and `test (full)`. Commands without `changed` retain
+  their names and run once per round.
+  `smelt init` does not invent templates. Pilot language packs may provision them
+  through Pilot's `--overlay`; smelt's factory build overlay does not merge project config.
 - **Ratchet gates (`format: "sarif"`).** A gate whose command prints SARIF 2.1.0 fails a factory run only on
   findings the change introduced, so existing debt never blocks a run and no run adds to it, for any linter:
 

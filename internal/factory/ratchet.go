@@ -103,6 +103,12 @@ func (r *Ratchet) warn(msg string) {
 // Check runs c on the sandbox's current tree and judges it by the findings the
 // baseline did not have. The command's exit code is not looked at.
 func (r *Ratchet) Check(ctx context.Context, c config.Command) Check {
+	return r.check(ctx, c, c)
+}
+
+// check collects the selected command while recovering missing baseline findings
+// with the full command, so unchanged files remain part of the baseline.
+func (r *Ratchet) check(ctx context.Context, c, baseline config.Command) Check {
 	timeout := commandTimeout(c)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -119,7 +125,7 @@ func (r *Ratchet) Check(ctx context.Context, c config.Command) Check {
 	case err != nil:
 		return FromCommand(c.Name, id, 0, "", time.Since(start), err)
 	}
-	before, err := r.baseline(ctx, c)
+	before, err := r.baseline(ctx, baseline)
 	if err != nil {
 		return FromCommand(c.Name, id, 0, "", time.Since(start),
 			fmt.Errorf("no baseline findings to compare with: %w", err))

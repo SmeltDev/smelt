@@ -104,3 +104,26 @@ func TestRunValidation(t *testing.T) {
 	assert.Assert(t, strings.Contains(checks[2].Feedback, "timed out after 1s"))
 	assert.Assert(t, checks[2].Duration < 5*time.Second)
 }
+
+func TestWorkspaceChangedPathsBetweenRounds(t *testing.T) {
+	ctx := context.Background()
+	w, dir := newWorkspace(t)
+	writeFile(t, dir, "old", "old")
+	assert.NilError(t, w.commitBaseline(ctx))
+	writeFile(t, dir, "a b\n", "new")
+	assert.NilError(t, os.Rename(filepath.Join(dir, "old"), filepath.Join(dir, "renamed")))
+	first, err := w.tree(ctx)
+	assert.NilError(t, err)
+	paths, err := w.changedPaths(ctx, w.baseline, first)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, paths, []string{"a b\n", "old", "renamed"})
+	writeFile(t, dir, "second", "next")
+	second, err := w.tree(ctx)
+	assert.NilError(t, err)
+	paths, err = w.changedPaths(ctx, first, second)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, paths, []string{"second"})
+	paths, err = w.changedPaths(ctx, second, second)
+	assert.NilError(t, err)
+	assert.Equal(t, len(paths), 0)
+}
