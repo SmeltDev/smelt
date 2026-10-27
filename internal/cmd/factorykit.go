@@ -131,7 +131,9 @@ func kitImageRef(ctx context.Context, streams iostream.Streams, kits kitProvider
 	if err != nil {
 		return sandboximage.KitChoice{}, &userError{msg: "Could not get the agent kit image.", suggestion: suggestionFactoryImage, err: err}
 	}
-	if choice.Offline {
+	if choice.FoundOnDisk {
+		streams.ErrPrintln(ui.ErrWarning(fmt.Sprintf("Could not pull the agent kit (%v); using the kit found on disk: %s (kit v%d)", choice.PullErr, choice.Ref, choice.Kit)))
+	} else if choice.Offline {
 		streams.ErrPrintln(ui.ErrWarning(fmt.Sprintf("Could not pull the agent kit (%v); using the kit pulled last: %s (kit v%d)", choice.PullErr, choice.Ref, choice.Kit)))
 	}
 	return choice, nil

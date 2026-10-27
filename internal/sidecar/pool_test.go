@@ -17,6 +17,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/config/configtest"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/testing/fakes"
 	"github.com/smeltdev/smelt/internal/testing/gitrepo"
@@ -162,7 +163,7 @@ func TestMain(m *testing.M) {
 		_, err := OpenSession(ctx, client, sidecarID, retryOn404)
 		return err
 	}
-	os.Exit(m.Run())
+	os.Exit(configtest.Run(m))
 }
 
 func setupPoolTest(t *testing.T) poolTestEnv {

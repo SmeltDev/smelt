@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -284,4 +285,56 @@ func TestPullKitStreamErrorUsesOfflineFallback(t *testing.T) {
 	assert.Assert(t, choice.Offline)
 	assert.Equal(t, choice.Ref, "cached-kit")
 	assert.ErrorContains(t, choice.PullErr, "registry unavailable")
+}
+
+// labeledPuller is a fakePuller whose local images include some labelled kits.
+type labeledPuller struct {
+	fakePuller
+	docker *fakeDocker
+}
+
+func (l labeledPuller) LabeledKit(ctx context.Context, version int) (string, error) {
+	return NewBuilder(l.docker).LabeledKit(ctx, version)
+}
+
+func TestResolveKitFindsTheLabelledImageWhenTheRecordIsBad(t *testing.T) {
+	kitLabel := func(v int) map[string]string { return map[string]string{LabelKit: strconv.Itoa(v)} }
+	docker := &fakeDocker{labeled: []image.Summary{
+		{ID: "sha256:other", Labels: map[string]string{"x": "y"}, Created: 9},
+		{ID: "sha256:v5", Labels: kitLabel(KitVersion - 1), Created: 8},
+		{ID: "sha256:old", Labels: kitLabel(KitVersion), Created: 1},
+		{ID: "sha256:new", Labels: kitLabel(KitVersion), Created: 2},
+	}}
+	offline := fakePuller{pullErr: errors.New("denied")}
+	for name, record := range map[string]string{
+		"missing":    "",
+		"corrupt":    "{not json",
+		"image gone": `{"kit":6,"ref":"` + KitRegistryRepo + `@sha256:abcd"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := KitStatePath(t.TempDir())
+			if record != "" {
+				assert.NilError(t, os.WriteFile(state, []byte(record), 0o600))
+			}
+			c, err := ResolveKit(t.Context(), labeledPuller{fakePuller: offline, docker: docker}, state)
+			assert.NilError(t, err)
+			assert.Assert(t, c.Offline && c.FoundOnDisk)
+			assert.Equal(t, c.Ref, "sha256:new", "the newest image carrying the label")
+			assert.Equal(t, c.Kit, KitVersion)
+			assert.ErrorContains(t, c.PullErr, "denied")
+			last, ok := readLastKit(state)
+			assert.Assert(t, ok, "record rewritten")
+			assert.Equal(t, last.Ref, "sha256:new")
+			assert.Equal(t, last.Kit, KitVersion)
+		})
+	}
+}
+
+func TestResolveKitWithoutALabelledImageIsUnavailable(t *testing.T) {
+	docker := &fakeDocker{labeled: []image.Summary{{ID: "sha256:v5", Labels: map[string]string{LabelKit: strconv.Itoa(KitVersion - 1)}}}}
+	state := KitStatePath(t.TempDir())
+	_, err := ResolveKit(t.Context(), labeledPuller{fakePuller: fakePuller{pullErr: errors.New("denied")}, docker: docker}, state)
+	assert.Check(t, errors.Is(err, ErrKitUnavailable))
+	_, err = os.Stat(state)
+	assert.Check(t, os.IsNotExist(err), "nothing recorded")
 }
