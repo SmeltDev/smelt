@@ -20,10 +20,11 @@ import (
 )
 
 // TestRepositorySandboxLive exercises the actual repository toolchain and gates.
-// Run with -timeout 90m: a cold build downloads Go modules and the agent kit.
+// It is opt-in (SMELT_REPOSITORY_SANDBOX_LIVE=1) because a cold build downloads
+// Go modules and the agent kit and runs every gate: run it with -timeout 90m.
 func TestRepositorySandboxLive(t *testing.T) {
-	if testing.Short() || os.Getenv("SMELT_REPOSITORY_SANDBOX_NESTED") == "1" {
-		t.Skip("repository sandbox gates: short mode or already inside this test's sandbox")
+	if testing.Short() || os.Getenv("SMELT_REPOSITORY_SANDBOX_LIVE") != "1" || os.Getenv("SMELT_REPOSITORY_SANDBOX_NESTED") == "1" {
+		t.Skip("repository sandbox gates: opt in with SMELT_REPOSITORY_SANDBOX_LIVE=1 (not in short mode or inside the test's own sandbox)")
 	}
 	b, err := Connect()
 	if err != nil {
