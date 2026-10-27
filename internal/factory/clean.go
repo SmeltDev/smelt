@@ -270,7 +270,7 @@ func (g *group) entry(ctx context.Context, active map[string]bool) RunEntry {
 		}
 	}
 	e.RunID = e.ID()
-	if t, err := time.Parse(runIDLayout, e.ID()); err == nil {
+	if t, err := ParseRunStart(e.ID()); err == nil {
 		e.StartedAt = t.UTC()
 	}
 	if e.Worktree != "" {

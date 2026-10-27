@@ -315,3 +315,15 @@ func TestBuildOverlaySelection(t *testing.T) {
 	_, err := buildSandboxDockerfile("", false, path+"missing")
 	assert.Equal(t, userMsg(err), "Could not read the overlay file "+path+"missing.")
 }
+
+func TestFactoryLogPathSameSecondKeepsSeparateLogs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
+	first, err := factoryLogPath("", true, now)
+	assert.NilError(t, err)
+	second, err := factoryLogPath("", true, now)
+	assert.NilError(t, err)
+	assert.Equal(t, filepath.Base(first), "run-20261002-150405.log")
+	assert.Equal(t, filepath.Base(second), "run-20261002-150405-2.log")
+}

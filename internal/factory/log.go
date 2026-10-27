@@ -1,9 +1,12 @@
 package factory
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +29,35 @@ func DefaultLogPath(runID string) (string, error) {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
 	return filepath.Join(home, brand.HomeDir, "factory", "run-"+runID+".log"), nil
+}
+
+// ReserveDefaultLog creates an empty default log named for now's second and
+// returns its path. A log already there belongs to another run, so the name
+// gets the numeric suffix MintRunID uses (-2, -3, ...); the O_EXCL create keeps
+// two runs from sharing a file.
+func ReserveDefaultLog(now time.Time) (string, error) {
+	base := FormatRunID(now)
+	for n := 1; ; n++ {
+		id := base
+		if n > 1 {
+			id = base + "-" + strconv.Itoa(n)
+		}
+		path, err := DefaultLogPath(id)
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", fmt.Errorf("create log directory: %w", err)
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			return path, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", fmt.Errorf("reserve log %s: %w", path, err)
+		}
+	}
 }
 
 // runLog is a plain-text record of a factory run that outlives it, written for
