@@ -271,7 +271,7 @@ func TestMarkersGateFailsOnlyWhileMarkersRemain(t *testing.T) {
 }
 
 func TestContinuationPromptNamesTheConflictedFiles(t *testing.T) {
-	c := &Continuation{From: Record{Prompt: "add work", BaseBranch: "main", Conflicts: []string{"a.go", "b.go"}}}
+	c := &Continuation{From: Record{Prompt: "add work", PRBase: "main", Conflicts: []string{"a.go", "b.go"}}}
 	p := c.prompt()
 	for _, want := range []string{"merged with `main`", "a.go, b.go", "<<<<<<<", "remove the markers"} {
 		assert.Assert(t, strings.Contains(p, want), "%q missing from %s", want, p)

@@ -168,3 +168,23 @@ func TestStartWorktreeFromARefAnnouncesAndIgnoresTheCheckout(t *testing.T) {
 	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD"), tip)
 	assert.DeepEqual(t, got, []string{"Starting from epic/x (" + tip[:7] + "); your uncommitted changes are not part of this run."})
 }
+
+// startWorktree must say, once, that a stray checkout branch is not the PR's
+// base, and stay quiet on the default branch.
+func TestStartWorktreeSaysWhenTheCheckoutIsNotOnTheDefaultBranch(t *testing.T) {
+	root := originProject(t)
+	gitOutput(t, root, "checkout", "-B", "main")
+	// DefaultBranchIn reads this symref.
+	gitOutput(t, root, "remote", "set-head", "origin", "main")
+	var got []string
+	opts := RunOptions{Root: root, Prompt: "x", Status: func(_ iostream.Level, msg string) { got = append(got, msg) }}
+
+	_, err := startWorktree(context.Background(), opts, "run-1", t.TempDir(), config.CommitAuthor{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(got), 0)
+
+	gitOutput(t, root, "checkout", "-b", "feature/x")
+	_, err = startWorktree(context.Background(), opts, "run-2", t.TempDir(), config.CommitAuthor{})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, []string{"starting from feature/x (not main); the PR will target main"})
+}

@@ -45,6 +45,8 @@ type Record struct {
 	// later; see Worktree. Records from before they were kept lack them.
 	BaseBranch    string `json:"base_branch,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// PRBase is the branch the run's PR targets; see Worktree.
+	PRBase string `json:"pr_base,omitempty"`
 	// From is the ref the run was started from with --from, nil otherwise.
 	From *FromRef `json:"from,omitempty"`
 	// Mode is "integrate" for a run that checked a finished branch against its
@@ -99,7 +101,7 @@ func newRecord(runID, prompt string, wt Worktree) Record {
 	return Record{
 		RunID: runID, Prompt: prompt,
 		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, From: wt.From, UpdatedFrom: wt.UpdatedFrom,
+		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, PRBase: wt.PRBase, From: wt.From, UpdatedFrom: wt.UpdatedFrom,
 	}
 }
 

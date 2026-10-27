@@ -442,7 +442,7 @@ func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
 	defer e.mu.Unlock()
 	f := e.s.Factory
 	f.RunID, f.Worktree, f.Branch, f.Baseline, f.Head = runID, wt.Path, wt.Branch, wt.Baseline, wt.Head
-	f.BaseBranch, f.DefaultBranch = wt.BaseBranch, wt.DefaultBranch
+	f.BaseBranch, f.DefaultBranch, f.PRBase = wt.BaseBranch, wt.DefaultBranch, wt.PRBase
 	if wt.From != nil {
 		f.From = &smeltd.FromRef{Ref: wt.From.Ref, Commit: wt.From.Commit}
 	}

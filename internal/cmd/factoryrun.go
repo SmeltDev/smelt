@@ -363,7 +363,7 @@ func publishableRun(rec factory.Record) (*smeltd.FactoryRun, error) {
 	}
 	f := &smeltd.FactoryRun{
 		Prompt: rec.Prompt, RunID: rec.RunID, Worktree: rec.Worktree, Branch: rec.Branch,
-		Baseline: rec.Baseline, Head: rec.Head, BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch,
+		Baseline: rec.Baseline, Head: rec.Head, BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch, PRBase: rec.PRBase,
 		Result: string(rec.Result), Rounds: rec.Rounds, Committed: true,
 	}
 	if rec.From != nil {

@@ -66,7 +66,7 @@ func publishProject(t *testing.T) (*smeltd.FactoryRun, string) {
 	assert.NilError(t, err)
 	return &smeltd.FactoryRun{
 		Prompt: "add a flag", RunID: "run-1", Worktree: wt.Path, Branch: wt.Branch,
-		BaseBranch: wt.BaseBranch, DefaultBranch: "main",
+		PRBase: wt.PRBase, DefaultBranch: "main",
 		Result: smeltd.ResultPassed, Rounds: 1, Committed: true,
 	}, origin
 }
@@ -124,6 +124,7 @@ func TestPublishRun(t *testing.T) {
 			if tt.wantCreated > 0 {
 				assert.Equal(t, host.created[0].Base, "main")
 				assert.Equal(t, host.created[0].Head, f.Branch)
+				assert.Assert(t, strings.Contains(errOut.String()+out.String(), "Opened PR #9 → main"), errOut.String())
 			}
 		})
 	}

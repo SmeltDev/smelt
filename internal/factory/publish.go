@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/smeltdev/smelt/internal/filecache"
 	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/gitremote"
 )
@@ -134,16 +137,16 @@ func CheckHeadBranch(head, defaultBranch string) error {
 	return nil
 }
 
-// ChooseBase is the branch a PR is opened into: the override, else the branch
-// the run started from when that is a real integration branch, else the
-// default. A run started from a detached HEAD or another factory branch has no
+// ChooseBase is the branch a PR is opened into: the override, else the run's
+// PRBase when that is a real integration branch, else the default. A PRBase
+// that is another factory branch, or that an older run never recorded, has no
 // such branch of its own.
-func ChooseBase(override, runBase, defaultBranch string) string {
+func ChooseBase(override, prBase, defaultBranch string) string {
 	if override != "" {
 		return override
 	}
-	if runBase != "" && !strings.HasPrefix(runBase, branchPrefix) {
-		return runBase
+	if prBase != "" && !strings.HasPrefix(prBase, branchPrefix) {
+		return prBase
 	}
 	return defaultBranch
 }
@@ -169,8 +172,9 @@ type PRHost interface {
 	Create(ctx context.Context, pr PRCreate) (string, error)
 }
 
-// GHHost is a PRHost backed by the GitHub CLI, run in Dir.
-type GHHost struct{ Dir string }
+// GHHost is a PRHost backed by the GitHub CLI, run in Dir. CacheDir, when
+// set, holds the default branch it looked up, per repository.
+type GHHost struct{ Dir, CacheDir string }
 
 // NewGHHost returns a host for the repository at dir, or nil when gh is not
 // on PATH.
@@ -231,6 +235,53 @@ func (h GHHost) Create(ctx context.Context, pr PRCreate) (string, error) {
 	return lines[len(lines)-1], nil
 }
 
+// defaultBranchTTL is how long a looked-up default branch is trusted: renaming
+// a default branch is rare, and a stale answer only costs a wrong PR base until
+// then.
+const defaultBranchTTL = 24 * time.Hour
+
+// DefaultBranch implements DefaultBranchHost with gh repo view, remembering the
+// answer per repository.
+func (h GHHost) DefaultBranch(ctx context.Context) (string, error) {
+	var cache filecache.FileCache[defaultBranchEntry]
+	key := h.Dir
+	if url, err := gitremote.URL(ctx, h.Dir, DefaultRemote); err == nil {
+		key = url
+	}
+	if h.CacheDir != "" {
+		cache = filecache.FileCache[defaultBranchEntry]{Dir: h.CacheDir, MaxAge: defaultBranchTTL}
+		if e, ok := cache.Get(key); ok && e.Branch != "" {
+			return e.Branch, nil
+		}
+	}
+	out, err := h.run(ctx, "repo", "view", "--json", "defaultBranchRef")
+	if err != nil {
+		return "", err
+	}
+	var view struct {
+		DefaultBranchRef struct {
+			Name string `json:"name"`
+		} `json:"defaultBranchRef"`
+	}
+	if err := json.Unmarshal(out, &view); err != nil {
+		return "", fmt.Errorf("read gh's default branch: %w", err)
+	}
+	name := view.DefaultBranchRef.Name
+	if name == "" {
+		return "", errors.New("gh reports no default branch")
+	}
+	if h.CacheDir != "" {
+		// A cache that cannot be written only costs the next lookup.
+		_ = cache.Put(key, defaultBranchEntry{Branch: name})
+	}
+	return name, nil
+}
+
+// defaultBranchEntry is a cached default branch.
+type defaultBranchEntry struct {
+	Branch string `json:"branch"`
+}
+
 // checkRepo fails when gh would act on a different repository than origin,
 // which happens when a remote named upstream outranks origin. A lookup that
 // fails is not a mismatch: gh pr create then reports its own error.
@@ -272,11 +323,11 @@ type Publication struct {
 	Dir    string
 	Remote string
 	Head   string
-	// BaseBranch and DefaultBranch are the run's, see Worktree. Base, when
-	// set, overrides the choice of PR base.
-	BaseBranch, DefaultBranch, Base string
-	Title, Body                     string
-	Draft                           bool
+	// PRBase and DefaultBranch are the run's, see Worktree. Base, when set,
+	// overrides the choice of PR base.
+	PRBase, DefaultBranch, Base string
+	Title, Body                 string
+	Draft                       bool
 	// Host looks up and opens PRs; nil when none is available.
 	Host PRHost
 }
@@ -297,7 +348,7 @@ func (p Publication) Resolve(ctx context.Context) (PublishTarget, error) {
 	if err := CheckHeadBranch(p.Head, p.DefaultBranch); err != nil {
 		return PublishTarget{}, err
 	}
-	base := ChooseBase(p.Base, p.BaseBranch, p.DefaultBranch)
+	base := ChooseBase(p.Base, p.PRBase, p.DefaultBranch)
 	if p.Base == "" && base != p.DefaultBranch && !p.onRemote(ctx, base) {
 		// A local feature branch the remote has never seen cannot be a PR's base.
 		base = p.DefaultBranch
@@ -381,6 +432,15 @@ func (p Publication) CompareURL(ctx context.Context, t PublishTarget) string {
 		return ""
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s?expand=1", org, repo, t.Base, p.Head)
+}
+
+// PRNumber is the number in a PR's URL, 0 when the URL does not end in one.
+func PRNumber(url string) int {
+	n, err := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // PRTitle is the PR's default title when a run kept no notes: the request's
