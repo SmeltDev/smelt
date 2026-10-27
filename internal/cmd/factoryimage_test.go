@@ -287,7 +287,9 @@ func TestOverlayBuildUsesCallerDockerfile(t *testing.T) {
 	assert.Equal(t, entries[0].Name(), "go.mod")
 }
 
-func TestImageStorageDiscoveryRefusesBeforeImageWork(t *testing.T) {
+// A Docker whose backing storage can't be found (here: no Desktop settings in a
+// temp home) is not refused: the build goes on to the image work.
+func TestImageStorageDiscoveryFailureDoesNotBlockImageWork(t *testing.T) {
 	root := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
 	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{}`), 0o600))
@@ -312,9 +314,10 @@ func TestImageStorageDiscoveryRefusesBeforeImageWork(t *testing.T) {
 	t.Setenv("DOCKER_HOST", server.URL)
 	t.Setenv("DOCKER_API_VERSION", "1.47")
 	_, err := buildSandboxImage(context.Background(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"})
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
-	assert.Equal(t, imageWork, 0)
+	if err != nil {
+		assert.Assert(t, !strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
+	}
+	assert.Assert(t, imageWork > 0)
 }
 
 func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
