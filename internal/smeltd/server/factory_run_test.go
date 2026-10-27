@@ -68,7 +68,8 @@ func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions
 		}
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "bugs", SidecarID: "sc-2", State: review.StateDone, Duration: time.Second})
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "style", SidecarID: "sc-3", State: review.StateDone, Duration: time.Second})
-		opts.OnCheck(factory.Check{Name: "test", Kind: factory.KindValidate, Status: factory.StatusPassed, SidecarID: "sc-1", Duration: 2 * time.Second})
+		opts.OnCheck(factory.Check{Name: "test (changed: 3 dirs)", Kind: factory.KindValidate, Status: factory.StatusPassed, SidecarID: "sc-1", Duration: 2 * time.Second})
+		opts.OnCheck(factory.Check{Name: "test (full)", Kind: factory.KindValidate, Status: factory.StatusFailed, SidecarID: "sc-1", Output: "full failed"})
 		opts.OnCheck(factory.Check{Name: "lint", Kind: factory.KindValidate, Status: factory.StatusFailed, SidecarID: "sc-1", Output: "main.go:3: unused"})
 
 		bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
@@ -134,7 +135,8 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		State: smeltd.ImplementApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
 	})
 	assert.DeepEqual(t, round.Checks, []smeltd.RoundCheck{
-		{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
+		{Name: "test (changed: 3 dirs)", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
+		{Name: "test (full)", Status: "failed", SidecarID: "sc-1", Output: "full failed"},
 		{Name: "lint", Status: "failed", SidecarID: "sc-1", Output: "main.go:3: unused"},
 	})
 	assert.Equal(t, round.Findings, 1)

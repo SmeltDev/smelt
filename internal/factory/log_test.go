@@ -330,3 +330,14 @@ func TestLogRecordsSyncDroppedWhenRunEnds(t *testing.T) {
 	lg.close(Report{}, nil)
 	assert.Assert(t, strings.Contains(readLog(t, path), "round 1: sync of main dropped: the run ended before the next round"))
 }
+
+func TestLogChangedAndFullVariants(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.check(Check{Name: "test (changed: 3 dirs)", Kind: KindValidate, Status: StatusPassed})
+	lg.check(FromCommand("test (full)", "impl", 1, "full failure output", time.Second, nil))
+	lg.close(Report{}, nil)
+	got := readLog(t, path)
+	for _, want := range []string{"test (changed: 3 dirs)", "test (full)", "full failure output"} {
+		assert.Assert(t, strings.Contains(got, want), got)
+	}
+}

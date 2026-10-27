@@ -82,7 +82,7 @@ func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolE
 
 // runEach runs each command with run, in order, reporting each check as it
 // finishes.
-func runEach(cmds []config.Command, onDone func(Check), run func(config.Command) Check) []Check {
+func runEach[T any](cmds []T, onDone func(Check), run func(T) Check) []Check {
 	checks := make([]Check, 0, len(cmds))
 	for _, c := range cmds {
 		check := run(c)

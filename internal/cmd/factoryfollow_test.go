@@ -151,3 +151,11 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 	)
 	assert.DeepEqual(t, lines, want)
 }
+
+func TestSessionReporterVariantNames(t *testing.T) {
+	var lines []string
+	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
+	rep.reportCheck(smeltd.RoundCheck{Name: "test (changed: 3 dirs)", Status: smeltd.CheckPassed})
+	rep.reportCheck(smeltd.RoundCheck{Name: "test (full)", Status: smeltd.CheckFailed, Output: "full failed"})
+	assert.DeepEqual(t, lines, []string{"  test (changed: 3 dirs) passed in 0s", "  test (full) failed in 0s", "    full failed"})
+}

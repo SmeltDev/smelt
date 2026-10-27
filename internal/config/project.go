@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -105,8 +106,10 @@ const (
 
 // Command is a single validation command.
 type Command struct {
-	Name         string `json:"name"`
-	Run          string `json:"run"`
+	Name string `json:"name"`
+	Run  string `json:"run"`
+	// Changed optionally checks the paths changed in the factory round.
+	Changed      string `json:"changed,omitempty"`
 	Role         string `json:"role,omitempty"`
 	Timeout      int    `json:"timeout,omitempty"`
 	Remote       bool   `json:"remote,omitempty"`
@@ -130,6 +133,16 @@ const FormatSARIF = "sarif"
 
 // validate reports a command whose placement or format settings do not make sense.
 func (c Command) validate() error {
+	for _, loc := range regexp.MustCompile(`{[A-Za-z_][A-Za-z0-9_]*}`).FindAllStringIndex(c.Changed, -1) {
+		// Shell parameter expansions are not command-template placeholders.
+		if loc[0] > 0 && c.Changed[loc[0]-1] == '$' {
+			continue
+		}
+		placeholder := c.Changed[loc[0]:loc[1]]
+		if placeholder != "{files}" && placeholder != "{dirs}" {
+			return fmt.Errorf("command %q: unknown changed placeholder %s; supported placeholders are {files} and {dirs}", c.Name, placeholder)
+		}
+	}
 	if c.Local && c.Remote {
 		return fmt.Errorf("command %q cannot be both local and remote", c.Name)
 	}
