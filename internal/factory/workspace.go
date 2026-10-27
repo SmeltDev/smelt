@@ -130,3 +130,16 @@ const maxDiffOutput = 8 << 20
 func (w *workspace) run(ctx context.Context, script string) (string, error) {
 	return review.RunScript(ctx, w.exec, w.entry, script, maxScriptOutput)
 }
+
+// changedPaths returns Git paths without interpreting whitespace in filenames.
+func (w *workspace) changedPaths(ctx context.Context, from, to string) ([]string, error) {
+	script := "cd " + sidecar.ShellEscape(w.entry.RepoPath) + " && git diff --name-only -z --no-renames --no-ext-diff " + sidecar.ShellEscape(from) + " " + sidecar.ShellEscape(to)
+	out, err := review.RunScript(ctx, w.exec, w.entry, script, maxDiffOutput)
+	if err != nil {
+		return nil, fmt.Errorf("changed paths: %w", err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(out, "\x00"), "\x00"), nil
+}

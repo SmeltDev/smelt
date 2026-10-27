@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -105,8 +106,10 @@ const (
 
 // Command is a single validation command.
 type Command struct {
-	Name         string `json:"name"`
-	Run          string `json:"run"`
+	Name string `json:"name"`
+	Run  string `json:"run"`
+	// Changed optionally checks the paths changed in the factory round.
+	Changed      string `json:"changed,omitempty"`
 	Role         string `json:"role,omitempty"`
 	Timeout      int    `json:"timeout,omitempty"`
 	Remote       bool   `json:"remote,omitempty"`
@@ -130,6 +133,16 @@ const FormatSARIF = "sarif"
 
 // validate reports a command whose placement or format settings do not make sense.
 func (c Command) validate() error {
+	for _, loc := range regexp.MustCompile(`{[A-Za-z_][A-Za-z0-9_]*}`).FindAllStringIndex(c.Changed, -1) {
+		// Shell parameter expansions are not command-template placeholders.
+		if loc[0] > 0 && c.Changed[loc[0]-1] == '$' {
+			continue
+		}
+		placeholder := c.Changed[loc[0]:loc[1]]
+		if placeholder != "{files}" && placeholder != "{dirs}" {
+			return fmt.Errorf("command %q: unknown changed placeholder %s; supported placeholders are {files} and {dirs}", c.Name, placeholder)
+		}
+	}
 	if c.Local && c.Remote {
 		return fmt.Errorf("command %q cannot be both local and remote", c.Name)
 	}
@@ -260,6 +273,10 @@ type FactoryConfig struct {
 	// MaxConcurrent is how many factory runs may be active in the project at
 	// once. 0 means 1.
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// CPUs is how many CPUs each of the project's run containers may use, a
+	// fraction allowed. Unset divides the Docker engine's CPUs among
+	// MaxConcurrent runs, at least 2; 0 means no limit.
+	CPUs *float64 `json:"cpus,omitempty"`
 	// StopGrace is how many seconds a stopped run's commands get to exit on
 	// SIGTERM before they are killed. 0 means DefaultStopGrace.
 	StopGrace int `json:"stopGrace,omitempty"`
@@ -328,6 +345,9 @@ func (f *FactoryConfig) validateLimits() error {
 	}
 	if f.MaxConcurrent < 0 {
 		return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
+	}
+	if f.CPUs != nil && *f.CPUs < 0 {
+		return fmt.Errorf("factory.cpus must not be negative, got %v", *f.CPUs)
 	}
 	if f.StopGrace < 0 {
 		return fmt.Errorf("factory.stopGrace must not be negative, got %d", f.StopGrace)

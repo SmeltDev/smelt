@@ -112,6 +112,9 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 	l.line("info", "run "+runID)
 	l.block("prompt", opts.Prompt)
 	l.line("info", fmt.Sprintf("attempts %d, %d reviewer sidecar(s)", opts.Attempts, opts.Reviewers))
+	if opts.CPUs != "" {
+		l.line("info", opts.CPUs)
+	}
 	names := make([]string, len(opts.Prompts))
 	for i, p := range opts.Prompts {
 		names[i] = p.Name

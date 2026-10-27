@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -136,4 +137,57 @@ func TestSessionStoreEvictionNeverDropsActiveSessions(t *testing.T) {
 	assert.NilError(t, busy)
 	assert.Equal(t, len(store.forProject("/p")), limit+1, "finished runs are kept while the cap allows")
 	assert.Assert(t, store.get(e.snapshot().ID) != nil)
+}
+
+func busyCode(t *testing.T, err error) *busyError {
+	t.Helper()
+	var busy *busyError
+	assert.Assert(t, errors.As(err, &busy), "got %v", err)
+	return busy
+}
+
+func TestSessionStoreMachineLimitCountsEveryProject(t *testing.T) {
+	store := newSessionStore(t.Context())
+	store.limits = MachineLimits{MaxRuns: 3}
+
+	var first *sessionEntry
+	for _, root := range []string{"/work/smelt", "/work/smelt", "/work/smelt-pilot"} {
+		e, _, err := store.add(smeltd.Session{ProjectRoot: root}, 5)
+		assert.NilError(t, err)
+		if first == nil {
+			first = e
+		}
+	}
+
+	for _, root := range []string{"/work/smelt", "/work/smelt-pilot", "/work/other"} {
+		_, _, err := store.add(smeltd.Session{ProjectRoot: root}, 5)
+		busy := busyCode(t, err)
+		assert.Equal(t, busy.code, smeltd.CodeDaemonBusy)
+		assert.Equal(t, busy.Error(), "smelt is running 3 of 3 runs (smelt 2, smelt-pilot 1); try again when one finishes")
+	}
+
+	finish(first, smeltd.SessionDone)
+	_, _, err := store.add(smeltd.Session{ProjectRoot: "/work/other"}, 5)
+	assert.NilError(t, err, "a finished run no longer counts")
+}
+
+func TestSessionStoreMachineLimitComesBeforeProjectLimit(t *testing.T) {
+	store := newSessionStore(t.Context())
+	store.limits = MachineLimits{MaxRuns: 1}
+	_, _, err := store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.NilError(t, err)
+	_, _, err = store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.Equal(t, busyCode(t, err).code, smeltd.CodeDaemonBusy)
+}
+
+func TestSessionStoreProjectLimitRefusalCarriesItsCode(t *testing.T) {
+	store := newSessionStore(t.Context())
+	_, _, err := store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	assert.NilError(t, err)
+	_, _, err = store.add(smeltd.Session{ProjectRoot: "/p"}, 1)
+	busy := busyCode(t, err)
+	assert.Equal(t, busy.code, smeltd.CodeProjectBusy)
+	ae := admissionRefusal(err)
+	assert.Equal(t, ae.status, http.StatusConflict)
+	assert.Equal(t, ae.code, smeltd.CodeProjectBusy)
 }

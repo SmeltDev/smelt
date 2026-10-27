@@ -55,11 +55,39 @@ func newDaemonCmd() *cobra.Command {
 				})
 			}
 
+			review, err := daemonFullReviewConfig(fullRC, rcErr)
+			if err != nil {
+				return err
+			}
 			return server.RunDaemon(cmd.Context(), nil, "", makeValidateRunner(), ghClient,
-				server.WithReview(daemonReviewConfig(fullRC, rcErr)),
+				server.WithReview(review),
 				server.WithClientResolver(resolve))
 		},
 	}
+}
+
+// daemonMachineLimits reads the user's machine-wide run limits, once, at daemon
+// start. An invalid value stops the daemon rather than silently running
+// without the limit the user asked for.
+func daemonMachineLimits() (server.MachineLimits, error) {
+	uc, err := config.Load()
+	if err != nil {
+		return server.MachineLimits{}, fmt.Errorf("read user config: %w", err)
+	}
+	return server.MachineLimits{MaxRuns: uc.Factory.MaxRuns}, nil
+}
+
+// daemonFullReviewConfig is the review config the daemon starts with: the
+// credentials plus the machine limits, which apply even when no credential
+// resolved.
+func daemonFullReviewConfig(rc config.ResolvedConfig, rcErr error) (server.ReviewConfig, error) {
+	limits, err := daemonMachineLimits()
+	if err != nil {
+		return server.ReviewConfig{}, err
+	}
+	cfg := daemonReviewConfig(rc, rcErr)
+	cfg.Limits = limits
+	return cfg, nil
 }
 
 // daemonReviewConfig resolves the credentials factory runs use, once, at daemon

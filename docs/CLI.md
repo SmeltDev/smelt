@@ -463,6 +463,29 @@ smelt
   the run log). High findings are never downgraded. Downgraded findings are listed under "Low findings" in
   the PR body and commit message, across all rounds. `focusedRechecks: false` restores full reviews every
   round that are only asked to hold back.
+- **Changed-command templates.** A project may add an optional `changed` string next to
+  `run` in a validation command, for example
+  `{"name":"test","run":"go test -race ./...","changed":"go test -race {dirs}","role":"gate"}`.
+  Factory rounds run this variant instead of `run`. Standalone validation keeps using `run`.
+  `{files}` expands to sorted repository-relative Git paths, each shell-quoted.
+  `{dirs}` expands to their sorted distinct directories, each shell-quoted and prefixed
+  with `./`; a file at the repository root contributes `./`. Unknown identifier
+  placeholders such as `{pkgs}` are rejected; shell brace expressions remain available.
+  Paths include all changes since the previous completed check snapshot (the factory
+  baseline in round one), including deletions and both sides of renames. There is no
+  language detection or path filter: docs-only edits also supply paths. Projects own
+  tool-specific filtering and handling of deleted paths. Snapshots include gate edits,
+  so those edits are not attributed to the next implementation round.
+  With no changed paths, the variant produces no check and runs no command.
+  After all gates, reviews, and quality checks allow a round to pass, factory runs the
+  full `run` of every command declaring `changed`, even with no changed paths.
+  Full failures, timeouts, and SARIF ratchet failures fail the round with normal
+  output and feedback; a later candidate-passing round retries the full commands.
+  Both phases count as gate time. Logs and status retain labels such as
+  `test (changed: 3 dirs)` and `test (full)`. Commands without `changed` retain
+  their names and run once per round.
+  `smelt init` does not invent templates. Pilot language packs may provision them
+  through Pilot's `--overlay`; smelt's factory build overlay does not merge project config.
 - **Ratchet gates (`format: "sarif"`).** A gate whose command prints SARIF 2.1.0 fails a factory run only on
   findings the change introduced, so existing debt never blocks a run and no run adds to it, for any linter:
 
@@ -613,14 +636,26 @@ smelt
   winding down. On the CircleCI backend the sidecar API has no stop for a running command, so stop
   waits for the current turn to end. A command in an image without `setsid` cannot be signalled and
   runs until the grace has passed and the stream is closed.
+- **`factory.cpus` limits the CPUs each run container may use** (Docker backend; a number, fractions
+  allowed). Unset, the limit is the Docker engine's CPU count divided by `factory.maxConcurrent` runs,
+  at least 2 and never more than the engine has. `0` turns the limit off; negative values are rejected.
+  It applies to the implementer's and every reviewer's container. Commands see it as `SMELT_CPUS`
+  (for example `pytest -n $SMELT_CPUS`), which is not set when there is no limit. The run log's start
+  line and `factory status --json` (`cpus`) show it, such as `cpus 2.0 (8 engine CPUs / 4 runs)`.
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
-  (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)
+  (limit N; raise factory.maxConcurrent)`, with code `project.busy` and exit **75** (retryable). Negative values are rejected. A continued run (`--continue`)
   counts as one active run. Each run has its own worktree and container pool, so runs share no state, but
   each is one implementer container plus one reviewer container per review prompt: cap the reviewers
   with `--reviewers N` when running several at once. `factory status` with no run ID still shows the
   newest run; `factory list` and `smelt watch` show every active one. Finished runs are kept until
   more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
+- **Machine-wide limits live in the user config** (`~/.config/smelt/config.json`), under `factory`, and
+  are read when the daemon starts (restart it to change them). `factory.maxRuns` is the most unfinished
+  runs across all projects; unset or `0` is no limit. Over it, a start or `--continue` is refused with
+  code `daemon.busy`, exit **75**, and a message naming the holders: `smelt is running 5 of 5 runs
+  (smelt 2, smelt-pilot 3); try again when one finishes`. Negative values are rejected. The machine check comes before the project one.
+  `smelt daemon status` shows `runs: 5 of 5 (machine limit)`, and `--json` has `max_runs`.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
 - **`factory build` needs a coding agent.** `--harness claude|codex|grok`, then `factory.harness`, then (in a

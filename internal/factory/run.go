@@ -129,6 +129,9 @@ type RunOptions struct {
 	// Exec runs commands on the sidecars; review.ClientExec when nil.
 	Exec review.Execer
 
+	// CPUs describes the CPU share each run container gets, for the log; empty
+	// when there is no limit.
+	CPUs string
 	// Warnings are problems with the run's setup that did not stop it; they go
 	// in the log.
 	Warnings []string

@@ -94,6 +94,12 @@ type Provider struct {
 	// ReadyTimeout bounds how long WaitEngine waits for a starting engine.
 	// Zero means defaultReadyTimeout.
 	ReadyTimeout time.Duration
+	// CPUs is factory.cpus: the CPUs each container may use. Nil computes the
+	// default from the engine's CPUs and Runs; a pointer to 0 means no limit.
+	CPUs *float64
+	// Runs is how many runs share the machine, the divisor of the default
+	// CPU share. Zero means 1.
+	Runs int
 
 	// now and sleep are test seams for the readiness wait; nil means real time.
 	now   func() time.Time
@@ -109,6 +115,10 @@ type Provider struct {
 
 	// storageWarned logs the undiscoverable-storage warning once per provider.
 	storageWarned sync.Once
+
+	// engineCPUs caches the engine's CPU count once read; cpuMu guards it.
+	cpuMu      sync.Mutex
+	engineCPUs int
 }
 
 // member is a container the provider created: its bind-mounted workspace on
@@ -264,14 +274,17 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, err
 	}
+	cpus := b.cpuShare(ctx)
 	created, err := b.cli.ContainerCreate(ctx, &container.Config{
 		Image:      containerImage,
 		Cmd:        []string{"sleep", "infinity"},
 		WorkingDir: repoPath,
 		Labels:     map[string]string{label: "1", labelName: name},
+		Env:        cpus.Env(),
 	}, &container.HostConfig{
-		Binds:  []string{hostDir + ":" + repoPath},
-		Mounts: b.cacheMounts(caches),
+		Binds:     []string{hostDir + ":" + repoPath},
+		Mounts:    b.cacheMounts(caches),
+		Resources: container.Resources{NanoCPUs: cpus.NanoCPUs()},
 	}, nil, nil, containerName)
 	if err != nil {
 		_ = os.RemoveAll(hostDir)

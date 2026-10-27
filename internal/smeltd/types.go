@@ -204,6 +204,14 @@ type Snapshot struct {
 // session with. It is also the code the CLI reports, so tools can retry.
 const CodeDaemonDraining = "daemon.draining"
 
+// CodeDaemonBusy is the code of the 503 a daemon answers a new run with when
+// the machine is full: factory.maxRuns runs are going. It is retryable.
+const CodeDaemonBusy = "daemon.busy"
+
+// CodeProjectBusy is the code of the 409 for a project already running
+// factory.maxConcurrent runs. It is retryable.
+const CodeProjectBusy = "project.busy"
+
 // DrainResponse answers POST and DELETE /drain.
 type DrainResponse struct {
 	Draining bool `json:"draining"`
@@ -235,5 +243,7 @@ type DaemonStatus struct {
 	Revision   string `json:"revision"`
 	Draining   bool   `json:"draining"`
 	ActiveRuns int    `json:"active_runs"`
-	Socket     string `json:"socket"`
+	// MaxRuns is the machine-wide limit on active runs; 0 means none.
+	MaxRuns int    `json:"max_runs,omitempty"`
+	Socket  string `json:"socket"`
 }

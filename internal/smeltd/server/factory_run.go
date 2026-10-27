@@ -108,11 +108,23 @@ func factoryTarget(root string, cfg *config.ProjectConfig, req smeltd.FactoryReq
 // uses the CircleCI backend it derives from the daemon's client. It is built
 // when the request arrives so a daemon that cannot reach the Docker socket
 // fails the request rather than the background run.
-func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backend, error) {
+func factoryBackend(name, root string, cfg *config.ProjectConfig, machineRuns int) (sidecar.Backend, error) {
 	if name != smeltd.BackendDocker {
 		return nil, nil
 	}
-	return factory.DockerBackend(root, cfg)
+	return factory.DockerBackend(root, cfg, machineRuns)
+}
+
+// cpusDescription is the CPU share a backend gives run containers, "" when it
+// has none to report.
+func cpusDescription(backend sidecar.Backend) string {
+	d, ok := backend.(interface{ CPUsDescription(context.Context) string })
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return d.CPUsDescription(ctx)
 }
 
 // recordRequest copies what the request says about the run onto its record and
@@ -207,10 +219,12 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
-	backend, err := factoryBackend(req.Backend, ps.root, cfg)
+	backend, err := factoryBackend(req.Backend, ps.root, cfg, d.sessions.limits.MaxRuns)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}
+	cpus := cpusDescription(backend)
+	record.CPUs = cpus
 	author, err := cfg.Factory.CommitAuthor()
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "factory.author: %v", err)
@@ -257,6 +271,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		OrgID:                   orgID,
 		Image:                   image,
 		Backend:                 backend,
+		CPUs:                    cpus,
 		Install:                 imageInstallCommand(req.Backend, cfg),
 		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,
@@ -284,7 +299,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 }
 
 // admissionRefusal maps the session store's refusal to the API's: a draining
-// daemon is a retryable 503 carrying its code, anything else a 409.
+// daemon or a full machine is a retryable 503 carrying its code, a full project
+// a 409 with its code, anything else a 409.
 func admissionRefusal(err error) *apiError {
 	var handover *handoverError
 	if errors.As(err, &handover) {
@@ -293,6 +309,14 @@ func admissionRefusal(err error) *apiError {
 	var drain *drainingError
 	if errors.As(err, &drain) {
 		return &apiError{status: http.StatusServiceUnavailable, msg: drain.Error(), code: smeltd.CodeDaemonDraining, active: drain.active}
+	}
+	var busy *busyError
+	if errors.As(err, &busy) {
+		status := http.StatusConflict
+		if busy.code == smeltd.CodeDaemonBusy {
+			status = http.StatusServiceUnavailable
+		}
+		return &apiError{status: status, msg: busy.Error(), code: busy.code, active: busy.active}
 	}
 	return apiErr(http.StatusConflict, "%s", err)
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,8 +13,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/smeltd/server"
 	"github.com/smeltdev/smelt/internal/version"
 )
 
@@ -330,4 +334,66 @@ func TestDaemonRestartRequesterCancellationLeavesDrainEnabled(t *testing.T) {
 	assert.Assert(t, f.draining && f.reachable)
 	assert.Assert(t, !f.cancelDrain)
 	assert.Equal(t, len(f.stopped), 0)
+}
+
+// A daemon at its machine limit, or a project at its own, refuses a new run
+// with a retryable code and exit 75.
+func TestFactoryBuildAgainstABusyDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		limits server.MachineLimits
+		code   string
+	}{
+		{"machine", server.MachineLimits{MaxRuns: 1}, smeltd.CodeDaemonBusy},
+		{"project", server.MachineLimits{}, smeltd.CodeProjectBusy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factoryProject(t)
+			cfg := fakeFactoryConfig(t, factory.ResultPassed)
+			cfg.Limits = tc.limits
+			cfg.RunFactory = func(ctx context.Context, _ factory.RunOptions) (factory.Report, error) {
+				<-ctx.Done()
+				return factory.Report{}, ctx.Err()
+			}
+			startSessionDaemon(t, cfg)
+
+			root, err := sessionProjectRoot(t.Context())
+			assert.NilError(t, err)
+			_, err = smeltd.StartFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "first"})
+			assert.NilError(t, err)
+
+			_, stderr, err := runFactoryBuildCmd(t, "second")
+			var ue *userError
+			assert.Assert(t, errors.As(err, &ue), "got %v\n%s", err, stderr)
+			assert.Equal(t, ue.ErrorCode(), tc.code)
+			assert.Equal(t, ue.UserExitCode(), 75)
+		})
+	}
+}
+
+func TestDaemonStatusTextShowsTheMachineLimit(t *testing.T) {
+	st := smeltd.DaemonStatus{PID: 7, Revision: "abc", ActiveRuns: 5, MaxRuns: 5}
+	assert.Assert(t, strings.Contains(daemonStatusText(st, "abc"), "runs: 5 of 5 (machine limit)"))
+	st.MaxRuns = 0
+	assert.Assert(t, !strings.Contains(daemonStatusText(st, "abc"), "machine limit"))
+}
+
+// The machine limits in the user config reach the daemon's review config.
+func TestDaemonMachineLimitsComeFromUserConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvXDGConfigHome, dir)
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "smelt"), 0o700))
+	data := `{"factory":{"maxRuns":3}}`
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "smelt", "config.json"), []byte(data), 0o600))
+
+	// The combined builder is what RunE uses; it keeps the limits even when
+	// no credential resolved.
+	cfg, err := daemonFullReviewConfig(config.ResolvedConfig{}, errors.New("no config"))
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.Limits.MaxRuns, 3)
+
+	bad := `{"factory":{"maxRuns":-1}}`
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "smelt", "config.json"), []byte(bad), 0o600))
+	_, err = daemonFullReviewConfig(config.ResolvedConfig{}, nil)
+	assert.ErrorContains(t, err, "maxRuns")
 }

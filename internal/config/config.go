@@ -145,10 +145,29 @@ type UserConfig struct {
 	// Harness holds per-harness preferences, such as harness.claude.usage_probe.
 	Harness HarnessSettings `json:"harness,omitzero"`
 
+	// Factory holds machine-wide limits on factory runs.
+	Factory UserFactory `json:"factory,omitzero"`
+
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
 	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
 	LegacyAPIKey string `json:"apiKey,omitempty"`
+}
+
+// UserFactory is the user's machine-wide factory settings. The limit is off
+// at zero.
+type UserFactory struct {
+	// MaxRuns is the most factory runs active at once on this machine, across
+	// all projects.
+	MaxRuns int `json:"maxRuns,omitempty"`
+}
+
+// Validate refuses values that cannot be limits.
+func (f UserFactory) Validate() error {
+	if f.MaxRuns < 0 {
+		return fmt.Errorf("factory.maxRuns must not be negative, got %d", f.MaxRuns)
+	}
+	return nil
 }
 
 // HarnessSettings are the user's per-harness preferences.
@@ -286,6 +305,9 @@ func Load() (UserConfig, error) {
 		cfg.AnthropicAPIKey = cfg.LegacyAPIKey
 	}
 	cfg.LegacyAPIKey = ""
+	if err := cfg.Factory.Validate(); err != nil {
+		return UserConfig{}, fmt.Errorf("%s: %w", p, err)
+	}
 	return cfg, nil
 }
 

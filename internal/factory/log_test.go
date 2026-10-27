@@ -120,6 +120,13 @@ func TestLogDoesNotSayTheLastRoundsFindingsWereSent(t *testing.T) {
 	assert.Assert(t, strings.HasPrefix(got[2], ":"), got[2])
 }
 
+func TestLogStartNamesTheCPUShare(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.start("20261002-150405", RunOptions{Prompt: "p", Attempts: 2, CPUs: "cpus 2.0 (8 engine CPUs / 4 runs)"}, "p")
+	lg.close(Report{}, nil)
+	assert.Assert(t, strings.Contains(readLog(t, path), "cpus 2.0 (8 engine CPUs / 4 runs)"), readLog(t, path))
+}
+
 func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 	opts := RunOptions{
 		Prompt:   "add a flag",
@@ -322,4 +329,15 @@ func TestLogRecordsSyncDroppedWhenRunEnds(t *testing.T) {
 	reportDroppedSyncs(queue.Close(), 1, lg.event)
 	lg.close(Report{}, nil)
 	assert.Assert(t, strings.Contains(readLog(t, path), "round 1: sync of main dropped: the run ended before the next round"))
+}
+
+func TestLogChangedAndFullVariants(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.check(Check{Name: "test (changed: 3 dirs)", Kind: KindValidate, Status: StatusPassed})
+	lg.check(FromCommand("test (full)", "impl", 1, "full failure output", time.Second, nil))
+	lg.close(Report{}, nil)
+	got := readLog(t, path)
+	for _, want := range []string{"test (changed: 3 dirs)", "test (full)", "full failure output"} {
+		assert.Assert(t, strings.Contains(got, want), got)
+	}
 }

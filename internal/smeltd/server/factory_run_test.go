@@ -68,7 +68,8 @@ func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions
 		}
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "bugs", SidecarID: "sc-2", State: review.StateDone, Duration: time.Second})
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "style", SidecarID: "sc-3", State: review.StateDone, Duration: time.Second})
-		opts.OnCheck(factory.Check{Name: "test", Kind: factory.KindValidate, Status: factory.StatusPassed, SidecarID: "sc-1", Duration: 2 * time.Second})
+		opts.OnCheck(factory.Check{Name: "test (changed: 3 dirs)", Kind: factory.KindValidate, Status: factory.StatusPassed, SidecarID: "sc-1", Duration: 2 * time.Second})
+		opts.OnCheck(factory.Check{Name: "test (full)", Kind: factory.KindValidate, Status: factory.StatusFailed, SidecarID: "sc-1", Output: "full failed"})
 		opts.OnCheck(factory.Check{Name: "lint", Kind: factory.KindValidate, Status: factory.StatusFailed, SidecarID: "sc-1", Output: "main.go:3: unused"})
 
 		bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
@@ -134,7 +135,8 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		State: smeltd.ImplementApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
 	})
 	assert.DeepEqual(t, round.Checks, []smeltd.RoundCheck{
-		{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
+		{Name: "test (changed: 3 dirs)", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
+		{Name: "test (full)", Status: "failed", SidecarID: "sc-1", Output: "full failed"},
 		{Name: "lint", Status: "failed", SidecarID: "sc-1", Output: "main.go:3: unused"},
 	})
 	assert.Equal(t, round.Findings, 1)
@@ -685,7 +687,7 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
-			b, err := factoryBackend(smeltd.BackendDocker, root, tt.cfg)
+			b, err := factoryBackend(smeltd.BackendDocker, root, tt.cfg, 0)
 			assert.NilError(t, err)
 			p := b.(*docker.Provider)
 			assert.Equal(t, p.CacheKey != "", tt.wantKey)
@@ -1142,5 +1144,68 @@ func TestFactorySessionRecordsLocalKitOnEveryRun(t *testing.T) {
 		detail := waitForSessionEnd(t, d, sess.ID)
 		assert.DeepEqual(t, got.Warnings, []string{"built locally"})
 		assert.Assert(t, !detail.Factory.KitOutdated)
+	}
+}
+
+func TestFactoryBackendCarriesTheCPUSettings(t *testing.T) {
+	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{MaxConcurrent: 4, CPUs: new(1.5)}}
+	b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg, 0)
+	assert.NilError(t, err)
+	p := b.(*docker.Provider)
+	assert.Equal(t, p.Runs, 4)
+	assert.Equal(t, *p.CPUs, 1.5)
+
+	b, err = factoryBackend(smeltd.BackendDocker, t.TempDir(), &config.ProjectConfig{}, 0)
+	assert.NilError(t, err)
+	p = b.(*docker.Provider)
+	assert.Equal(t, p.Runs, 1)
+	assert.Assert(t, p.CPUs == nil)
+}
+
+func TestFactoryRunStatusNamesTheCPUShare(t *testing.T) {
+	var got factory.RunOptions
+	d, root := newFactoryDaemon(t, func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return factory.Report{}, nil
+	})
+	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}],"factory":{"cpus":1.5}}`
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendDocker, ProjectRoot: root, Prompt: "x"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	const want = "cpus 1.5 (factory.cpus)"
+	assert.Equal(t, detail.Factory.CPUs, want)
+	assert.Equal(t, got.CPUs, want)
+
+	b, err := json.Marshal(detail)
+	assert.NilError(t, err)
+	var envelope map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(b, &envelope))
+	var status map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(envelope["factory"], &status))
+	assert.Equal(t, string(status["cpus"]), `"`+want+`"`)
+}
+
+// The default CPU share divides the engine by the machine-wide run limit when
+// that is larger than the project's own concurrency.
+func TestFactoryBackendRunsFollowMachineLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		maxConcurrent int
+		machineRuns   int
+		want          int
+	}{
+		{"machine limit, project unset", 0, 4, 4},
+		{"machine limit above project", 2, 4, 4},
+		{"project above machine limit", 6, 4, 6},
+		{"no machine limit", 2, 0, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{MaxConcurrent: tt.maxConcurrent}}
+			b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg, tt.machineRuns)
+			assert.NilError(t, err)
+			assert.Equal(t, b.(*docker.Provider).Runs, tt.want)
+		})
 	}
 }

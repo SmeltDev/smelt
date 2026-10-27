@@ -43,6 +43,8 @@ type ReviewConfig struct {
 	Codex HarnessAuth
 	// Grok is the credential for xAI Grok runs.
 	Grok HarnessAuth
+	// Limits are the user's machine-wide limits, read once at daemon start.
+	Limits MachineLimits
 
 	// The fields below are test seams. Left nil, the daemon talks to the
 	// sandbox through the pool entry's own client.
