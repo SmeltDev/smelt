@@ -497,3 +497,33 @@ func TestFactoryImageCommandForcesKitRebuildWithLocalKit(t *testing.T) {
 		})
 	}
 }
+
+// The kit tests write the last-kit record, and a test that wrote the user's
+// real one broke every factory run on the machine. This puts a record where the
+// real home would be and runs the kit paths with the environment pointed
+// elsewhere.
+func TestKitTestsLeaveTheRealKitRecordAlone(t *testing.T) {
+	realHome := t.TempDir()
+	sentinel := filepath.Join(realHome, ".local", "share", "smelt", "kit-image.json")
+	want := []byte(`{"kit":6,"ref":"` + sandboximage.KitRegistryRepo + `@sha256:real"}`)
+	assert.NilError(t, os.MkdirAll(filepath.Dir(sentinel), 0o755))
+	assert.NilError(t, os.WriteFile(sentinel, want, 0o600))
+
+	temp := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv(config.EnvXDGDataHome, filepath.Join(temp, "data"))
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(temp, "config"))
+	t.Setenv(config.EnvXDGStateHome, filepath.Join(temp, "state"))
+
+	root := t.TempDir()
+	streams, _ := capturedStreams()
+	_, err := kitImageRef(t.Context(), streams, &fakeKits{ref: sandboximage.KitRegistryRepo + "@sha256:abcd"}, kitSource{Root: root})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(sentinel)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), string(want))
+	written, err := os.ReadFile(filepath.Join(temp, "data", "smelt", "kit-image.json"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(written), "sha256:abcd"), string(written))
+}

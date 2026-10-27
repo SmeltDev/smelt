@@ -114,7 +114,11 @@ type fakeKits struct {
 	have     bool
 	built    int
 	buildErr error
+	labeled  string // the local image carrying the kit's version label
 }
+
+// LabeledKit stands in for the daemon's search by version label.
+func (f *fakeKits) LabeledKit(context.Context, int) (string, error) { return f.labeled, nil }
 
 func (f *fakeKits) PullKit(context.Context, string) (string, error) { return f.ref, f.pullErr }
 func (f *fakeKits) Exists(context.Context, string) (bool, error)    { return f.have, nil }
@@ -201,4 +205,15 @@ func TestLocalKitNoticeSuppressionAndExplicitDisplay(t *testing.T) {
 	_, err = kitImageRef(t.Context(), streams, kits, kitSource{Root: root, ShowNotice: true})
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(out.String(), first.Notice))
+}
+
+func TestKitImageRefSaysWhenItFoundTheKitOnDisk(t *testing.T) {
+	root := kitProject(t, "FROM x\n")
+	kits := &fakeKits{pullErr: errors.New("denied"), buildErr: errors.New("cannot build"), labeled: "sha256:ondisk"}
+	streams, out := capturedStreams()
+	choice, err := kitImageRef(t.Context(), streams, kits, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Equal(t, choice.Ref, "sha256:ondisk")
+	assert.Assert(t, strings.Contains(out.String(), "using the kit found on disk: sha256:ondisk"), out.String())
+	assert.Assert(t, !strings.Contains(out.String(), "pulled last"), out.String())
 }

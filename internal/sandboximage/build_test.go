@@ -53,8 +53,9 @@ type fakeDocker struct {
 	images   map[string]bool
 	stream   string
 	builds   []build.ImageBuildOptions
-	context  []byte   // the last build context
-	contexts [][]byte // every build context, in order
+	labeled  []image.Summary // images ImageList knows, with their labels
+	context  []byte          // the last build context
+	contexts [][]byte        // every build context, in order
 }
 
 func (f *fakeDocker) ImageBuild(_ context.Context, r io.Reader, o build.ImageBuildOptions) (build.ImageBuildResponse, error) {
@@ -77,6 +78,23 @@ func (f *fakeDocker) ImageInspect(_ context.Context, ref string, _ ...client.Ima
 		return image.InspectResponse{}, nil
 	}
 	return image.InspectResponse{}, errdefs.ErrNotFound
+}
+
+func (f *fakeDocker) ImageList(_ context.Context, o image.ListOptions) ([]image.Summary, error) {
+	var out []image.Summary
+	for _, img := range f.labeled {
+		match := true
+		for _, l := range o.Filters.Get("label") {
+			k, v, _ := strings.Cut(l, "=")
+			if got, ok := img.Labels[k]; !ok || (v != "" && got != v) {
+				match = false
+			}
+		}
+		if match {
+			out = append(out, img)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeDocker) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {

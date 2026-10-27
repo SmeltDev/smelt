@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 
 	"github.com/smeltdev/smelt/internal/version"
@@ -39,6 +41,9 @@ type KitChoice struct {
 	// PullErr is why.
 	Offline bool
 	PullErr error
+	// FoundOnDisk is set with Offline when no record named a usable image and
+	// the kit was found by its version label among the local images.
+	FoundOnDisk bool
 	// Notice records source build provenance independently of terminal output.
 	Notice string
 }
@@ -108,7 +113,28 @@ func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, 
 			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr, Notice: last.Notice}, nil
 		}
 	}
+	if choice, ok := resolveLabeledKit(ctx, p, statePath, pullErr); ok {
+		return choice, nil
+	}
 	return KitChoice{}, fmt.Errorf("%w: %s: %w", ErrKitUnavailable, tag, pullErr)
+}
+
+// resolveLabeledKit finds a local image labelled with this CLI's kit version,
+// for when the record of the last kit is missing, unreadable or names an image
+// that is gone. It rewrites the record so the next run finds the kit directly.
+func resolveLabeledKit(ctx context.Context, p kitPuller, statePath string, pullErr error) (KitChoice, bool) {
+	labeled, ok := p.(interface {
+		LabeledKit(context.Context, int) (string, error)
+	})
+	if !ok {
+		return KitChoice{}, false
+	}
+	ref, err := labeled.LabeledKit(ctx, KitVersion)
+	if err != nil || ref == "" {
+		return KitChoice{}, false
+	}
+	_ = writeLastKit(statePath, lastKit{Kit: KitVersion, Ref: ref})
+	return KitChoice{Ref: ref, Kit: KitVersion, Offline: true, FoundOnDisk: true, PullErr: pullErr}, true
 }
 
 // resolveLocalKit checks revision-specific and imported version tags in order.
@@ -378,6 +404,27 @@ func ClaimKitNotice(state, ref string) bool {
 func (b *Builder) LocalKit(ctx context.Context, tag string) (string, error) {
 	info, err := b.cli.ImageInspect(ctx, tag)
 	return info.ID, err
+}
+
+// LabeledKit returns the newest local image labelled with the given kit
+// version, or "" when there is none.
+func (b *Builder) LabeledKit(ctx context.Context, version int) (string, error) {
+	want := LabelKit + "=" + strconv.Itoa(version)
+	images, err := b.cli.ImageList(ctx, image.ListOptions{Filters: filters.NewArgs(filters.Arg("label", want))})
+	if err != nil {
+		return "", fmt.Errorf("list kit images: %w", err)
+	}
+	var best image.Summary
+	for _, img := range images {
+		// The daemon's filter also matches a bare key; insist on the value.
+		if img.Labels[LabelKit] != strconv.Itoa(version) {
+			continue
+		}
+		if best.ID == "" || img.Created > best.Created {
+			best = img
+		}
+	}
+	return best.ID, nil
 }
 
 func kitProvenancePath(state, ref string) string {

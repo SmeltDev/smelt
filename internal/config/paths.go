@@ -12,13 +12,30 @@ import (
 
 const appName = brand.AppDir
 
+// pathGuard, when set, sees every smelt data, config or state directory this
+// package resolves. It is a test seam: only configtest sets it, so a test that
+// would touch the user's real smelt files can be caught. Production leaves it nil.
+var pathGuard func(dir string)
+
+// SetPathGuard installs the check pathGuard describes. Test binaries call it
+// through configtest; production code must not.
+func SetPathGuard(guard func(dir string)) { pathGuard = guard }
+
+// guarded reports dir to the guard, if there is one, and returns it.
+func guarded(dir string) string {
+	if pathGuard != nil {
+		pathGuard(dir)
+	}
+	return dir
+}
+
 // AppState returns XDG_STATE_HOME or ~/.local/state.
 func AppState() (string, error) {
 	sh, err := stateHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(sh, appName), nil
+	return guarded(filepath.Join(sh, appName)), nil
 }
 
 // Dir returns the smelt config directory, respecting XDG_CONFIG_HOME.
@@ -27,7 +44,7 @@ func Dir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(ch, appName), nil
+	return guarded(filepath.Join(ch, appName)), nil
 }
 
 // Path returns the full path to config.json.
@@ -45,7 +62,7 @@ func AppData() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dh, appName), nil
+	return guarded(filepath.Join(dh, appName)), nil
 }
 
 // CanonicalProjectRoot returns projectRoot in the spelling everything that keys
