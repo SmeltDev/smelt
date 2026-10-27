@@ -107,16 +107,21 @@ func ResolveKit(ctx context.Context, p kitPuller, statePath string) (KitChoice, 
 	if ctx.Err() != nil {
 		return KitChoice{}, ctx.Err()
 	}
-	last, ok := readLastKit(statePath)
-	if ok {
-		if have, err := p.Exists(ctx, last.Ref); err == nil && have {
-			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr, Notice: last.Notice}, nil
-		}
-	}
-	if choice, ok := resolveLabeledKit(ctx, p, statePath, pullErr); ok {
+	if choice, ok := resolveRememberedKit(ctx, p, statePath, pullErr); ok {
 		return choice, nil
 	}
 	return KitChoice{}, fmt.Errorf("%w: %s: %w", ErrKitUnavailable, tag, pullErr)
+}
+
+// resolveRememberedKit falls back to the last recorded kit if it is still on
+// disk, and otherwise to a local image labelled with this CLI's kit version.
+func resolveRememberedKit(ctx context.Context, p kitPuller, statePath string, pullErr error) (KitChoice, bool) {
+	if last, ok := readLastKit(statePath); ok {
+		if have, err := p.Exists(ctx, last.Ref); err == nil && have {
+			return KitChoice{Ref: last.Ref, Kit: last.Kit, Offline: true, PullErr: pullErr, Notice: last.Notice}, true
+		}
+	}
+	return resolveLabeledKit(ctx, p, statePath, pullErr)
 }
 
 // resolveLabeledKit finds a local image labelled with this CLI's kit version,
