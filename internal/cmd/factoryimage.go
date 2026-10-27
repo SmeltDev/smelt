@@ -97,7 +97,8 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 	provider.ProjectPath = root
 	provider.MinFreeBytes = cfg.Factory.MinFreeBytes()
 	provider.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
-	if err := provider.CheckStorage(ctx); err != nil {
+	guardWarning, err := provider.GuardStorage(ctx)
+	if err != nil {
 		return builtImage{}, &userError{msg: err.Error(), err: err}
 	}
 	report, reportErr := provider.ReportStorage(ctx)
@@ -107,6 +108,9 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 	// the build; CheckStorage already refused if space was measured low.
 	if reportErr != nil && report.HostError == "" {
 		return builtImage{}, &userError{msg: reportErr.Error(), err: reportErr}
+	}
+	if guardWarning != "" {
+		streams.ErrPrintln(guardWarning)
 	}
 	builder, err := sandboximage.Connect()
 	if err != nil {

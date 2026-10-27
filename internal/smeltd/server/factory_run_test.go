@@ -707,10 +707,11 @@ func TestFactoryRecorderStartedRecordsFrom(t *testing.T) {
 	assert.NilError(t, busy)
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 
-	rec.started("run-1", factory.Worktree{Branch: "smelt/x/run-1", BaseBranch: "epic/x", From: &factory.FromRef{Ref: "epic/x", Commit: "abc123"}})
+	rec.started("run-1", factory.Worktree{Branch: "smelt/x/run-1", BaseBranch: "epic/x", PRBase: "epic/x", From: &factory.FromRef{Ref: "epic/x", Commit: "abc123"}})
 
 	f := entry.snapshot().Factory
 	assert.Equal(t, f.BaseBranch, "epic/x")
+	assert.Equal(t, f.PRBase, "epic/x")
 	b, err := json.Marshal(f)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), `"from":{"ref":"epic/x","commit":"abc123"}`), string(b))

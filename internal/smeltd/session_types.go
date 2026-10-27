@@ -305,6 +305,9 @@ type FactoryRun struct {
 	// may be "".
 	BaseBranch    string `json:"base_branch,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// PRBase is the branch the run's PR targets: the --from branch, else
+	// DefaultBranch, whatever branch the run started on.
+	PRBase string `json:"pr_base,omitempty"`
 	// From is the ref the run was started from with --from, absent when it
 	// started from the user's files.
 	From *FromRef `json:"from,omitempty"`

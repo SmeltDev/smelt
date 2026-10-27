@@ -45,7 +45,7 @@ func writeRecord(t *testing.T, root string, rec factory.Record) {
 // waits to be stopped, committing what it did as it ends.
 func blockingFactoryConfig(started chan<- struct{}) func(context.Context, factory.RunOptions) (factory.Report, error) {
 	return func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(os.TempDir(), fmt.Sprintf("wt-%d", os.Getpid())), RunID: "run-1", Prompt: opts.Prompt})
+		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(os.TempDir(), fmt.Sprintf("wt-%d", os.Getpid())), RunID: "run-1", Prompt: opts.Prompt, Host: fakeDefaultBranch("main")})
 		if err != nil {
 			return factory.Report{}, err
 		}

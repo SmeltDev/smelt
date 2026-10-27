@@ -103,7 +103,7 @@ func queueNextRound(streams iostream.Streams, session *smeltd.Session, runID str
 			withoutDetail()
 	}
 	f := session.Factory
-	base := factory.ChooseBase(flags.base, f.BaseBranch, f.DefaultBranch)
+	base := factory.ChooseBase(flags.base, f.PRBase, f.DefaultBranch)
 	if base == "" {
 		return newUserError("Cannot tell which branch to merge: the run recorded no base branch.").
 			withSuggestion("Pass --base BRANCH").withoutDetail()

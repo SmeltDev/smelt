@@ -93,7 +93,7 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 
 	pub := factory.Publication{
 		Dir: f.Worktree, Remote: factory.DefaultRemote, Head: f.Branch,
-		BaseBranch: f.BaseBranch, DefaultBranch: f.DefaultBranch, Base: flags.base,
+		PRBase: f.PRBase, DefaultBranch: f.DefaultBranch, Base: flags.base,
 		Title: flags.title, Body: flags.body, Draft: flags.draft,
 		Host: host,
 	}
@@ -147,6 +147,14 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 	return runPublish(ctx, streams, pub, target, d.Action)
 }
 
+// openedPRLine is the publish line that names the PR and the branch it targets.
+func openedPRLine(url, base string) string {
+	if n := factory.PRNumber(url); n > 0 {
+		return fmt.Sprintf("Opened PR #%d → %s: %s", n, base, url)
+	}
+	return fmt.Sprintf("Opened PR → %s: %s", base, url)
+}
+
 // explainNoPublish says why a run's branch was left local, and how to push it.
 func explainNoPublish(streams iostream.Streams, pub factory.Publication, d factory.PublishDecision, runID string) {
 	if d.Unpassed {
@@ -190,7 +198,7 @@ func runPublish(ctx context.Context, streams iostream.Streams, pub factory.Publi
 	case factory.ActionOpenPR:
 		url, err := pub.OpenPR(ctx, t)
 		if err == nil {
-			status(iostream.LevelDone, "Opened PR: "+url)
+			status(iostream.LevelDone, openedPRLine(url, t.Base))
 			return nil
 		}
 		status(iostream.LevelWarn, fmt.Sprintf("could not open a PR: %v", err))

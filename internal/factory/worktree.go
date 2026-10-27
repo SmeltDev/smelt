@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
@@ -35,6 +36,10 @@ type Worktree struct {
 	// "" when none is recorded. Publishing reads both to pick the PR's base.
 	BaseBranch    string
 	DefaultBranch string
+	// PRBase is the branch the run's PR targets, decided once when the run
+	// starts: the branch --from named (an integrate run's --against), else the
+	// default branch. Starting from a stray checkout branch does not change it.
+	PRBase string
 	// From is the ref the run was started from with --from, nil when it started
 	// from the developer's files. FromWarning is a problem resolving it that
 	// did not stop the run, such as a failed fetch.
@@ -64,6 +69,42 @@ type WorktreeOptions struct {
 	// the tip of From while its baseline is the merge base with Against, so
 	// the branch's own commits are the change under review.
 	Against string
+	// Host, when set, names the repository's default branch; the git remote's
+	// HEAD answers when it is nil or fails.
+	Host DefaultBranchHost
+}
+
+// defaultBranchTimeout bounds the host's answer to the default branch, so a
+// slow network never holds up the start of a run.
+const defaultBranchTimeout = 10 * time.Second
+
+// DefaultBranchHost names a repository's default branch, as the code host
+// records it.
+type DefaultBranchHost interface {
+	DefaultBranch(ctx context.Context) (string, error)
+}
+
+// defaultBranch is the repository's default branch, "" when none is recorded:
+// the host's answer, else the remote HEAD git recorded.
+func (o WorktreeOptions) defaultBranch(ctx context.Context) string {
+	if o.Host != nil {
+		hctx, cancel := context.WithTimeout(ctx, defaultBranchTimeout)
+		defer cancel()
+		if b, err := o.Host.DefaultBranch(hctx); err == nil && b != "" {
+			return b
+		}
+	}
+	// A repository may record no default branch.
+	b, _ := gitutil.DefaultBranchIn(o.Root)
+	return b
+}
+
+// prBase is the branch the run's PR targets; see Worktree.PRBase.
+func prBase(w Worktree) string {
+	if w.From != nil && w.BaseBranch != "" {
+		return w.BaseBranch
+	}
+	return w.DefaultBranch
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
@@ -83,8 +124,8 @@ func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
 	if err != nil {
 		return Worktree{}, err
 	}
-	// A repository may record no default branch.
-	w.DefaultBranch, _ = gitutil.DefaultBranchIn(o.Root)
+	w.DefaultBranch = o.defaultBranch(ctx)
+	w.PRBase = prBase(w)
 	// The guard runs before the worktree exists, so no implementer turn can
 	// ever happen on a branch that must not be published.
 	if err := CheckHeadBranch(w.Branch, w.DefaultBranch); err != nil {

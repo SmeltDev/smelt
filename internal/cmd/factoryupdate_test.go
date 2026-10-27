@@ -47,7 +47,7 @@ func updateProject(t *testing.T, conflict bool) (root, origin string, rec factor
 	runGit(t, root, "commit", "-m", "main moves on")
 	runGit(t, root, "push", "origin", "main")
 	return root, origin, factory.Record{RunID: "run-1", Prompt: "add a flag", Worktree: wt.Path, Branch: wt.Branch,
-		Baseline: wt.Baseline, Head: wt.Head, BaseBranch: "main", DefaultBranch: "main"}
+		Baseline: wt.Baseline, Head: wt.Head, BaseBranch: "main", PRBase: "main", DefaultBranch: "main"}
 }
 
 func TestUpdateRunCleanJSONAndPush(t *testing.T) {
@@ -82,9 +82,11 @@ func TestUpdateRunMovesTheBaselineIntoTheStatus(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(b), `"updated_from":{"branch":"main","commit":"`+tip+`"}`), string(b))
 
 	saved.Result = factory.ResultPassed
+	saved.PRBase = "epic/x"
 	run, err := publishableRun(saved)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, *run.UpdatedFrom, smeltd.UpdatedFrom{Branch: "main", Commit: tip})
+	assert.Equal(t, run.PRBase, "epic/x")
 }
 
 func TestUpdateRunWithConflictsDoesNotPush(t *testing.T) {
