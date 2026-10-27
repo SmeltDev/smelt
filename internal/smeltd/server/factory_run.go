@@ -299,7 +299,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 }
 
 // admissionRefusal maps the session store's refusal to the API's: a draining
-// daemon is a retryable 503 carrying its code, anything else a 409.
+// daemon or a full machine is a retryable 503 carrying its code, a full project
+// a 409 with its code, anything else a 409.
 func admissionRefusal(err error) *apiError {
 	var handover *handoverError
 	if errors.As(err, &handover) {
@@ -308,6 +309,14 @@ func admissionRefusal(err error) *apiError {
 	var drain *drainingError
 	if errors.As(err, &drain) {
 		return &apiError{status: http.StatusServiceUnavailable, msg: drain.Error(), code: smeltd.CodeDaemonDraining, active: drain.active}
+	}
+	var busy *busyError
+	if errors.As(err, &busy) {
+		status := http.StatusConflict
+		if busy.code == smeltd.CodeDaemonBusy {
+			status = http.StatusServiceUnavailable
+		}
+		return &apiError{status: status, msg: busy.Error(), code: busy.code, active: busy.active}
 	}
 	return apiErr(http.StatusConflict, "%s", err)
 }

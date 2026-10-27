@@ -190,6 +190,27 @@ func TestLoad_ValidFile(t *testing.T) {
 	assert.Equal(t, cfg.Model, "claude-test")
 }
 
+func TestLoad_FactoryLimits(t *testing.T) {
+	dir := setupTempConfig(t)
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
+	p := filepath.Join(smeltDir, "config.json")
+
+	assert.NilError(t, os.WriteFile(p, []byte(`{"factory":{"maxRuns":3,"holdOverLoad":1.5}}`), 0o600))
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.Factory.MaxRuns, 3)
+	assert.Equal(t, cfg.Factory.HoldOverLoad, 1.5)
+
+	assert.NilError(t, os.WriteFile(p, []byte(`{"factory":{"maxRuns":-1}}`), 0o600))
+	_, err = Load()
+	assert.ErrorContains(t, err, "factory.maxRuns")
+
+	assert.NilError(t, os.WriteFile(p, []byte(`{"factory":{"holdOverLoad":-0.5}}`), 0o600))
+	_, err = Load()
+	assert.ErrorContains(t, err, "factory.holdOverLoad")
+}
+
 func TestLoad_MigratesLegacyAPIKey(t *testing.T) {
 	dir := setupTempConfig(t)
 	smeltDir := filepath.Join(dir, "smelt")

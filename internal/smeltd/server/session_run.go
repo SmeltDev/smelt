@@ -43,6 +43,8 @@ type ReviewConfig struct {
 	Codex HarnessAuth
 	// Grok is the credential for xAI Grok runs.
 	Grok HarnessAuth
+	// Limits are the user's machine-wide limits, read once at daemon start.
+	Limits MachineLimits
 
 	// The fields below are test seams. Left nil, the daemon talks to the
 	// sandbox through the pool entry's own client.
@@ -50,6 +52,8 @@ type ReviewConfig struct {
 	Stream StreamFunc
 	// RunFactory runs a factory session; factory.Run when nil.
 	RunFactory func(ctx context.Context, opts factory.RunOptions) (factory.Report, error)
+	// Load reads the host's load per CPU; the host's own when nil.
+	Load LoadFunc
 }
 
 // HarnessAuth is the credential one harness runs with.
