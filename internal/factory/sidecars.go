@@ -144,7 +144,9 @@ type Sidecars struct {
 	// SyncBase.
 	Base *BaseSync
 
-	ws workspace
+	ws          workspace
+	commandTree string
+	roundPaths  []string
 	// ratchet runs the SARIF gates; Prepare measures its baseline.
 	ratchet *Ratchet
 	// reviewersReady is set once the reviewers have their dependencies, harness
@@ -246,12 +248,7 @@ func (s *Sidecars) sarifRatchet() *Ratchet {
 // validate runs the round's validation commands on the implementer's sandbox;
 // the ones that print SARIF are judged against the baseline.
 func (s *Sidecars) validate(ctx context.Context) []Check {
-	return runEach(s.Commands, s.OnCheck, func(c config.Command) Check {
-		if c.Format == config.FormatSARIF {
-			return s.sarifRatchet().Check(ctx, c)
-		}
-		return runCommand(ctx, s.Exec, s.Implementer.Entry, c)
-	})
+	return s.runVariants(ctx, changedVariants(s.Commands, s.roundPaths))
 }
 
 // prepareReviewers makes the reviewers ready, once per run: it waits for them
@@ -441,10 +438,45 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 			return nil, err
 		}
 	}
-	if s.GatesFirst && !s.Integrate && len(s.Prompts) > 0 {
-		return s.checkGatesFirst(ctx, round)
+
+	hasChanged := len(fullVariants(s.Commands)) > 0
+	if hasChanged {
+		tree, err := s.ws.tree(ctx)
+		if err != nil {
+			return nil, err
+		}
+		from := s.commandTree
+		if from == "" {
+			from = s.ws.baseline
+		}
+		s.roundPaths, err = s.ws.changedPaths(ctx, from, tree)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return s.checkTogether(ctx, round)
+	var checks []Check
+	var err error
+	if s.GatesFirst && !s.Integrate && len(s.Prompts) > 0 {
+		checks, err = s.checkGatesFirst(ctx, round)
+	} else {
+		checks, err = s.checkTogether(ctx, round)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if hasChanged {
+		if Passed(checks) {
+			start := time.Now()
+			checks = append(checks, s.runVariants(ctx, fullVariants(s.Commands))...)
+			s.gatesTook += time.Since(start)
+		}
+		// Include edits made by gates, so they are not next round's inputs.
+		s.commandTree, err = s.ws.tree(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return checks, nil
 }
 
 // checkGatesFirst runs the validation commands, and the reviews if they all

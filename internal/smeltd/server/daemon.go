@@ -125,6 +125,14 @@ func handoverFunc(d *daemon, owner listenerOwnership) func() (smeltd.DrainRespon
 	}
 }
 
+// newConfiguredSessionStore builds the session store with the machine limits
+// from the review config.
+func newConfiguredSessionStore(ctx context.Context, rc ReviewConfig) *sessionStore {
+	s := newSessionStore(ctx)
+	s.limits = rc.Limits
+	return s
+}
+
 // runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
 // TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
 // a listener to discover a free port.
@@ -195,7 +203,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		prm:      newPRMonitor(ghClient),
 		claims:   newClaimStore(),
 		live:     newLivenessChecker(nil),
-		sessions: newSessionStore(ctx),
+		sessions: newConfiguredSessionStore(ctx, dopts.review),
 		rcfg:     dopts.review,
 	}
 	d.handover = handoverFunc(d, listenerOwnership{socket: sockPath, pid: pidPath, lock: ownership, tcp: tcpLn})

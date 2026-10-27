@@ -24,6 +24,7 @@ func newServer(d *daemon) *http.Server {
 		w.Header().Set(smeltd.HeaderHandover, strconv.FormatBool(d.handover != nil))
 		w.Header().Set("X-Smelt-Pid", strconv.Itoa(os.Getpid()))
 		w.Header().Set("X-Smelt-Active", strconv.Itoa(d.sessions.activeCount()))
+		w.Header().Set(smeltd.HeaderMaxRuns, strconv.Itoa(d.sessions.limits.MaxRuns))
 		// The body carries this daemon's build identity. A daemon predating the
 		// identity answers with an empty body, which reads as a mismatch — which
 		// is right, since that is exactly the daemon a client needs to replace.

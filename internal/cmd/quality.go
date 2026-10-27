@@ -122,7 +122,7 @@ func openContainerMeasurer(ctx context.Context, streams iostream.Streams, root s
 	if err != nil {
 		return nil, nil, err
 	}
-	backend, err := factory.DockerBackend(root, cfg)
+	backend, err := factory.DockerBackend(root, cfg, 0)
 	if err != nil {
 		return nil, nil, dockerUnreachable(err)
 	}

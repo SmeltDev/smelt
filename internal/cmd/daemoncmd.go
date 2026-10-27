@@ -198,6 +198,9 @@ func daemonStatusText(st smeltd.DaemonStatus, binary string) string {
 		out += " (this binary)"
 	}
 	out += fmt.Sprintf(" · active runs: %d", st.ActiveRuns)
+	if st.MaxRuns > 0 {
+		out += fmt.Sprintf(" · runs: %d of %d (machine limit)", st.ActiveRuns, st.MaxRuns)
+	}
 	if st.Draining {
 		out += " · exits when they finish"
 	}
@@ -353,6 +356,16 @@ func checkIdle(d daemonControl) error {
 			withoutDetail()
 	}
 	return nil
+}
+
+// busyError is the refusal of a new run by a daemon whose machine or project
+// limit is full. It is retryable like a draining daemon, so it shares the exit
+// code; the code says which limit it was.
+func busyError(refused *smeltd.SessionRefused) *userError {
+	return newUserError(refused.Message).
+		withCode(refused.Code).
+		withExitCode(ExitTempFail).
+		withoutDetail()
 }
 
 // drainingError is the refusal of a new run by a daemon that is draining. It is

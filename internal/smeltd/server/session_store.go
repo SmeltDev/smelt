@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +182,10 @@ type sessionStore struct {
 	drainGeneration uint64
 	drainCommitted  bool
 	drainRemaining  int
+
+	// limits are the machine-wide limits; the zero value is no limit. Set before
+	// the store is shared and never reassigned.
+	limits MachineLimits
 }
 
 // drainingError is add's refusal while the daemon is draining.
@@ -186,6 +193,46 @@ type drainingError struct{ active int }
 
 func (e *drainingError) Error() string {
 	return fmt.Sprintf("smelt is restarting to finish an upgrade after %d active run(s); try again shortly", e.active)
+}
+
+// busyError is add's retryable refusal when a limit is full. Code says which:
+// smeltd.CodeDaemonBusy for the machine, smeltd.CodeProjectBusy for a project.
+type busyError struct {
+	code   string
+	active int
+	msg    string
+}
+
+func (e *busyError) Error() string { return e.msg }
+
+// MachineLimits are the user's machine-wide limits on new runs; zero is off.
+type MachineLimits struct {
+	// MaxRuns is the most unfinished runs across all projects.
+	MaxRuns int
+}
+
+// admitMachine decides whether the machine has room for one more run. perProject
+// maps a project root to its unfinished runs.
+func admitMachine(l MachineLimits, perProject map[string]int) *busyError {
+	total := 0
+	byName := make(map[string]int)
+	for root, n := range perProject {
+		total += n
+		byName[filepath.Base(root)] += n
+	}
+	if l.MaxRuns <= 0 || total < l.MaxRuns {
+		return nil
+	}
+	names := slices.Sorted(maps.Keys(byName))
+	parts := make([]string, len(names))
+	for i, name := range names {
+		parts[i] = fmt.Sprintf("%s %d", name, byName[name])
+	}
+	return &busyError{
+		code:   smeltd.CodeDaemonBusy,
+		active: total,
+		msg:    fmt.Sprintf("smelt is running %d of %d runs (%s); try again when one finishes", total, l.MaxRuns, strings.Join(parts, ", ")),
+	}
 }
 
 func newSessionStore(parent context.Context) *sessionStore {
@@ -312,14 +359,16 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 		s.drainGeneration++
 	}
 	sess.Socket = s.ownerSocket
-	active := 0
-	for _, id := range s.byProject[sess.ProjectRoot] {
-		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
-			active++
-		}
+	perProject := s.unfinishedLocked()
+	if busy := admitMachine(s.limits, perProject); busy != nil {
+		return nil, nil, busy
 	}
-	if active >= limit {
-		return nil, nil, fmt.Errorf("project already has %d active run(s) (limit %d; raise factory.maxConcurrent)", active, limit)
+	if active := perProject[sess.ProjectRoot]; active >= limit {
+		return nil, nil, &busyError{
+			code:   smeltd.CodeProjectBusy,
+			active: active,
+			msg:    fmt.Sprintf("project already has %d active run(s) (limit %d; raise factory.maxConcurrent)", active, limit),
+		}
 	}
 	sess.ID = uuid.NewString()
 	sess.State = smeltd.SessionRunning
@@ -335,6 +384,20 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot, retainedSessions(limit))
 	return entry, ctx, nil
+}
+
+// unfinishedLocked counts the sessions that have not reached a final state, by
+// project root.
+func (s *sessionStore) unfinishedLocked() map[string]int {
+	counts := make(map[string]int)
+	for root, ids := range s.byProject {
+		for _, id := range ids {
+			if e := s.sessions[id]; e != nil && !e.snapshot().State.Finished() {
+				counts[root]++
+			}
+		}
+	}
+	return counts
 }
 
 // evictLocked drops the oldest finished sessions until the project is within

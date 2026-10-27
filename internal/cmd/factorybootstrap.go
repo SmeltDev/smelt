@@ -363,7 +363,7 @@ func bootstrapCredential(cmd *cobra.Command) func(context.Context, harness.Name)
 func bootstrapTarget(cmd *cobra.Command, streams iostream.Streams, root string, cfg *config.ProjectConfig) func(context.Context, factorySettings) (sandboxTarget, error) {
 	return func(ctx context.Context, s factorySettings) (sandboxTarget, error) {
 		if s.Backend != config.BackendCircleCI {
-			b, err := factory.DockerBackend(root, cfg)
+			b, err := factory.DockerBackend(root, cfg, 0)
 			if err != nil {
 				return sandboxTarget{}, &userError{msg: "Docker is not available.", suggestion: "Start Docker, or choose another backend with factory.backend in .smelt/config.json.", err: err}
 			}
