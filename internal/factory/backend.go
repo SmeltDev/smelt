@@ -21,7 +21,9 @@ func DockerBackend(root string, cfg *config.ProjectConfig) (sidecar.Backend, err
 	b.MinFreeBytes = cfg.Factory.MinFreeBytes()
 	b.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
 	b.StopGrace = cfg.Factory.StopGraceDuration()
+	b.Runs = cfg.Factory.ConcurrentRuns()
 	if cfg.Factory != nil {
+		b.CPUs = cfg.Factory.CPUs
 		b.ManagedDockerfile = cfg.Factory.Dockerfile
 	}
 	if cfg.Factory.CacheEnabled() {

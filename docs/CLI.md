@@ -613,6 +613,12 @@ smelt
   winding down. On the CircleCI backend the sidecar API has no stop for a running command, so stop
   waits for the current turn to end. A command in an image without `setsid` cannot be signalled and
   runs until the grace has passed and the stream is closed.
+- **`factory.cpus` limits the CPUs each run container may use** (Docker backend; a number, fractions
+  allowed). Unset, the limit is the Docker engine's CPU count divided by `factory.maxConcurrent` runs,
+  at least 2 and never more than the engine has. `0` turns the limit off; negative values are rejected.
+  It applies to the implementer's and every reviewer's container. Commands see it as `SMELT_CPUS`
+  (for example `pytest -n $SMELT_CPUS`), which is not set when there is no limit. The run log's start
+  line and `factory status --json` (`cpus`) show it, such as `cpus 2.0 (8 engine CPUs / 4 runs)`.
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
   (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)

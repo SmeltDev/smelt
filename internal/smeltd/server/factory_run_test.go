@@ -1144,3 +1144,43 @@ func TestFactorySessionRecordsLocalKitOnEveryRun(t *testing.T) {
 		assert.Assert(t, !detail.Factory.KitOutdated)
 	}
 }
+
+func TestFactoryBackendCarriesTheCPUSettings(t *testing.T) {
+	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{MaxConcurrent: 4, CPUs: new(1.5)}}
+	b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg)
+	assert.NilError(t, err)
+	p := b.(*docker.Provider)
+	assert.Equal(t, p.Runs, 4)
+	assert.Equal(t, *p.CPUs, 1.5)
+
+	b, err = factoryBackend(smeltd.BackendDocker, t.TempDir(), &config.ProjectConfig{})
+	assert.NilError(t, err)
+	p = b.(*docker.Provider)
+	assert.Equal(t, p.Runs, 1)
+	assert.Assert(t, p.CPUs == nil)
+}
+
+func TestFactoryRunStatusNamesTheCPUShare(t *testing.T) {
+	var got factory.RunOptions
+	d, root := newFactoryDaemon(t, func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return factory.Report{}, nil
+	})
+	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}],"factory":{"cpus":1.5}}`
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendDocker, ProjectRoot: root, Prompt: "x"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	const want = "cpus 1.5 (factory.cpus)"
+	assert.Equal(t, detail.Factory.CPUs, want)
+	assert.Equal(t, got.CPUs, want)
+
+	b, err := json.Marshal(detail)
+	assert.NilError(t, err)
+	var envelope map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(b, &envelope))
+	var status map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(envelope["factory"], &status))
+	assert.Equal(t, string(status["cpus"]), `"`+want+`"`)
+}

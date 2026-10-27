@@ -287,8 +287,11 @@ type FactoryRun struct {
 	Harness string `json:"harness,omitempty"`
 	Model   string `json:"model,omitempty"`
 	// Attempts is the most rounds the run checks.
-	Attempts int    `json:"attempts,omitempty"`
-	RunID    string `json:"run_id,omitempty"`
+	Attempts int `json:"attempts,omitempty"`
+	// CPUs describes the CPU share of each run container, such as
+	// "cpus 2.0 (8 engine CPUs / 4 runs)"; absent without a limit.
+	CPUs  string `json:"cpus,omitempty"`
+	RunID string `json:"run_id,omitempty"`
 	// SidecarIDs are the live or retained members of this run's pool. The
 	// daemon derives ownership from its pool state so clients do not have to
 	// reconstruct it from sidecar names.
