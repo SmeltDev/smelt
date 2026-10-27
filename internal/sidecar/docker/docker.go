@@ -106,6 +106,9 @@ type Provider struct {
 	// probe, so concurrent Creates of one image probe it once.
 	uidMu sync.Mutex
 	uids  map[string]string
+
+	// storageWarned logs the undiscoverable-storage warning once per provider.
+	storageWarned sync.Once
 }
 
 // member is a container the provider created: its bind-mounted workspace on

@@ -24,3 +24,13 @@ func TestPrintStorageReport(t *testing.T) {
 	assert.Assert(t, strings.Contains(out.String(), "Storage unavailable: backing-storage discovery failed"))
 	assert.Equal(t, newFactoryDoctorCmd().Use, "doctor")
 }
+
+func TestPrintStorageReportFullDiskAccessAdvice(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "iTerm.app")
+	var out bytes.Buffer
+	printStorageReport(&out, docker.StorageReport{HostError: "operation not permitted", HostPermission: true}, fmt.Errorf("discovery failed"))
+	assert.Assert(t, strings.Contains(out.String(), "macOS blocks reading Docker Desktop's settings; grant Full Disk Access to iTerm to let smelt check Docker's disk, or ignore this: runs still work."), out.String())
+	out.Reset()
+	printStorageReport(&out, docker.StorageReport{HostError: "other"}, fmt.Errorf("x"))
+	assert.Assert(t, !strings.Contains(out.String(), "Full Disk Access"))
+}

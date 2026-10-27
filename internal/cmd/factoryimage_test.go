@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -313,11 +314,15 @@ func TestImageStorageDiscoveryFailureDoesNotBlockImageWork(t *testing.T) {
 	defer server.Close()
 	t.Setenv("DOCKER_HOST", server.URL)
 	t.Setenv("DOCKER_API_VERSION", "1.47")
-	_, err := buildSandboxImage(context.Background(), discardStreams(), root, imageBuild{Dockerfile: "Dockerfile.smelt"})
+	var stderr strings.Builder
+	streams := iostream.Streams{Out: io.Discard, Err: &stderr}
+	_, err := buildSandboxImage(context.Background(), streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})
 	if err != nil {
 		assert.Assert(t, !strings.Contains(err.Error(), "backing-storage discovery failed"), err.Error())
 	}
 	assert.Assert(t, imageWork > 0)
+	assert.Assert(t, strings.Contains(stderr.String(), "⚠ couldn't check Docker's free disk space ("), stderr.String())
+	assert.Assert(t, strings.Contains(stderr.String(), "runs aren't protected from a full disk. See smelt factory doctor"), stderr.String())
 }
 
 func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
