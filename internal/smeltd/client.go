@@ -58,7 +58,9 @@ const (
 	HeaderDraining = "X-Smelt-Draining"
 	HeaderRevision = "X-Smelt-Revision"
 	HeaderHandover = "X-Smelt-Handover"
-	headerTrue     = "true"
+	// HeaderMaxRuns carries factory.maxRuns; absent or 0 means no limit.
+	HeaderMaxRuns = "X-Smelt-Max-Runs"
+	headerTrue    = "true"
 )
 
 // doPingInfo sends a /ping request with the given client and returns what the
@@ -891,7 +893,8 @@ func probeDaemon(path string, main bool) (DaemonStatus, bool, error) {
 func statusFromHeaders(h http.Header, path string) DaemonStatus {
 	pid, _ := strconv.Atoi(h.Get("X-Smelt-Pid"))
 	active, _ := strconv.Atoi(h.Get("X-Smelt-Active"))
-	return DaemonStatus{PID: pid, Revision: h.Get(HeaderRevision), Draining: h.Get(HeaderDraining) == headerTrue, ActiveRuns: active, Socket: path}
+	maxRuns, _ := strconv.Atoi(h.Get(HeaderMaxRuns))
+	return DaemonStatus{PID: pid, Revision: h.Get(HeaderRevision), Draining: h.Get(HeaderDraining) == headerTrue, ActiveRuns: active, MaxRuns: maxRuns, Socket: path}
 }
 
 // fillMainStatus covers a main daemon too old to report its pid or active runs

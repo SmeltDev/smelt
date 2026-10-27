@@ -644,12 +644,21 @@ smelt
   line and `factory status --json` (`cpus`) show it, such as `cpus 2.0 (8 engine CPUs / 4 runs)`.
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
-  (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)
+  (limit N; raise factory.maxConcurrent)`, with code `project.busy` and exit **75** (retryable). Negative values are rejected. A continued run (`--continue`)
   counts as one active run. Each run has its own worktree and container pool, so runs share no state, but
   each is one implementer container plus one reviewer container per review prompt: cap the reviewers
   with `--reviewers N` when running several at once. `factory status` with no run ID still shows the
   newest run; `factory list` and `smelt watch` show every active one. Finished runs are kept until
   more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
+- **Machine-wide limits live in the user config** (`~/.config/smelt/config.json`), under `factory`, and
+  are read when the daemon starts (restart it to change them). `factory.maxRuns` is the most unfinished
+  runs across all projects; unset or `0` is no limit. Over it, a start or `--continue` is refused with
+  code `daemon.busy`, exit **75**, and a message naming the holders: `smelt is running 5 of 5 runs
+  (smelt 2, smelt-pilot 3); try again when one finishes`. `factory.holdOverLoad` (load average per CPU,
+  such as `1.5`) refuses new starts with `daemon.busy` (`machine load 7.8 per CPU`) while the host's
+  1-minute load per CPU is above it; runs already going are never affected, and a host that cannot report
+  its load never holds. Negative values are rejected. The machine check comes before the project one.
+  `smelt daemon status` shows `runs: 5 of 5 (machine limit)`, and `--json` has `max_runs`.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
 - **`factory build` needs a coding agent.** `--harness claude|codex|grok`, then `factory.harness`, then (in a

@@ -83,6 +83,9 @@ func sessionError(err error) error {
 		if refused.Code == smeltd.CodeDaemonDraining {
 			return drainingError(refused.Active)
 		}
+		if refused.Code == smeltd.CodeDaemonBusy || refused.Code == smeltd.CodeProjectBusy {
+			return busyError(refused)
+		}
 		e := newUserError(refused.Message).withoutDetail()
 		switch refused.Status {
 		case http.StatusConflict:
