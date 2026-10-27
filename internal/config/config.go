@@ -154,24 +154,18 @@ type UserConfig struct {
 	LegacyAPIKey string `json:"apiKey,omitempty"`
 }
 
-// UserFactory is the user's machine-wide factory settings. Both limits are off
+// UserFactory is the user's machine-wide factory settings. The limit is off
 // at zero.
 type UserFactory struct {
 	// MaxRuns is the most factory runs active at once on this machine, across
 	// all projects.
 	MaxRuns int `json:"maxRuns,omitempty"`
-	// HoldOverLoad is the 1-minute load average per CPU above which new runs are
-	// refused. Runs already going are not affected.
-	HoldOverLoad float64 `json:"holdOverLoad,omitempty"`
 }
 
 // Validate refuses values that cannot be limits.
 func (f UserFactory) Validate() error {
 	if f.MaxRuns < 0 {
 		return fmt.Errorf("factory.maxRuns must not be negative, got %d", f.MaxRuns)
-	}
-	if f.HoldOverLoad < 0 {
-		return fmt.Errorf("factory.holdOverLoad must not be negative, got %v", f.HoldOverLoad)
 	}
 	return nil
 }

@@ -687,7 +687,7 @@ func TestFactoryBackendCacheKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
-			b, err := factoryBackend(smeltd.BackendDocker, root, tt.cfg)
+			b, err := factoryBackend(smeltd.BackendDocker, root, tt.cfg, 0)
 			assert.NilError(t, err)
 			p := b.(*docker.Provider)
 			assert.Equal(t, p.CacheKey != "", tt.wantKey)
@@ -1149,13 +1149,13 @@ func TestFactorySessionRecordsLocalKitOnEveryRun(t *testing.T) {
 
 func TestFactoryBackendCarriesTheCPUSettings(t *testing.T) {
 	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{MaxConcurrent: 4, CPUs: new(1.5)}}
-	b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg)
+	b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg, 0)
 	assert.NilError(t, err)
 	p := b.(*docker.Provider)
 	assert.Equal(t, p.Runs, 4)
 	assert.Equal(t, *p.CPUs, 1.5)
 
-	b, err = factoryBackend(smeltd.BackendDocker, t.TempDir(), &config.ProjectConfig{})
+	b, err = factoryBackend(smeltd.BackendDocker, t.TempDir(), &config.ProjectConfig{}, 0)
 	assert.NilError(t, err)
 	p = b.(*docker.Provider)
 	assert.Equal(t, p.Runs, 1)
@@ -1185,4 +1185,27 @@ func TestFactoryRunStatusNamesTheCPUShare(t *testing.T) {
 	var status map[string]json.RawMessage
 	assert.NilError(t, json.Unmarshal(envelope["factory"], &status))
 	assert.Equal(t, string(status["cpus"]), `"`+want+`"`)
+}
+
+// The default CPU share divides the engine by the machine-wide run limit when
+// that is larger than the project's own concurrency.
+func TestFactoryBackendRunsFollowMachineLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		maxConcurrent int
+		machineRuns   int
+		want          int
+	}{
+		{"machine limit, project unset", 0, 4, 4},
+		{"machine limit above project", 2, 4, 4},
+		{"project above machine limit", 6, 4, 6},
+		{"no machine limit", 2, 0, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{MaxConcurrent: tt.maxConcurrent}}
+			b, err := factoryBackend(smeltd.BackendDocker, t.TempDir(), cfg, tt.machineRuns)
+			assert.NilError(t, err)
+			assert.Equal(t, b.(*docker.Provider).Runs, tt.want)
+		})
+	}
 }

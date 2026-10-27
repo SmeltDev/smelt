@@ -654,10 +654,7 @@ smelt
   are read when the daemon starts (restart it to change them). `factory.maxRuns` is the most unfinished
   runs across all projects; unset or `0` is no limit. Over it, a start or `--continue` is refused with
   code `daemon.busy`, exit **75**, and a message naming the holders: `smelt is running 5 of 5 runs
-  (smelt 2, smelt-pilot 3); try again when one finishes`. `factory.holdOverLoad` (load average per CPU,
-  such as `1.5`) refuses new starts with `daemon.busy` (`machine load 7.8 per CPU`) while the host's
-  1-minute load per CPU is above it; runs already going are never affected, and a host that cannot report
-  its load never holds. Negative values are rejected. The machine check comes before the project one.
+  (smelt 2, smelt-pilot 3); try again when one finishes`. Negative values are rejected. The machine check comes before the project one.
   `smelt daemon status` shows `runs: 5 of 5 (machine limit)`, and `--json` has `max_runs`.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).

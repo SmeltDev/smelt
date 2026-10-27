@@ -126,13 +126,10 @@ func handoverFunc(d *daemon, owner listenerOwnership) func() (smeltd.DrainRespon
 }
 
 // newConfiguredSessionStore builds the session store with the machine limits
-// and, when a test supplies one, the load reader from the review config.
+// from the review config.
 func newConfiguredSessionStore(ctx context.Context, rc ReviewConfig) *sessionStore {
 	s := newSessionStore(ctx)
 	s.limits = rc.Limits
-	if rc.Load != nil {
-		s.load = rc.Load
-	}
 	return s
 }
 

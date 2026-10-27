@@ -108,11 +108,11 @@ func factoryTarget(root string, cfg *config.ProjectConfig, req smeltd.FactoryReq
 // uses the CircleCI backend it derives from the daemon's client. It is built
 // when the request arrives so a daemon that cannot reach the Docker socket
 // fails the request rather than the background run.
-func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backend, error) {
+func factoryBackend(name, root string, cfg *config.ProjectConfig, machineRuns int) (sidecar.Backend, error) {
 	if name != smeltd.BackendDocker {
 		return nil, nil
 	}
-	return factory.DockerBackend(root, cfg)
+	return factory.DockerBackend(root, cfg, machineRuns)
 }
 
 // cpusDescription is the CPU share a backend gives run containers, "" when it
@@ -219,7 +219,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
-	backend, err := factoryBackend(req.Backend, ps.root, cfg)
+	backend, err := factoryBackend(req.Backend, ps.root, cfg, d.sessions.limits.MaxRuns)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}

@@ -383,7 +383,7 @@ func TestDaemonMachineLimitsComeFromUserConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.EnvXDGConfigHome, dir)
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "smelt"), 0o700))
-	data := `{"factory":{"maxRuns":3,"holdOverLoad":1.5}}`
+	data := `{"factory":{"maxRuns":3}}`
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "smelt", "config.json"), []byte(data), 0o600))
 
 	// The combined builder is what RunE uses; it keeps the limits even when
@@ -391,7 +391,6 @@ func TestDaemonMachineLimitsComeFromUserConfig(t *testing.T) {
 	cfg, err := daemonFullReviewConfig(config.ResolvedConfig{}, errors.New("no config"))
 	assert.NilError(t, err)
 	assert.Equal(t, cfg.Limits.MaxRuns, 3)
-	assert.Equal(t, cfg.Limits.HoldOverLoad, 1.5)
 
 	bad := `{"factory":{"maxRuns":-1}}`
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "smelt", "config.json"), []byte(bad), 0o600))

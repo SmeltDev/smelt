@@ -205,8 +205,7 @@ type Snapshot struct {
 const CodeDaemonDraining = "daemon.draining"
 
 // CodeDaemonBusy is the code of the 503 a daemon answers a new run with when
-// the machine is full: factory.maxRuns runs are going, or the load is over
-// factory.holdOverLoad. It is retryable.
+// the machine is full: factory.maxRuns runs are going. It is retryable.
 const CodeDaemonBusy = "daemon.busy"
 
 // CodeProjectBusy is the code of the 409 for a project already running

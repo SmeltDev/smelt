@@ -74,7 +74,7 @@ func daemonMachineLimits() (server.MachineLimits, error) {
 	if err != nil {
 		return server.MachineLimits{}, fmt.Errorf("read user config: %w", err)
 	}
-	return server.MachineLimits{MaxRuns: uc.Factory.MaxRuns, HoldOverLoad: uc.Factory.HoldOverLoad}, nil
+	return server.MachineLimits{MaxRuns: uc.Factory.MaxRuns}, nil
 }
 
 // daemonFullReviewConfig is the review config the daemon starts with: the

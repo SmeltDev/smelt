@@ -11,8 +11,11 @@ import (
 
 // DockerBackend builds the local Docker backend for the project at root,
 // configured from cfg. The daemon's factory runs and `smelt factory bootstrap`
-// share it, so both set the same Dockerfile and cache.
-func DockerBackend(root string, cfg *config.ProjectConfig) (sidecar.Backend, error) {
+// share it, so both set the same Dockerfile and cache. machineRuns is the
+// machine-wide factory.maxRuns (0 when unlimited or unknown); the default CPU
+// share divides the engine's CPUs by the larger of it and the project's own
+// concurrency.
+func DockerBackend(root string, cfg *config.ProjectConfig, machineRuns int) (sidecar.Backend, error) {
 	b, err := docker.New()
 	if err != nil {
 		return nil, fmt.Errorf("docker backend unavailable: %w", err)
@@ -21,7 +24,7 @@ func DockerBackend(root string, cfg *config.ProjectConfig) (sidecar.Backend, err
 	b.MinFreeBytes = cfg.Factory.MinFreeBytes()
 	b.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
 	b.StopGrace = cfg.Factory.StopGraceDuration()
-	b.Runs = cfg.Factory.ConcurrentRuns()
+	b.Runs = max(machineRuns, cfg.Factory.ConcurrentRuns())
 	if cfg.Factory != nil {
 		b.CPUs = cfg.Factory.CPUs
 		b.ManagedDockerfile = cfg.Factory.Dockerfile

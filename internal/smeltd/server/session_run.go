@@ -52,8 +52,6 @@ type ReviewConfig struct {
 	Stream StreamFunc
 	// RunFactory runs a factory session; factory.Run when nil.
 	RunFactory func(ctx context.Context, opts factory.RunOptions) (factory.Report, error)
-	// Load reads the host's load per CPU; the host's own when nil.
-	Load LoadFunc
 }
 
 // HarnessAuth is the credential one harness runs with.

@@ -183,11 +183,9 @@ type sessionStore struct {
 	drainCommitted  bool
 	drainRemaining  int
 
-	// limits are the machine-wide limits; the zero value is no limit. load reads
-	// the host's 1-minute load per CPU. Both are set before the store is shared
-	// and never reassigned.
+	// limits are the machine-wide limits; the zero value is no limit. Set before
+	// the store is shared and never reassigned.
 	limits MachineLimits
-	load   LoadFunc
 }
 
 // drainingError is add's refusal while the daemon is draining.
@@ -211,20 +209,11 @@ func (e *busyError) Error() string { return e.msg }
 type MachineLimits struct {
 	// MaxRuns is the most unfinished runs across all projects.
 	MaxRuns int
-	// HoldOverLoad is the 1-minute load per CPU above which new runs wait.
-	HoldOverLoad float64
 }
 
-// LoadFunc reads the host's 1-minute load average per CPU.
-type LoadFunc func() (float64, error)
-
 // admitMachine decides whether the machine has room for one more run. perProject
-// maps a project root to its unfinished runs; load is nil when it was not read
-// (no hold configured, or the host would not say), which never refuses.
-func admitMachine(l MachineLimits, perProject map[string]int, load *float64) *busyError {
-	if l.HoldOverLoad > 0 && load != nil && *load > l.HoldOverLoad {
-		return &busyError{code: smeltd.CodeDaemonBusy, msg: fmt.Sprintf("machine load %.1f per CPU; try again when it drops", *load)}
-	}
+// maps a project root to its unfinished runs.
+func admitMachine(l MachineLimits, perProject map[string]int) *busyError {
 	total := 0
 	byName := make(map[string]int)
 	for root, n := range perProject {
@@ -251,7 +240,6 @@ func newSessionStore(parent context.Context) *sessionStore {
 		parent = context.Background()
 	}
 	return &sessionStore{
-		load:      hostLoadPerCPU,
 		parent:    parent,
 		sessions:  make(map[string]*sessionEntry),
 		byProject: make(map[string][]string),
@@ -359,13 +347,6 @@ func (s *sessionStore) ended() {
 // why; a draining refusal is a *drainingError.
 func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, context.Context, error) {
 	limit = max(limit, 1)
-	// Read before taking the lock so a slow read cannot stall other admissions.
-	var load *float64
-	if s.limits.HoldOverLoad > 0 && s.load != nil {
-		if v, err := s.load(); err == nil {
-			load = &v
-		}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining {
@@ -379,7 +360,7 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 	}
 	sess.Socket = s.ownerSocket
 	perProject := s.unfinishedLocked()
-	if busy := admitMachine(s.limits, perProject, load); busy != nil {
+	if busy := admitMachine(s.limits, perProject); busy != nil {
 		return nil, nil, busy
 	}
 	if active := perProject[sess.ProjectRoot]; active >= limit {
