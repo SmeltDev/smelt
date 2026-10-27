@@ -260,6 +260,10 @@ type FactoryConfig struct {
 	// MaxConcurrent is how many factory runs may be active in the project at
 	// once. 0 means 1.
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// CPUs is how many CPUs each of the project's run containers may use, a
+	// fraction allowed. Unset divides the Docker engine's CPUs among
+	// MaxConcurrent runs, at least 2; 0 means no limit.
+	CPUs *float64 `json:"cpus,omitempty"`
 	// StopGrace is how many seconds a stopped run's commands get to exit on
 	// SIGTERM before they are killed. 0 means DefaultStopGrace.
 	StopGrace int `json:"stopGrace,omitempty"`
@@ -328,6 +332,9 @@ func (f *FactoryConfig) validateLimits() error {
 	}
 	if f.MaxConcurrent < 0 {
 		return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
+	}
+	if f.CPUs != nil && *f.CPUs < 0 {
+		return fmt.Errorf("factory.cpus must not be negative, got %v", *f.CPUs)
 	}
 	if f.StopGrace < 0 {
 		return fmt.Errorf("factory.stopGrace must not be negative, got %d", f.StopGrace)

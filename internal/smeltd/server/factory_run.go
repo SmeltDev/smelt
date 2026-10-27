@@ -115,6 +115,18 @@ func factoryBackend(name, root string, cfg *config.ProjectConfig) (sidecar.Backe
 	return factory.DockerBackend(root, cfg)
 }
 
+// cpusDescription is the CPU share a backend gives run containers, "" when it
+// has none to report.
+func cpusDescription(backend sidecar.Backend) string {
+	d, ok := backend.(interface{ CPUsDescription(context.Context) string })
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return d.CPUsDescription(ctx)
+}
+
 // recordRequest copies what the request says about the run onto its record and
 // returns the model to use.
 func recordRequest(record *smeltd.FactoryRun, req smeltd.FactoryRequest, cfg *config.ProjectConfig, agent harness.Harness) (string, error) {
@@ -211,6 +223,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}
+	cpus := cpusDescription(backend)
+	record.CPUs = cpus
 	author, err := cfg.Factory.CommitAuthor()
 	if err != nil {
 		return smeltd.Session{}, apiErr(http.StatusBadRequest, "factory.author: %v", err)
@@ -257,6 +271,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		OrgID:                   orgID,
 		Image:                   image,
 		Backend:                 backend,
+		CPUs:                    cpus,
 		Install:                 imageInstallCommand(req.Backend, cfg),
 		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,

@@ -45,6 +45,10 @@ type fakeDocker struct {
 	imgConfig *dockerspec.DockerOCIImageConfig
 	// hostConfigs are the host configs ContainerCreate received.
 	hostConfigs []*container.HostConfig
+	// envs are the container environments ContainerCreate received; ncpu is
+	// the CPU count Info reports.
+	envs [][]string
+	ncpu int
 	// execs are the exec requests made, and execCode the exit code they report.
 	execs    []container.ExecOptions
 	execCode int
@@ -74,7 +78,7 @@ func (f *fakeDocker) Info(context.Context) (system.Info, error) {
 	if !f.ready() {
 		return system.Info{}, errors.New("starting")
 	}
-	return system.Info{ID: "id", ServerVersion: "27", Images: 1}, nil
+	return system.Info{ID: "id", ServerVersion: "27", Images: 1, NCPU: f.ncpu}, nil
 }
 
 func (f *fakeDocker) ImageList(context.Context, image.ListOptions) ([]image.Summary, error) {
@@ -264,6 +268,7 @@ func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, h
 	}
 	f.created = append(f.created, cfg.Image)
 	f.hostConfigs = append(f.hostConfigs, host)
+	f.envs = append(f.envs, cfg.Env)
 	return container.CreateResponse{ID: "c" + strconv.Itoa(len(f.created))}, nil
 }
 

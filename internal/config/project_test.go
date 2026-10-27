@@ -286,6 +286,21 @@ func TestFactoryConfigValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "maxConcurrent")
 }
 
+func TestFactoryConfigCPUs(t *testing.T) {
+	var cfg ProjectConfig
+	assert.NilError(t, json.Unmarshal([]byte(`{"factory":{"cpus":1.5}}`), &cfg))
+	assert.Equal(t, *cfg.Factory.CPUs, 1.5)
+	assert.NilError(t, cfg.Validate())
+	assert.NilError(t, json.Unmarshal([]byte(`{"factory":{"cpus":0}}`), &cfg))
+	assert.Assert(t, cfg.Factory.CPUs != nil && *cfg.Factory.CPUs == 0)
+	var unset ProjectConfig
+	assert.NilError(t, json.Unmarshal([]byte(`{"factory":{}}`), &unset))
+	assert.Assert(t, unset.Factory.CPUs == nil)
+	neg := -1.0
+	err := (&ProjectConfig{Factory: &FactoryConfig{CPUs: &neg}}).Validate()
+	assert.ErrorContains(t, err, "factory.cpus")
+}
+
 func TestFactoryConfigPack(t *testing.T) {
 	off := false
 	var unset *FactoryConfig

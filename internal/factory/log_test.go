@@ -120,6 +120,13 @@ func TestLogDoesNotSayTheLastRoundsFindingsWereSent(t *testing.T) {
 	assert.Assert(t, strings.HasPrefix(got[2], ":"), got[2])
 }
 
+func TestLogStartNamesTheCPUShare(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.start("20261002-150405", RunOptions{Prompt: "p", Attempts: 2, CPUs: "cpus 2.0 (8 engine CPUs / 4 runs)"}, "p")
+	lg.close(Report{}, nil)
+	assert.Assert(t, strings.Contains(readLog(t, path), "cpus 2.0 (8 engine CPUs / 4 runs)"), readLog(t, path))
+}
+
 func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 	opts := RunOptions{
 		Prompt:   "add a flag",
