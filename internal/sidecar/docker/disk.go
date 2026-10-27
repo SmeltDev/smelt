@@ -3,8 +3,10 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math"
 	"os"
@@ -20,8 +22,13 @@ import (
 
 // StorageReport shares diagnostics between image preparation and factory doctor.
 type StorageReport struct {
-	Host        HostStorage
-	HostError   string
+	Host      HostStorage
+	HostError string
+	// HostPermission is set when HostError is macOS (or the OS) denying a read.
+	HostPermission bool
+	// Warning is set when the run guard went ahead without knowing where
+	// Docker keeps its data.
+	Warning     string
 	Filesystems []FilesystemSpace
 	Caches      []CacheUsage
 }
@@ -75,10 +82,24 @@ func diskRefusal(free, minimum int64) error {
 	return nil
 }
 
-func (b *Provider) hostStorage(ctx context.Context) (HostStorage, error) {
+// daemonStorage is what `docker info` says about where the daemon keeps its
+// data. It needs no host permission, unlike the discovery that follows it.
+func (b *Provider) daemonStorage(ctx context.Context) (HostStorage, string, error) {
 	info, err := b.cli.Info(ctx)
 	if err != nil {
-		return HostStorage{}, fmt.Errorf("inspect Docker daemon storage: %w", err)
+		return HostStorage{}, "", fmt.Errorf("inspect Docker daemon storage: %w", err)
+	}
+	endpoint := b.cli.DaemonHost()
+	if b.endpoint != "" {
+		endpoint = b.endpoint
+	}
+	return HostStorage{Endpoint: endpoint, DaemonID: info.ID, DockerRoot: info.DockerRootDir}, info.OperatingSystem, nil
+}
+
+func (b *Provider) hostStorage(ctx context.Context) (HostStorage, error) {
+	base, operatingSystem, err := b.daemonStorage(ctx)
+	if err != nil {
+		return HostStorage{}, err
 	}
 	discovery, err := localDiscovery()
 	if err != nil {
@@ -87,11 +108,7 @@ func (b *Provider) hostStorage(ctx context.Context) (HostStorage, error) {
 	if b.discovery != nil {
 		discovery = *b.discovery
 	}
-	endpoint := b.cli.DaemonHost()
-	if b.endpoint != "" {
-		endpoint = b.endpoint
-	}
-	return discovery.discover(endpoint, info.ID, info.DockerRootDir, info.OperatingSystem)
+	return discovery.discover(base.Endpoint, base.DaemonID, base.DockerRoot, operatingSystem)
 }
 
 func (b *Provider) helperImage(ctx context.Context) (string, error) {
@@ -124,18 +141,35 @@ func (b *Provider) helperImage(ctx context.Context) (string, error) {
 
 // CheckStorage refuses image work and provisioning before they can write data.
 func (b *Provider) CheckStorage(ctx context.Context) error {
+	_, err := b.GuardStorage(ctx)
+	return err
+}
+
+// GuardStorage runs the CheckStorage guard and returns the warning shown when
+// it went ahead without being able to check Docker's free disk space; the
+// warning is empty when the guard measured the disks.
+func (b *Provider) GuardStorage(ctx context.Context) (string, error) {
 	if b.MinFreeBytes <= 0 {
-		return nil
+		return "", nil
 	}
 	report, err := b.storageReport(ctx, storageGuard)
-	if err != nil && report.HostError != "" {
-		// Finding Docker's backing storage is best effort: macOS privacy rules
-		// can hide Docker Desktop's settings, and a remote engine has no local
-		// disk to find. Only a measured low-space result refuses a run.
-		log.Printf("smelt: couldn't check Docker's free disk space (%s); runs aren't protected from a full disk, see smelt factory doctor", report.HostError)
-		return nil
+	if err != nil {
+		return "", err
 	}
-	return err
+	if report.Warning != "" {
+		b.storageWarned.Do(func() { log.Printf("smelt: %s", report.Warning) })
+	}
+	return report.Warning, nil
+}
+
+// StorageWarning is the one line shown when Docker's free disk space can't be checked.
+func StorageWarning(reason string) string {
+	return fmt.Sprintf("⚠ couldn't check Docker's free disk space (%s); runs aren't protected from a full disk. See smelt factory doctor", reason)
+}
+
+// IsPermissionDenied reports whether err is the operating system refusing a read.
+func IsPermissionDenied(err error) bool {
+	return errors.Is(err, fs.ErrPermission)
 }
 
 // ReportStorage returns evidence even when discovery or measurement fails.
@@ -159,34 +193,91 @@ func (b *Provider) storageReport(ctx context.Context, mode storageMode) (report 
 			}
 		}
 	}()
+	if mode == storageGuard {
+		if done, err := b.guardFromDaemonInfo(ctx, &report); done {
+			return report, err
+		}
+		report = StorageReport{}
+	}
 	host, err := b.hostStorage(ctx)
 	report.Host = host
 	if err != nil {
 		report.HostError = err.Error()
-		return report, fmt.Errorf("docker backing-storage discovery failed: %w; run smelt factory doctor", err)
+		report.HostPermission = IsPermissionDenied(err)
+		if mode == storageDiagnostic {
+			return report, fmt.Errorf("docker backing-storage discovery failed: %w; run smelt factory doctor", err)
+		}
+		// Finding Docker's backing storage is best effort: macOS privacy rules
+		// can hide Docker Desktop's settings, and a remote engine has no local
+		// disk to find. Only a measured low-space result refuses a run.
+		report.Warning = StorageWarning(report.HostError)
 	}
 	if err := b.reportHostFilesystems(ctx, &report, mode); err != nil {
 		return report, err
 	}
-	img, err := b.helperImage(ctx)
-	if err != nil {
+	if report.Warning != "" && (!strings.HasPrefix(host.Endpoint, "unix://") || !filepath.IsAbs(host.DockerRoot)) {
+		return report, nil
+	}
+	if err := b.reportDockerVM(ctx, &report, host.DockerRoot, mode); err != nil {
+		if report.Warning != "" {
+			// Nothing could be measured and the user is already warned.
+			return report, nil
+		}
 		return report, err
 	}
-	out, err := b.helper(ctx, img, []mount.Mount{{Type: mount.TypeBind, Source: host.DockerRoot, Target: "/smelt-disk", ReadOnly: true}}, "df -Pk /smelt-disk | tail -1 | awk '{print $4}'")
+	return report, nil
+}
+
+// guardFromDaemonInfo checks the guard without Docker Desktop's settings file:
+// the project and workspace disks, then the Docker VM disk through a helper
+// container at the DockerRootDir `docker info` reports. done is false when that
+// can't be established and the caller must fall back to reading the settings.
+func (b *Provider) guardFromDaemonInfo(ctx context.Context, report *StorageReport) (done bool, err error) {
+	base, _, infoErr := b.daemonStorage(ctx)
+	if infoErr != nil || !strings.HasPrefix(base.Endpoint, "unix://") || base.DaemonID == "" || !filepath.IsAbs(base.DockerRoot) {
+		return false, nil
+	}
+	if err := b.reportHostFilesystems(ctx, report, storageGuard); err != nil {
+		return true, err
+	}
+	probe := &StorageReport{}
+	if b.reportDockerVM(ctx, probe, base.DockerRoot, storageDiagnostic) != nil {
+		return false, nil
+	}
+	report.Host = base
+	report.Filesystems = append(report.Filesystems, probe.Filesystems...)
+	return true, b.refuseVM(probe)
+}
+
+// refuseVM turns a low Docker VM disk into the refusal error.
+func (b *Provider) refuseVM(report *StorageReport) error {
+	for _, fsp := range report.Filesystems {
+		if err := diskRefusal(fsp.Free, b.MinFreeBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reportDockerVM measures the disk the Docker daemon writes to, from inside it.
+func (b *Provider) reportDockerVM(ctx context.Context, report *StorageReport, root string, mode storageMode) error {
+	img, err := b.helperImage(ctx)
 	if err != nil {
-		return report, fmt.Errorf("probe Docker filesystem: %w", err)
+		return err
+	}
+	out, err := b.helper(ctx, img, []mount.Mount{{Type: mount.TypeBind, Source: root, Target: "/smelt-disk", ReadOnly: true}}, "df -Pk /smelt-disk | tail -1 | awk '{print $4}'")
+	if err != nil {
+		return fmt.Errorf("probe Docker filesystem: %w", err)
 	}
 	kb, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
 	if err != nil || kb < 0 {
-		return report, fmt.Errorf("probe Docker filesystem: invalid df output %q", out)
+		return fmt.Errorf("probe Docker filesystem: invalid df output %q", out)
 	}
-	report.Filesystems = append(report.Filesystems, FilesystemSpace{Name: "Docker VM", Path: host.DockerRoot, Free: kb * 1024})
+	report.Filesystems = append(report.Filesystems, FilesystemSpace{Name: "Docker VM", Path: root, Free: kb * 1024})
 	if mode == storageGuard {
-		if err := diskRefusal(kb*1024, b.MinFreeBytes); err != nil {
-			return report, err
-		}
+		return diskRefusal(kb*1024, b.MinFreeBytes)
 	}
-	return report, nil
+	return nil
 }
 
 // appendCacheUsage refreshes stale diagnostics without trimming or mounting a workload.

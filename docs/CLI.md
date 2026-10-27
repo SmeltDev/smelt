@@ -562,8 +562,11 @@ smelt
   `settings-store.json` (legacy `settings.json`) and its configured `dataFolder`/`DataFolder` to
   validate `Docker.raw` or `Docker.qcow2`, resolving symlinks before checking the containing
   filesystem. Relocated images are honored; smelt never substitutes the project filesystem.
-  Missing, inaccessible, ambiguous or unsupported storage discovery fails closed and names
-  `factory doctor` and the Desktop Disk image location setting. Remote engines and Windows
+  Missing, inaccessible, ambiguous or unsupported storage discovery doesn't stop a run: it
+  prints one `⚠ couldn't check Docker's free disk space (<reason>)` warning, still checks the
+  project, workspace and Docker VM filesystems, and `factory doctor` reports the failure. When macOS
+  denies reading Desktop's settings, `factory doctor` advises granting Full Disk Access to the app
+  running smelt. Remote engines and Windows
   Desktop are unsupported by host storage discovery. Docker's filesystem probe uses
   `alpine:3.21`, pulling this small helper when absent after the host checks pass. This
   supports an empty daemon and does not depend on workload images providing a shell.

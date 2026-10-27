@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
@@ -68,5 +69,25 @@ func printStorageReport(w io.Writer, report docker.StorageReport, err error) {
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "Storage unavailable: %v\n", err)
+	}
+	if report.HostPermission {
+		_, _ = fmt.Fprintf(w, "macOS blocks reading Docker Desktop's settings; grant Full Disk Access to %s to let smelt check Docker's disk, or ignore this: runs still work.\n", runningApp())
+	}
+}
+
+// runningApp names the app hosting this terminal session, which is the one
+// macOS needs Full Disk Access granted to.
+func runningApp() string {
+	switch app := os.Getenv("TERM_PROGRAM"); app {
+	case "Apple_Terminal":
+		return "Terminal"
+	case "iTerm.app":
+		return "iTerm"
+	case "vscode":
+		return "VS Code"
+	case "":
+		return "your terminal app"
+	default:
+		return app
 	}
 }

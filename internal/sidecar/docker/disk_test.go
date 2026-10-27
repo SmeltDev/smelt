@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -163,6 +164,11 @@ func TestDiskRefusal(t *testing.T) {
 			if low == "VM" {
 				f.vmKB = 1
 			}
+			if low == "backing" {
+				// The Docker VM probe is tried first; the host disk is checked
+				// only when it gives no answer.
+				f.failStart = true
+			}
 			b.freeBytes = func(_ context.Context, path string) (int64, error) {
 				if low == "probe" {
 					return 0, fmt.Errorf("probe unavailable")
@@ -179,7 +185,7 @@ func TestDiskRefusal(t *testing.T) {
 				assert.Assert(t, strings.HasSuffix(err.Error(), " free; run smelt factory clean --caches"))
 			}
 			assert.Equal(t, f.workloads, 0)
-			if low != "VM" {
+			if low != "VM" && low != "backing" {
 				assert.Equal(t, f.helpers, 0)
 			}
 			_, imageErr := b.resolveImage(context.Background(), "image", nil)
@@ -273,4 +279,83 @@ func TestMaintenanceReusesFreshDiagnosticMeasurement(t *testing.T) {
 	// Only the required post-trim measurement follows the diagnostic scan.
 	assert.Equal(t, f.measurements, 2)
 	assert.Equal(t, f.trims, 1)
+}
+
+// macOS hides Desktop's settings from terminals without Full Disk Access.
+// Docker info and the helper container answer first, so the file is never read.
+func TestDiskSettingsReadOnlyAsLastResort(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	reads := 0
+	b.discovery.readFile = func(path string) ([]byte, error) {
+		reads++
+		return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+	}
+	report, err := b.storageReport(context.Background(), storageGuard)
+	assert.NilError(t, err)
+	assert.Equal(t, reads, 0)
+	assert.Equal(t, report.Warning, "")
+	assert.Equal(t, f.helpers, 1)
+	// Diagnostics read the file and fail, but the guard checked: no warning.
+	warning, guardErr := b.GuardStorage(context.Background())
+	assert.NilError(t, guardErr)
+	assert.Equal(t, warning, "")
+	_, diagErr := b.ReportStorage(context.Background())
+	assert.Assert(t, diagErr != nil)
+}
+
+// When the helper can't answer and the settings are hidden, the run still
+// starts, with a warning naming the reason.
+func TestDiskPermissionDeniedWarnsAndRuns(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	f.failStart = true
+	reads := 0
+	b.discovery.readFile = func(path string) ([]byte, error) {
+		reads++
+		return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+	}
+	report, err := b.storageReport(context.Background(), storageGuard)
+	assert.NilError(t, err)
+	assert.Assert(t, report.HostPermission)
+	assert.Assert(t, strings.Contains(report.Warning, "couldn't check Docker's free disk space ("), report.Warning)
+	assert.Assert(t, strings.Contains(report.Warning, "permission denied"), report.Warning)
+	assert.Equal(t, reads, 1)
+	warning, guardErr := b.GuardStorage(context.Background())
+	assert.NilError(t, guardErr)
+	assert.Equal(t, warning, report.Warning)
+
+	diag, diagErr := b.ReportStorage(context.Background())
+	assert.Assert(t, diagErr != nil)
+	assert.Assert(t, diag.HostPermission)
+}
+
+// A hidden settings file never excuses a full Docker VM disk.
+func TestDiskPermissionDeniedStillRefusesLowVM(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	b.discovery.readFile = func(string) ([]byte, error) { return nil, fs.ErrPermission }
+	f.vmKB = 1
+	_, err := b.Create(context.Background(), "run", "image", "/repo")
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.HasPrefix(err.Error(), "disk almost full: "), err.Error())
+	_, imageErr := b.resolveImage(context.Background(), "image", nil)
+	assert.Assert(t, imageErr != nil)
+	assert.Assert(t, strings.HasPrefix(imageErr.Error(), "disk almost full: "), imageErr.Error())
+}
+
+// Working discovery plus low host free space still refuses.
+func TestDiskRefusalWithWorkingDiscovery(t *testing.T) {
+	b, f, relocated := storageProvider(t)
+	f.failStart = true
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	b.freeBytes = func(_ context.Context, path string) (int64, error) {
+		if path == relocated {
+			return 1e6, nil
+		}
+		return 20e9, nil
+	}
+	err := b.CheckStorage(context.Background())
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.HasPrefix(err.Error(), "disk almost full: "), err.Error())
 }
