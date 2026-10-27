@@ -850,6 +850,17 @@ smelt
   by default, and the status JSON gains `from: {ref, commit}`. It is per run, not a
   config key, and `--from` with `--continue` is a user error (a continued run keeps its
   base). It works with both backends.
+- **A run's PR targets the repository's default branch unless it was started from a base on purpose.**
+  `Worktree.PRBase` (`pr_base` in the record and the status JSON) is decided once, when the
+  run starts: the `--from` branch (an integrate run's `--against` branch), else the default
+  branch from `gh repo view --json defaultBranchRef` (cached per repository under the data
+  dir, falling back to the remote HEAD git recorded). `factory publish --pr` and
+  `factory update` use it, so a run started while the checkout sits on a leftover feature
+  branch still opens its PR against the default branch. `base_branch` still records the
+  branch the run started from. Without `--from`, on a branch other than the default, the run
+  starts from that commit and says `starting from <branch> (not <default>); the PR will
+  target <default>` (terminal and run log). Publish says `Opened PR #62 → main`. Records
+  from before `pr_base` have none, so they publish to the default branch.
 - **`factory build --integrate` checks a finished branch against a whole spec.** It needs
   `--from` and a prompt (usually `--plan epics/x.md`), and is a user error with
   `--continue` or without `--from`; `--against` without `--integrate` is one too. The

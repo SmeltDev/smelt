@@ -31,10 +31,13 @@ import (
 func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig {
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: opts.Prompt})
+		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: opts.Prompt, Host: fakeDefaultBranch("main")})
 		if err != nil {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
+		// The same announcement the real run makes, through the status stream
+		// the daemon sends to the client.
+		factory.AnnounceStart(ctx, opts.Root, wt, opts.Status)
 		opts.OnStart("run-1", wt)
 		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 1 reviewer sidecar(s)...")
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
@@ -59,6 +62,11 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig 
 	}
 	return cfg
 }
+
+// fakeDefaultBranch is a host whose repository's default branch is the string.
+type fakeDefaultBranch string
+
+func (b fakeDefaultBranch) DefaultBranch(context.Context) (string, error) { return string(b), nil }
 
 // factoryProject is a session project with a config, as the current
 // directory.
@@ -536,4 +544,20 @@ func TestFactoryFromReachesTheRun(t *testing.T) {
 	_, stderr, err := runFactoryBuildCmd(t, "--from", "epic/x", "--json", "add a flag")
 	assert.NilError(t, err, stderr)
 	assert.Equal(t, (<-got).From, "epic/x")
+}
+
+func TestFactoryBuildOffTheDefaultBranchSaysWhereThePRGoes(t *testing.T) {
+	const note = "starting from fix/daemon-takes-large-specs (not main); the PR will target main"
+	project := factoryProject(t)
+	runGit(t, project, "checkout", "-B", "main")
+	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultPassed))
+
+	_, stderr, err := runFactoryBuildCmd(t, "add a flag")
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, !strings.Contains(stderr, "the PR will target"), stderr)
+
+	runGit(t, project, "checkout", "-b", "fix/daemon-takes-large-specs")
+	_, stderr, err = runFactoryBuildCmd(t, "add another flag")
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, strings.Contains(stderr, note), stderr)
 }

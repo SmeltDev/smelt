@@ -53,7 +53,7 @@ type UpdateOptions struct {
 // markers in place and recorded in the run's record, so a continued run can
 // resolve them and the worktree is left with nothing in progress.
 func UpdateBranch(ctx context.Context, root string, rec Record, o UpdateOptions) (UpdateReport, error) {
-	base := ChooseBase(o.Base, rec.BaseBranch, rec.DefaultBranch)
+	base := ChooseBase(o.Base, rec.PRBase, rec.DefaultBranch)
 	if base == "" {
 		return UpdateReport{}, errors.New("cannot tell which branch to merge: the run recorded no base branch; pass --base")
 	}

@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -109,7 +111,7 @@ func remoteProject(t *testing.T) (Publication, string) {
 	assert.NilError(t, err)
 	return Publication{
 		Dir: wt.Path, Remote: "origin", Head: wt.Branch,
-		BaseBranch: wt.BaseBranch, DefaultBranch: "main",
+		PRBase: wt.PRBase, DefaultBranch: "main",
 	}, origin
 }
 
@@ -152,7 +154,7 @@ func TestPublicationRefusesTheDefaultBranch(t *testing.T) {
 
 func TestPublicationBaseFallsBackToDefaultWhenNotOnRemote(t *testing.T) {
 	pub, _ := remoteProject(t)
-	pub.BaseBranch = "local-only"
+	pub.PRBase = "local-only"
 	target, err := pub.Resolve(context.Background())
 	assert.NilError(t, err)
 	assert.Equal(t, target.Base, "main")
@@ -217,4 +219,109 @@ func TestPublicationPushKeepsTheGenericErrorForDifferentTrees(t *testing.T) {
 
 	assert.Assert(t, err != nil)
 	assert.Assert(t, !strings.Contains(err.Error(), "rewritten locally"), err.Error())
+}
+
+type fakeDefaultHost struct {
+	branch string
+	err    error
+}
+
+func (h fakeDefaultHost) DefaultBranch(context.Context) (string, error) { return h.branch, h.err }
+
+// publishedBase starts a run in remoteProject's repo with o, publishes it
+// through a fake host and returns the worktree and the base the PR got.
+func publishedBase(t *testing.T, root string, o WorktreeOptions) (Worktree, string) {
+	t.Helper()
+	o.Root, o.Path, o.RunID, o.Prompt = root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag"
+	wt, err := CreateWorktree(context.Background(), o)
+	assert.NilError(t, err)
+	host := &fakeHost{}
+	pub := Publication{Dir: wt.Path, Remote: "origin", Head: wt.Branch, PRBase: wt.PRBase, DefaultBranch: wt.DefaultBranch, Host: host}
+	target, err := pub.Resolve(context.Background())
+	assert.NilError(t, err)
+	_, err = pub.OpenPR(context.Background(), target)
+	assert.NilError(t, err)
+	return wt, host.created[0].Base
+}
+
+func originProject(t *testing.T) string {
+	t.Helper()
+	root := newProject(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gitOutput(t, root, "init", "--bare", origin)
+	gitOutput(t, root, "remote", "set-url", "origin", origin)
+	gitOutput(t, root, "push", "origin", "HEAD:refs/heads/main")
+	gitOutput(t, root, "push", "origin", "HEAD:refs/heads/epic/foo")
+	gitOutput(t, root, "fetch", "origin")
+	return root
+}
+
+func TestRunStartedOnAStrayBranchTargetsTheDefaultBranch(t *testing.T) {
+	root := originProject(t)
+	gitOutput(t, root, "checkout", "-b", "feature/x")
+	wt, base := publishedBase(t, root, WorktreeOptions{Host: fakeDefaultHost{branch: "main"}})
+	assert.Equal(t, wt.BaseBranch, "feature/x")
+	assert.Equal(t, wt.PRBase, "main")
+	assert.Equal(t, base, "main")
+	assert.Equal(t, newRecord("run-1", "p", wt).PRBase, "main")
+}
+
+func TestRunStartedWithFromTargetsThatBranch(t *testing.T) {
+	root := originProject(t)
+	wt, base := publishedBase(t, root, WorktreeOptions{From: "epic/foo", Host: fakeDefaultHost{branch: "main"}})
+	assert.Equal(t, wt.PRBase, "epic/foo")
+	assert.Equal(t, base, "epic/foo")
+}
+
+func TestDefaultBranchFallsBackToGitWhenTheHostFails(t *testing.T) {
+	root := originProject(t)
+	gitOutput(t, root, "remote", "set-head", "origin", "main")
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{
+		Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x",
+		Host: fakeDefaultHost{err: errors.New("no gh auth")},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, wt.DefaultBranch, "main")
+	assert.Equal(t, wt.PRBase, "main")
+}
+
+func TestGHHostDefaultBranchIsCachedPerRepo(t *testing.T) {
+	bin := t.TempDir()
+	count := filepath.Join(t.TempDir(), "calls")
+	script := "#!/bin/sh\necho x >> " + count + "\necho '{\"defaultBranchRef\":{\"name\":\"trunk\"}}'\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	host := GHHost{Dir: newProject(t), CacheDir: t.TempDir()}
+	for range 2 {
+		got, err := host.DefaultBranch(context.Background())
+		assert.NilError(t, err)
+		assert.Equal(t, got, "trunk")
+	}
+	calls, err := os.ReadFile(count)
+	assert.NilError(t, err)
+	assert.Equal(t, strings.Count(string(calls), "x"), 1)
+}
+
+func TestPRNumber(t *testing.T) {
+	assert.Equal(t, PRNumber("https://github.com/o/r/pull/62"), 62)
+	assert.Equal(t, PRNumber("https://github.com/o/r/pull/"), 0)
+	assert.Equal(t, PRNumber("nonsense"), 0)
+}
+
+func TestStrayBranchNote(t *testing.T) {
+	tests := []struct {
+		name string
+		wt   Worktree
+		want string
+	}{
+		{"stray", Worktree{BaseBranch: "fix/x", DefaultBranch: "main", PRBase: "main"}, "starting from fix/x (not main); the PR will target main"},
+		{"on default", Worktree{BaseBranch: "main", DefaultBranch: "main", PRBase: "main"}, ""},
+		{"detached", Worktree{DefaultBranch: "main", PRBase: "main"}, ""},
+		{"from", Worktree{BaseBranch: "epic/x", DefaultBranch: "main", PRBase: "epic/x", From: &FromRef{Ref: "epic/x"}}, ""},
+		{"no default", Worktree{BaseBranch: "fix/x"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { assert.Equal(t, StrayBranchNote(tt.wt), tt.want) })
+	}
 }

@@ -54,7 +54,7 @@ func (c *Continuation) prompt() string {
 		b.WriteString("\n\n" + u.Note() + " The files that came from " + u.Branch + " are not part of the request: keep them.")
 	}
 	if len(c.From.Conflicts) > 0 {
-		base := ChooseBase("", c.From.BaseBranch, c.From.DefaultBranch)
+		base := ChooseBase("", c.From.PRBase, c.From.DefaultBranch)
 		b.WriteString("\n\n" + conflictNote(base, c.From.Conflicts))
 	}
 	return b.String()
@@ -148,7 +148,7 @@ func openWorktree(ctx context.Context, root string, rec Record, runID string, au
 		return Worktree{}, fmt.Errorf("the branch %s no longer starts from the run's baseline %s", rec.Branch, shortSHA(rec.Baseline))
 	}
 	wt := Worktree{Path: rec.Worktree, Branch: rec.Branch, Baseline: rec.Baseline, Head: rec.Head,
-		BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch, From: rec.From, UpdatedFrom: rec.UpdatedFrom, Author: author}
+		BaseBranch: rec.BaseBranch, DefaultBranch: rec.DefaultBranch, PRBase: rec.PRBase, From: rec.From, UpdatedFrom: rec.UpdatedFrom, Author: author}
 	if _, err := os.Stat(wt.Path); errors.Is(err, os.ErrNotExist) {
 		// git still lists a worktree whose directory was deleted, and refuses
 		// to check its branch out again until it forgets it.

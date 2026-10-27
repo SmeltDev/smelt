@@ -738,6 +738,25 @@ func announceFrom(ctx context.Context, root string, wt Worktree, status iostream
 		wt.From.Ref, wt.From.Commit[:min(len(wt.From.Commit), 7)]))
 }
 
+// StrayBranchNote says what a run started from the checkout's own branch does
+// when that is not the default: it starts from there, but its PR goes to the
+// default. "" when there is nothing to say.
+func StrayBranchNote(wt Worktree) string {
+	if wt.From != nil || wt.BaseBranch == "" || wt.DefaultBranch == "" || wt.BaseBranch == wt.DefaultBranch {
+		return ""
+	}
+	return fmt.Sprintf("starting from %s (not %s); the PR will target %s", wt.BaseBranch, wt.DefaultBranch, wt.PRBase)
+}
+
+// AnnounceStart tells the developer what a new run starts from: what --from
+// ignores, and a checkout branch the PR will not target.
+func AnnounceStart(ctx context.Context, root string, wt Worktree, status iostream.StatusFunc) {
+	announceFrom(ctx, root, wt, status)
+	if note := StrayBranchNote(wt); note != "" {
+		status(iostream.LevelInfo, note)
+	}
+}
+
 // startWorktree is the run's worktree: new, or the continued run's reopened.
 func startWorktree(ctx context.Context, opts RunOptions, runID, dataDir string, author config.CommitAuthor) (Worktree, error) {
 	cont := opts.Continue
@@ -752,12 +771,24 @@ func startWorktree(ctx context.Context, opts RunOptions, runID, dataDir string, 
 	wt, err := CreateWorktree(ctx, WorktreeOptions{
 		Root: opts.Root, Path: filepath.Join(dataDir, "factory", runID),
 		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From, Against: opts.againstRef(),
+		Host: ghHostFor(opts.Root, dataDir),
 	})
 	if err != nil {
 		return Worktree{}, fmt.Errorf("create the run's worktree: %w", err)
 	}
-	announceFrom(ctx, opts.Root, wt, opts.Status)
+	AnnounceStart(ctx, opts.Root, wt, opts.Status)
 	return wt, nil
+}
+
+// ghHostFor is the host that names the default branch, nil without gh. Its
+// answers are cached under the data dir.
+func ghHostFor(root, dataDir string) DefaultBranchHost {
+	h := NewGHHost(root)
+	if h == nil {
+		return nil
+	}
+	h.CacheDir = filepath.Join(dataDir, "cache", "default-branch")
+	return h
 }
 
 // againstRef is the ref an integrate run compares its branch with, "" for any
