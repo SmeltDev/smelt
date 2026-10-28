@@ -247,3 +247,34 @@ func TestCleanCachesSelectionAndAttachedRefusal(t *testing.T) {
 		})
 	}
 }
+
+func TestFactoryRunsSharingASecondAreSeparate(t *testing.T) {
+	project := factoryProject(t)
+	a := finishedRun(t, project, "20261025-204905")
+	b := finishedRun(t, project, "20261025-204905-2")
+
+	out, err := runFactoryListCmd(t, "--json")
+	assert.NilError(t, err)
+	var entries []factory.RunEntry
+	assert.NilError(t, json.Unmarshal([]byte(out), &entries))
+	assert.Equal(t, len(entries), 2)
+	assert.Equal(t, entries[0].RunID, "20261025-204905-2")
+	assert.Equal(t, entries[1].RunID, "20261025-204905")
+
+	out, _, err = runCobra(t, newFactoryStatusCmd(), "20261025-204905-2")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "Run 20261025-204905-2:") && strings.Contains(out, b.Branch), out)
+	assert.Assert(t, !strings.Contains(out, a.Path+"\n"), out)
+
+	out, _, err = runCobra(t, newFactoryStopCmd(), "20261025-204905-2")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "Run 20261025-204905-2 has already finished"), out)
+
+	out, _, err = runFactoryCleanCmd(t, "--yes", "20261025-204905-2")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "removed 20261025-204905-2"), out)
+	assert.Assert(t, !branchExists(t, project, b.Branch))
+	assert.Assert(t, branchExists(t, project, a.Branch))
+	_, statErr := os.Stat(a.Path)
+	assert.NilError(t, statErr)
+}

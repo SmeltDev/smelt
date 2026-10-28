@@ -17,6 +17,7 @@ import (
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
 	"github.com/smeltdev/smelt/internal/gitexec"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
@@ -132,7 +133,9 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	defer pool.Release(entry)
 
 	spec := review.DetachSpec{
-		RunID:       time.Now().UTC().Format("20060102-150405"),
+		// A directory name on the sidecar, not a factory run ID; one review runs
+		// at a time (checkNoActiveRun), so the second is unique enough.
+		RunID:       factory.FormatRunID(time.Now()),
 		RepoPath:    entry.RepoPath,
 		OrgID:       req.orgID,
 		PromptsDir:  promptsDir,

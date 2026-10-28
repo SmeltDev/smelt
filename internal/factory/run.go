@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,6 +51,8 @@ type RunOptions struct {
 	// Root is the developer's repository root. The run's worktree is made from
 	// it, and the pool's state is kept in it, where the dashboard finds it.
 	Root string
+	// Now is the clock a run's ID is minted from; nil means time.Now.
+	Now func() time.Time
 	// Prompt is what the implementer is asked to do. A continued run makes its
 	// own from Continue, and ignores this.
 	Prompt string
@@ -250,6 +253,30 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 	return requested
 }
 
+// reserve checks the options and mints the run's ID. release drops the
+// reservation directory again; Remove leaves one that has content.
+func (o RunOptions) reserve() (start time.Time, dataDir, runID string, release func(), err error) {
+	start = time.Now()
+	if o.Now != nil {
+		start = o.Now()
+	}
+	if o.Continue != nil && o.From != "" {
+		return start, "", "", nil, errors.New("a continued run keeps its base, so it cannot start from another ref")
+	}
+	if err := o.checkIntegrate(); err != nil {
+		return start, "", "", nil, err
+	}
+	dataDir, err = config.ProjectDataDir(o.Root)
+	if err != nil {
+		return start, "", "", nil, fmt.Errorf("find smelt's data directory for the project: %w", err)
+	}
+	runID, err = MintRunID(dataDir, start)
+	if err != nil {
+		return start, "", "", nil, fmt.Errorf("mint the run ID: %w", err)
+	}
+	return start, dataDir, runID, func() { _ = os.Remove(filepath.Join(dataDir, "factory", runID)) }, nil
+}
+
 // Run makes the run's worktree and sidecars, runs the loop, and commits the
 // implementer's work on the run's branch. A failure before the loop starts
 // says which step failed; one in the loop is returned as Loop.Run returns it,
@@ -257,15 +284,19 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	defer func() { opts.Syncs.Close() }()
-	runStart := time.Now()
-	rep.RunID = runStart.UTC().Format("20060102-150405")
-	cont := opts.Continue
-	if cont != nil && opts.From != "" {
-		return rep, errors.New("a continued run keeps its base, so it cannot start from another ref")
-	}
-	if err := opts.checkIntegrate(); err != nil {
+	runStart, dataDir, runID, release, err := opts.reserve()
+	if err != nil {
 		return rep, err
 	}
+	rep.RunID = runID
+	// The reservation is dropped if the run never gets a worktree, so it does
+	// not make the next mint skip an ID.
+	defer func() {
+		if rep.Worktree.Path == "" {
+			release()
+		}
+	}()
+	cont := opts.Continue
 	integ := opts.Integrate
 	request := opts.Prompt
 	if cont != nil {
@@ -288,10 +319,6 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	status := opts.Status
 	lg.start(rep.RunID, opts, request)
 
-	dataDir, err := config.ProjectDataDir(opts.Root)
-	if err != nil {
-		return rep, fmt.Errorf("find smelt's data directory for the project: %w", err)
-	}
 	author := ResolveAuthor(ctx, opts.Root, opts.Author).CommitAuthor
 	wt, err := startWorktree(ctx, opts, rep.RunID, dataDir, author)
 	if err != nil {

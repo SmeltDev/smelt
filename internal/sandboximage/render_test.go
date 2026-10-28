@@ -25,6 +25,11 @@ func TestRepositorySandboxLive(t *testing.T) {
 	if testing.Short() || os.Getenv("SMELT_REPOSITORY_SANDBOX_NESTED") == "1" {
 		t.Skip("repository sandbox gates: short mode or already inside this test's sandbox")
 	}
+	// A cold build outlasts go test's default 10m timeout, which would panic
+	// the whole package rather than fail this test.
+	if d, ok := t.Deadline(); ok && time.Until(d) < 80*time.Minute {
+		t.Skip("repository sandbox gates need -timeout 90m or more")
+	}
 	b, err := Connect()
 	if err != nil {
 		t.Skipf("no docker: %v", err)

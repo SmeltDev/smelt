@@ -425,3 +425,49 @@ func TestFinishFailoverMapsAnUnavailableHarness(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(raw), `"result": "unavailable"`), string(raw))
 	assert.Assert(t, strings.Contains(string(raw), `"stop": "harness_unavailable"`), string(raw))
 }
+
+// A fresh run and a continuation started in the same second each get their own
+// ID, record and worktree: the continuation does not reuse the fresh run's.
+func TestRunMintsDistinctIDsForFreshAndContinuedRunsInOneSecond(t *testing.T) {
+	for _, bin := range []string{"rsync", "git"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	t.Setenv(config.EnvHome, t.TempDir())
+	ctx := context.Background()
+	root := newProject(t)
+	home := t.TempDir()
+	installFakeClaude(t, home, "echo 'package main' > flag.go\n"+streamOK)
+	backend := &localBackend{dir: t.TempDir()}
+	instant := time.Date(2026, 10, 25, 20, 49, 5, 0, time.UTC)
+	opts := RunOptions{
+		Root:       root,
+		Prompt:     "add a flag",
+		Attempts:   2,
+		Backend:    backend,
+		Exec:       backend.inWorkspace(withoutPkill(localExec(home))),
+		Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
+		Now:        func() time.Time { return instant },
+		Status:     func(iostream.Level, string) {},
+	}
+
+	fresh, err := Run(ctx, opts)
+	assert.NilError(t, err)
+	assert.Equal(t, fresh.RunID, "20261025-204905")
+	first, err := LoadRecord(root, fresh.RunID)
+	assert.NilError(t, err)
+
+	opts.Continue = &Continuation{From: first}
+	cont, err := Run(ctx, opts)
+	assert.NilError(t, err)
+	assert.Equal(t, cont.RunID, "20261025-204905-2")
+
+	second, err := LoadRecord(root, cont.RunID)
+	assert.NilError(t, err)
+	assert.Equal(t, second.RunID, "20261025-204905-2")
+	reloaded, err := LoadRecord(root, fresh.RunID)
+	assert.NilError(t, err)
+	assert.Equal(t, reloaded.RunID, fresh.RunID)
+	assert.Assert(t, fresh.Worktree.Path != "")
+}
