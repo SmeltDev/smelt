@@ -799,8 +799,9 @@ func plainText(b []byte) []byte {
 // when --log-file names one, else the default when on, as --log and --verbose
 // turn it. It is absolute, since the daemon does not share this process's
 // working directory, and settled here, so this command knows where the log is
-// to show it. A default log is named for now and created empty, with a numeric suffix when
-// another run holds the name, so runs started in one second keep separate logs.
+// to show it. A default log is named for now and
+// created empty, with a numeric suffix when another run holds the name, so runs
+// started in one second keep separate logs.
 func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 	switch {
 	case path == "" && !on:
