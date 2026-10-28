@@ -587,6 +587,9 @@ type Session struct {
 	ProjectRoot string `json:"project_root"`
 	Branch      string `json:"branch,omitempty"`
 	HeadSHA     string `json:"head_sha,omitempty"`
+	// RequestID is the key of the start request that created the session, so a
+	// client whose start timed out can find the run in the list.
+	RequestID string `json:"request_id,omitempty"`
 
 	State SessionState `json:"state"`
 	Error string       `json:"error,omitempty"`
@@ -717,7 +720,11 @@ type SyncRequest struct {
 
 // FactoryRequest starts a factory session.
 type FactoryRequest struct {
-	Fallback []string `json:"fallback,omitempty"`
+	// RequestID makes the start idempotent: the daemon remembers it for ten
+	// minutes and answers a repeat with the first session's ID. StartFactory
+	// fills it in when empty.
+	RequestID string   `json:"request_id,omitempty"`
+	Fallback  []string `json:"fallback,omitempty"`
 	// FallbackSet distinguishes an explicitly empty list from project defaults.
 	FallbackSet bool `json:"fallback_set,omitempty"`
 	// ProjectRoot is a project the daemon tracks. Required.

@@ -62,6 +62,12 @@ func (d *daemon) handleFactoryStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project_root required", http.StatusBadRequest)
 		return
 	}
+	// A retried start gets the first one's ID even while the daemon hands over:
+	// that run exists, and refusing would only invite a second.
+	if first := d.sessions.replayed(req.RequestID); first != nil {
+		writeJSON(w, http.StatusAccepted, smeltd.SessionStartResponse{ID: first.snapshot().ID})
+		return
+	}
 	// This response is safe to retry: no session has been admitted. The store
 	// checks again at admission for transfers racing request validation.
 	if req.Continue == "" && d.sessions.hasHandedOver() {
