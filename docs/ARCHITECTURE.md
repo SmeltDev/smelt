@@ -777,6 +777,19 @@ toolchain tag and the kit ref. `Builder.Ensure` builds the toolchain first when 
 
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 
+**The Docker provider's workspace has two modes** (`internal/sidecar/docker`,
+`workspace.go`, `workspacetar.go`), chosen by `docker.workspace` or, unset, by the engine: a
+volume on Docker Desktop, a bind-mounted `SMELT_DOCKER_WORKROOT` directory elsewhere. In volume
+mode `Create` makes a labelled `smelt-work-*` volume mounted with `NoCopy` and hands the mount
+point to the image's user; `Sync` and `Pull` are tar streams over `CopyToContainer` and
+`CopyFromContainer` (`Upload` rewrites the headers to the image's uid/gid), choosing files with
+`git ls-files` against a throwaway repo so `.gitignore` decides as it did for rsync; `Snapshot`
+clones the volume to `smelt-snap-*` with a helper container; and `sandboximage` seeds history by
+uploading the repo's git directory and running git inside the container, so nothing needs the
+workspace on the host. Cache maintenance accounts for both volume kinds and removes unused ones
+older than 24 hours without taking the storage lock, since age plus the consumer check is what
+protects a volume a run is about to mount.
+
 **Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
 `smelt sidecar sync`, variants and the `smelt factory build` relay from implementer to
 reviewers; `rsyncPoolSidecar` backs the sidecar pool (seed, fan-out, stale

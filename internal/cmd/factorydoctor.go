@@ -32,6 +32,7 @@ func newFactoryDoctorCmd() *cobra.Command {
 			provider.ProjectPath = root
 			provider.MinFreeBytes = cfg.Factory.MinFreeBytes()
 			provider.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
+			provider.Workspace = docker.WorkspaceMode(cfg.DockerWorkspace())
 			report, reportErr := provider.ReportStorage(cmd.Context())
 			printStorageReport(iostream.FromCmd(cmd).Out, report, reportErr)
 			if reportErr != nil {
@@ -54,6 +55,16 @@ func printStorageReport(w io.Writer, report docker.StorageReport, err error) {
 	}
 	for _, fs := range report.Filesystems {
 		_, _ = fmt.Fprintf(w, "%s (%s): %.2f GB free\n", fs.Name, fs.Path, float64(fs.Free)/1e9)
+	}
+	if report.Workspace != "" {
+		_, _ = fmt.Fprintf(w, "Workspace: %s (%s)\n", report.Workspace, report.WorkspaceReason)
+	}
+	for _, vol := range report.Workspaces {
+		size := vol.Unavailable
+		if size == "" {
+			size = fmt.Sprintf("%.2f GB", float64(vol.Bytes)/1e9)
+		}
+		_, _ = fmt.Fprintf(w, "%s: %s\n", vol.Name, size)
 	}
 	for _, cache := range report.Caches {
 		measurement := cache.Unavailable

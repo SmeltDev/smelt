@@ -579,3 +579,21 @@ func TestCommandChangedRoundTrip(t *testing.T) {
 	cfg.Commands[0].Changed = "echo ${HOME} {a,b} {1..3}; awk '{print $1}'"
 	assert.NilError(t, SaveProjectConfig(dir, cfg))
 }
+
+func TestDockerWorkspaceValidation(t *testing.T) {
+	var unset *ProjectConfig
+	assert.Equal(t, unset.DockerWorkspace(), "")
+	for _, tt := range []struct {
+		value   string
+		wantErr bool
+	}{{"", false}, {DockerWorkspaceVolume, false}, {DockerWorkspaceBind, false}, {"nfs", true}} {
+		cfg := &ProjectConfig{Docker: &DockerConfig{Workspace: tt.value}}
+		err := cfg.Validate()
+		if tt.wantErr {
+			assert.ErrorContains(t, err, "docker.workspace")
+			continue
+		}
+		assert.NilError(t, err)
+		assert.Equal(t, cfg.DockerWorkspace(), tt.value)
+	}
+}

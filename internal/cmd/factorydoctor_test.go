@@ -34,3 +34,14 @@ func TestPrintStorageReportFullDiskAccessAdvice(t *testing.T) {
 	printStorageReport(&out, docker.StorageReport{HostError: "other"}, fmt.Errorf("x"))
 	assert.Assert(t, !strings.Contains(out.String(), "Full Disk Access"))
 }
+
+func TestPrintStorageReportWorkspace(t *testing.T) {
+	var out bytes.Buffer
+	printStorageReport(&out, docker.StorageReport{
+		Workspace: docker.WorkspaceVolume, WorkspaceReason: "Docker Desktop",
+		Workspaces: []docker.WorkspaceUsage{{Name: "smelt-work-a", Bytes: 3e9}, {Name: "smelt-snap-b", Unavailable: "measurement failed: x"}},
+	}, nil)
+	for _, want := range []string{"Workspace: volume (Docker Desktop)", "smelt-work-a: 3.00 GB", "smelt-snap-b: measurement failed: x"} {
+		assert.Assert(t, strings.Contains(out.String(), want), out.String())
+	}
+}

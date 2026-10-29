@@ -31,6 +31,18 @@ type StorageReport struct {
 	Warning     string
 	Filesystems []FilesystemSpace
 	Caches      []CacheUsage
+	// Workspace is the mode new members get and WorkspaceReason why; Workspaces
+	// are the workspace and snapshot volumes that exist.
+	Workspace       WorkspaceMode
+	WorkspaceReason string
+	Workspaces      []WorkspaceUsage
+}
+
+// WorkspaceUsage is a workspace or snapshot volume and the space it holds.
+type WorkspaceUsage struct {
+	Name        string
+	Bytes       int64
+	Unavailable string
 }
 
 // FilesystemSpace describes an independently checked storage location.
@@ -187,7 +199,7 @@ const (
 func (b *Provider) storageReport(ctx context.Context, mode storageMode) (report StorageReport, resultErr error) {
 	defer func() {
 		if mode == storageDiagnostic {
-			err := b.appendCacheUsage(ctx, &report)
+			err := errors.Join(b.appendCacheUsage(ctx, &report), b.appendWorkspaceUsage(ctx, &report))
 			if resultErr == nil {
 				resultErr = err
 			}
@@ -312,6 +324,53 @@ func (b *Provider) appendCacheUsage(ctx context.Context, report *StorageReport) 
 	return nil
 }
 
+// appendWorkspaceUsage adds the workspace mode and the sizes of the workspace
+// and snapshot volumes, which count against Docker's disk like the caches. A
+// volume that can't be measured is listed with the reason.
+func (b *Provider) appendWorkspaceUsage(ctx context.Context, report *StorageReport) error {
+	if mode, reason, err := b.ResolveWorkspace(ctx); err == nil {
+		report.Workspace, report.WorkspaceReason = mode, reason
+	}
+	volumes, err := b.listWorkspaceVolumes(ctx)
+	if err != nil || len(volumes) == 0 {
+		return err
+	}
+	var img string
+	if report.HostError == "" {
+		img, err = b.helperImage(ctx)
+	}
+	for _, vol := range volumes {
+		usage := WorkspaceUsage{Name: vol.Name}
+		switch {
+		case report.HostError != "":
+			usage.Unavailable = "backing storage unavailable: " + report.HostError
+		case err != nil:
+			usage.Unavailable = "measurement failed: " + err.Error()
+		default:
+			if usage.Bytes, usage.Unavailable = b.measureWorkspace(ctx, img, vol.Name); usage.Unavailable != "" {
+				usage.Unavailable = "measurement failed: " + usage.Unavailable
+			}
+		}
+		report.Workspaces = append(report.Workspaces, usage)
+	}
+	return nil
+}
+
+func (b *Provider) measureWorkspace(ctx context.Context, img, name string) (int64, string) {
+	size, err := b.measureVolume(ctx, img, name)
+	if err != nil {
+		return 0, err.Error()
+	}
+	return size, ""
+}
+
+// workspaceInVolume tells whether new members get a volume workspace, in which
+// case no host directory is written and its filesystem needs no check.
+func (b *Provider) workspaceInVolume(ctx context.Context) bool {
+	mode, _, err := b.ResolveWorkspace(ctx)
+	return err == nil && mode == WorkspaceVolume
+}
+
 // refreshDiagnosticMeasurement only reads the volume; diagnostics never trim it.
 func (b *Provider) refreshDiagnosticMeasurement(ctx context.Context, report *StorageReport, vol volume.Volume, recordPath string) error {
 	// Never pull a helper before establishing and checking host storage.
@@ -339,7 +398,7 @@ func (b *Provider) reportHostFilesystems(ctx context.Context, report *StorageRep
 		probe = availableBytes
 	}
 	for _, loc := range []FilesystemSpace{{Name: "project", Path: b.ProjectPath}, {Name: "workspace", Path: b.workRoot}, {Name: "Docker backing storage", Path: report.Host.FilesystemPath}} {
-		if loc.Path == "" {
+		if loc.Path == "" || loc.Name == "workspace" && b.workspaceInVolume(ctx) {
 			continue
 		}
 		path := loc.Path

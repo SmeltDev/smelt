@@ -504,6 +504,39 @@ func (f *FactoryConfig) ConcurrentRuns() int {
 	return max(f.MaxConcurrent, 1)
 }
 
+// Values of docker.workspace: where a docker sidecar's workspace is stored.
+const (
+	DockerWorkspaceVolume = "volume"
+	DockerWorkspaceBind   = "bind"
+)
+
+// DockerConfig is the docker section of the project config.
+type DockerConfig struct {
+	// Workspace is "volume" (a Docker volume inside the engine) or "bind" (a
+	// host directory mounted in). Unset picks volume on Docker Desktop and bind
+	// elsewhere.
+	Workspace string `json:"workspace,omitempty"`
+}
+
+func (d *DockerConfig) validate() error {
+	if d == nil {
+		return nil
+	}
+	switch d.Workspace {
+	case "", DockerWorkspaceVolume, DockerWorkspaceBind:
+		return nil
+	}
+	return fmt.Errorf("docker.workspace %q must be %q or %q", d.Workspace, DockerWorkspaceVolume, DockerWorkspaceBind)
+}
+
+// DockerWorkspace is the configured docker.workspace, empty when unset.
+func (c *ProjectConfig) DockerWorkspace() string {
+	if c == nil || c.Docker == nil {
+		return ""
+	}
+	return c.Docker.Workspace
+}
+
 // CommitAuthor is the configured author, the zero value when none is set.
 func (f *FactoryConfig) CommitAuthor() (CommitAuthor, error) {
 	if f == nil || f.Author == "" {
@@ -518,6 +551,7 @@ type ProjectConfig struct {
 	VCS                 *VCSConfig           `json:"vcs,omitempty"`
 	Validation          *ValidationConfig    `json:"validation,omitempty"`
 	Factory             *FactoryConfig       `json:"factory,omitempty"`
+	Docker              *DockerConfig        `json:"docker,omitempty"`
 	OrgID               string               `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment `json:"environment,omitempty"`
@@ -680,6 +714,9 @@ func (c *ProjectConfig) validate() error {
 		}
 	}
 	if err := c.Factory.validate(); err != nil {
+		return err
+	}
+	if err := c.Docker.validate(); err != nil {
 		return err
 	}
 	// Trimmed before the checks below rather than after, so the entry validated

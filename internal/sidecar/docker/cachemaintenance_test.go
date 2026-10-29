@@ -57,6 +57,7 @@ func TestCoordinatedMaintenance(t *testing.T) {
 		wg.Go(func() {
 			// Separate providers emulate independent callers sharing persisted state.
 			other := NewWithClient(b.cli, "local-image", b.workRoot)
+			other.Workspace = b.Workspace
 			other.CacheMaxBytes = b.CacheMaxBytes
 			other.CacheKey = b.CacheKey
 			unlock, err := other.storageLock(context.Background())

@@ -574,6 +574,17 @@ smelt
   caches, or exactly the selected project's, including legacy names. Singular `--cache` retains
   current-project selection. Both support `--yes` and `--dry-run`, confirmation, and non-forced
   Docker volume removal; attached volumes are refused. They accept no run arguments or `--force`.
+- The factory workspace is a Docker volume or a bind-mounted host directory, set by
+  `docker.workspace` in `.smelt/config.json` (`"volume"` or `"bind"`). Unset, a Docker Desktop engine
+  (whose bind mounts cross the VM's file share and are slow) gets a volume and any other engine a
+  bind mount. A volume `smelt-work-<member>` is mounted at the repo path, owned by the image's user,
+  and removed with the member; `sync` and `pull` stream tar archives with `.git` excluded and
+  `.gitignore` honored, deleting stale files as `rsync --delete` did. A snapshot is a volume
+  `smelt-snap-<name>` (`smeltfs:smelt-snap-<name>`) that records the image in a label. In bind mode
+  `SMELT_DOCKER_WORKROOT` still picks the directory. `factory doctor` prints the mode and why, and the
+  size of each workspace and snapshot volume; they count in the disk guard, and cache maintenance
+  removes ones no container uses once they are a day old. Snapshots taken in the other mode can't be
+  restored.
 - `factory image` and `factory doctor` share a storage report: volume size, effective configured cap,
   measurement age (or explicit unavailable status), endpoint, daemon root, and backing-storage evidence.
   The current project uses its configured cap; other projects show their last measured policy

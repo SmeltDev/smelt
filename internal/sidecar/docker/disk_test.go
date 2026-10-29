@@ -145,6 +145,7 @@ func storageProvider(t *testing.T) (*Provider, *storageEngine, string) {
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = cli.Close() })
 	b := NewWithClient(cli, "local-image", t.TempDir())
+	b.Workspace = WorkspaceBind // these tests check the host workspace filesystem
 	d, relocated, _ := desktopFixture(t, false)
 	// Transport uses HTTP; discovery still sees the selected socket in production.
 	b.discovery = &d

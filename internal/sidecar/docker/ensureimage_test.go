@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -50,7 +52,10 @@ type fakeDocker struct {
 	envs [][]string
 	ncpu int
 	// execs are the exec requests made, and execCode the exit code they report.
-	execs    []container.ExecOptions
+	execs []container.ExecOptions
+	// stdins are the scripts sent on the stdin of execs, in order.
+	stdinMu  sync.Mutex
+	stdins   []string
 	execCode int
 	// volumeErrs are the errors VolumeRemove returns by volume name;
 	// removedVolumes the volumes it removed.
@@ -65,6 +70,16 @@ type fakeDocker struct {
 	volumes []string
 	// execCodeFor, when set, picks an exec's exit code from its request.
 	execCodeFor func(container.ExecOptions) int
+	// execOut, when set, is the stdout an exec prints, picked from its request.
+	execOut func(container.ExecOptions) string
+	// operatingSystem is what Info reports.
+	operatingSystem string
+	// made are the volumes VolumeCreate made, by name; uploads the tar
+	// streams CopyToContainer received, by target directory; download is what
+	// CopyFromContainer returns.
+	made     map[string]volume.CreateOptions
+	uploads  map[string][]byte
+	download []byte
 }
 
 func newFakeDocker() *fakeDocker {
@@ -78,7 +93,7 @@ func (f *fakeDocker) Info(context.Context) (system.Info, error) {
 	if !f.ready() {
 		return system.Info{}, errors.New("starting")
 	}
-	return system.Info{ID: "id", ServerVersion: "27", Images: 1, NCPU: f.ncpu}, nil
+	return system.Info{OperatingSystem: f.operatingSystem, ID: "id", ServerVersion: "27", Images: 1, NCPU: f.ncpu}, nil
 }
 
 func (f *fakeDocker) ImageList(context.Context, image.ListOptions) ([]image.Summary, error) {

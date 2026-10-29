@@ -188,12 +188,18 @@ func (b *Provider) measureVolume(ctx context.Context, image, name string) (int64
 	return kb * 1024, nil
 }
 
-func (b *Provider) refuseConsumers(ctx context.Context, name string) error {
+// volumeUsers counts the containers, running or not, that mount a volume.
+func (b *Provider) volumeUsers(ctx context.Context, name string) (int, error) {
 	consumers, err := b.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("volume", name))})
+	return len(consumers), err
+}
+
+func (b *Provider) refuseConsumers(ctx context.Context, name string) error {
+	users, err := b.volumeUsers(ctx, name)
 	if err != nil {
 		return fmt.Errorf("check consumers of %s: %w", name, err)
 	}
-	if len(consumers) != 0 {
+	if users != 0 {
 		return fmt.Errorf("cache volume %s is in use; stop its runs before trimming or removing it", name)
 	}
 	return nil

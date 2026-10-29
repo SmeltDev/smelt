@@ -1,11 +1,14 @@
 // Package docker implements sidecar.Backend on local Docker containers, so a
 // factory run needs no CircleCI cloud sidecars.
 //
-// A member's workspace is a host directory bind-mounted into the container at
-// its repoPath, so Sync and Pull are plain local rsync between host directories
-// — no SSH tunnel. Because Docker's ContainerCommit does not capture bind-mount
-// contents, Snapshot copies the seed's workspace directory aside and clones
-// restore it, rather than committing an image.
+// A member's workspace is at its repoPath, and where it is stored depends on
+// the engine (see WorkspaceMode). On a VM-backed engine such as Docker Desktop
+// it is a Docker volume inside the VM: Sync and Pull stream tar archives over
+// the Docker API, and nothing is bind-mounted from the host. On a Linux engine
+// it is a host directory bind-mounted into the container, and Sync and Pull are
+// local rsync. Because Docker's ContainerCommit does not capture mounted
+// contents, Snapshot copies the seed's workspace aside (a volume clone, or a
+// directory copy) and clones restore it, rather than committing an image.
 package docker
 
 import (
@@ -40,8 +43,8 @@ import (
 // this default at least provides a shell and git on most tags.
 const defaultBaseImage = "debian:bookworm-slim"
 
-// snapshotScheme marks a Snapshot ref as a smelt host-directory snapshot rather
-// than a Docker image, so Create knows to restore from a directory.
+// snapshotScheme marks a Snapshot ref as a smelt workspace snapshot (a volume or
+// a host directory) rather than a Docker image, so Create knows to restore it.
 const snapshotScheme = brand.Command + "fs:"
 
 // EnvImage names the environment variable that overrides the provider's default
@@ -64,13 +67,16 @@ const defaultStopGrace = 10 * time.Second
 // a context detached from the cancelled one.
 const killTimeout = 10 * time.Second
 
-// Provider runs sidecars as local Docker containers with bind-mounted workspaces.
+// Provider runs sidecars as local Docker containers.
 type Provider struct {
 	cli       client.APIClient
 	baseImage string
-	// workRoot is where per-member workspace directories and snapshots live.
+	// workRoot is where per-member workspace directories and snapshots live in
+	// the bind workspace mode.
 	workRoot    string
 	storageRoot string
+	// Workspace is the configured docker.workspace; empty picks by the engine.
+	Workspace WorkspaceMode
 	// ManagedDockerfile is the project's factory.dockerfile, empty when the
 	// project has none. It only changes the hint for a missing local image.
 	ManagedDockerfile string
@@ -121,12 +127,18 @@ type Provider struct {
 	engineCPUs int
 }
 
-// member is a container the provider created: its bind-mounted workspace on
-// the host, and the image it runs. A snapshot of a member records that image so
-// clones restored from it run the same image, not the provider's default.
+// member is a container the provider created: where its workspace is stored
+// (a host directory, or a volume), and the image it runs. A snapshot of a member
+// records that image so clones restored from it run the same image, not the
+// provider's default.
 type member struct {
+	// hostDir is the bind-mounted workspace; volume the workspace volume. Exactly
+	// one is set.
 	hostDir string
+	volume  string
 	image   string
+	// owner is the container user, found when something first needs it.
+	owner owner
 	// env is set in every command run in the container: the temporary cache
 	// directories when the cache volumes could not be used.
 	env map[string]string
@@ -205,15 +217,11 @@ func (b *Provider) member(id string) (member, bool) {
 	return m, ok
 }
 
-func (b *Provider) hostDir(id string) (string, bool) {
-	m, ok := b.member(id)
-	return m.hostDir, ok
-}
-
-// Create provisions a container whose workspace at repoPath is a bind-mounted
-// host directory. image selects the source: empty or a Docker reference starts
-// a fresh container from that image; a smeltfs snapshot ref restores the
-// snapshot's workspace into the new host directory (and runs the base image).
+// Create provisions a container whose workspace at repoPath is a volume or a
+// bind-mounted host directory, per the workspace mode. image selects the
+// source: empty or a Docker reference starts a fresh container from that image;
+// a smeltfs snapshot ref restores the snapshot's workspace into the new
+// workspace (and runs the image the snapshot's seed ran).
 func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (sidecar.Instance, error) {
 	if err := b.CheckStorage(ctx); err != nil {
 		return sidecar.Instance{}, err
@@ -227,36 +235,34 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	if repoPath == "" {
 		return sidecar.Instance{}, errors.New("docker: create needs a repoPath")
 	}
+	mode, _, err := b.ResolveWorkspace(ctx)
+	if err != nil {
+		return sidecar.Instance{}, err
+	}
+	if mode == WorkspaceVolume {
+		b.pruneOrphanWorkspaces(ctx)
+	}
 	// The pool may reuse a name: it names the seed and the first clone made from
 	// its snapshot alike, which CircleCI allows and Docker does not. A suffix
-	// keeps container names and workspace directories unique per Create; the
-	// pool's own name is kept as a label.
+	// keeps container names and workspaces unique per Create; the pool's own
+	// name is kept as a label.
 	suffix, err := randomSuffix()
 	if err != nil {
 		return sidecar.Instance{}, fmt.Errorf("docker: name container: %w", err)
 	}
 	containerName := name + "-" + suffix
-	hostDir := filepath.Join(b.workRoot, containerName)
-	if err := os.MkdirAll(hostDir, 0o777); err != nil {
-		return sidecar.Instance{}, fmt.Errorf("docker: create workspace dir: %w", err)
-	}
 
 	containerImage := b.baseImage
+	var restore *snapshotRestore
 	switch {
 	case strings.HasPrefix(image, snapshotScheme):
 		// Clone: run the image the snapshot's seed ran, and restore the
-		// snapshot's workspace into this member's host dir.
-		snapDir := strings.TrimPrefix(image, snapshotScheme)
-		recorded, err := os.ReadFile(filepath.Join(snapDir, snapshotImageFile))
+		// snapshot's workspace into this member's.
+		opened, err := b.openSnapshot(ctx, mode, image)
 		if err != nil {
-			_ = os.RemoveAll(hostDir)
-			return sidecar.Instance{}, fmt.Errorf("docker: read snapshot image: %w", err)
+			return sidecar.Instance{}, err
 		}
-		containerImage = strings.TrimSpace(string(recorded))
-		if err := copyTree(ctx, filepath.Join(snapDir, snapshotWorkspaceDir), hostDir); err != nil {
-			_ = os.RemoveAll(hostDir)
-			return sidecar.Instance{}, fmt.Errorf("docker: restore snapshot: %w", err)
-		}
+		restore, containerImage = &opened, opened.image
 	case image != "":
 		containerImage = image
 	}
@@ -265,15 +271,29 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	// ID when Docker cannot inspect it by name; snapshots record it too.
 	containerImage, err = b.resolveImage(ctx, containerImage, nil)
 	if err != nil {
-		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, err
 	}
 
 	caches := b.cacheLayout(ctx, containerImage)
 	if err := b.maintainCaches(ctx, containerImage, caches); err != nil {
-		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, err
 	}
+	workspace, err := b.stageWorkspace(ctx, mode, containerName, repoPath, containerImage, restore)
+	if err != nil {
+		return sidecar.Instance{}, err
+	}
+	id, err := b.start(ctx, name, containerName, repoPath, containerImage, caches, workspace)
+	if err != nil {
+		workspace.undo()
+		return sidecar.Instance{}, err
+	}
+	return sidecar.Instance{ID: id, RepoPath: repoPath}, nil
+}
+
+// start creates and starts the member's container on its staged workspace and
+// prepares the caches and workspace for the image's user. On failure the
+// container is gone; the caller takes back the workspace.
+func (b *Provider) start(ctx context.Context, name, containerName, repoPath, containerImage string, caches cacheLayout, workspace staged) (string, error) {
 	cpus := b.cpuShare(ctx)
 	created, err := b.cli.ContainerCreate(ctx, &container.Config{
 		Image:      containerImage,
@@ -282,43 +302,62 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		Labels:     map[string]string{label: "1", labelName: name},
 		Env:        cpus.Env(),
 	}, &container.HostConfig{
-		Binds:     []string{hostDir + ":" + repoPath},
-		Mounts:    b.cacheMounts(caches),
+		Binds:     workspace.binds,
+		Mounts:    append(workspace.mounts, b.cacheMounts(caches)...),
 		Resources: container.Resources{NanoCPUs: cpus.NanoCPUs()},
 	}, nil, nil, containerName)
 	if err != nil {
-		_ = os.RemoveAll(hostDir)
-		return sidecar.Instance{}, fmt.Errorf("docker: create container: %w", err)
+		return "", fmt.Errorf("docker: create container: %w", err)
+	}
+	remove := func() {
+		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
+		b.forget(created.ID)
 	}
 	if err := b.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
-		_ = os.RemoveAll(hostDir)
-		return sidecar.Instance{}, fmt.Errorf("docker: start container: %w", err)
+		remove()
+		return "", fmt.Errorf("docker: start container: %w", err)
 	}
 	cacheEnv, err := b.prepareCaches(ctx, created.ID, caches)
 	if err != nil {
-		_ = b.cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
-		_ = os.RemoveAll(hostDir)
-		return sidecar.Instance{}, err
+		remove()
+		return "", err
 	}
-
-	b.remember(created.ID, member{hostDir: hostDir, image: containerImage, env: cacheEnv})
-	return sidecar.Instance{ID: created.ID, HostDir: hostDir, RepoPath: repoPath}, nil
+	m := workspace.member
+	m.image, m.env = containerImage, cacheEnv
+	b.remember(created.ID, m)
+	if m.volume != "" {
+		if err := b.ownWorkspace(ctx, created.ID, repoPath); err != nil {
+			remove()
+			return "", err
+		}
+	}
+	return created.ID, nil
 }
 
-// Delete removes the container and its host workspace directory. Removing one
-// that is already gone is not an error.
+func (b *Provider) forget(id string) {
+	b.mu.Lock()
+	delete(b.members, id)
+	b.mu.Unlock()
+}
+
+// Delete removes the container and its workspace: the host directory or the
+// volume. Removing one that is already gone is not an error.
 func (b *Provider) Delete(ctx context.Context, id string) error {
 	err := b.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("docker: remove container: %w", err)
 	}
-	if dir, ok := b.hostDir(id); ok {
-		_ = os.RemoveAll(dir)
-		b.mu.Lock()
-		delete(b.members, id)
-		b.mu.Unlock()
+	m, ok := b.member(id)
+	if !ok {
+		return nil
 	}
+	switch {
+	case m.volume != "":
+		b.removeVolume(ctx, m.volume)
+	case m.hostDir != "":
+		_ = os.RemoveAll(m.hostDir)
+	}
+	b.forget(id)
 	return nil
 }
 
@@ -330,6 +369,9 @@ func (b *Provider) Snapshot(ctx context.Context, id, name string) (string, error
 	m, ok := b.member(id)
 	if !ok {
 		return "", fmt.Errorf("docker: snapshot: unknown container %s", id)
+	}
+	if m.volume != "" {
+		return b.snapshotVolume(ctx, m, name)
 	}
 	snapDir := filepath.Join(b.workRoot, "snapshots", name)
 	if err := os.MkdirAll(snapDir, 0o777); err != nil {
@@ -349,39 +391,59 @@ func (b *Provider) Snapshot(ctx context.Context, id, name string) (string, error
 // sidecars do.
 func (b *Provider) IsStale(context.Context, string) bool { return false }
 
-// Sync mirrors the local tree at cwd into the member's bind-mounted workspace
-// with rsync (honoring .gitignore, deleting extraneous files), then ensures a
-// git repo exists there so the baseline commit and `git diff HEAD` work. retry
-// is unused: a local container is reachable as soon as it is created.
+// Sync mirrors the local tree at cwd into the member's workspace (honoring
+// .gitignore, deleting extraneous files), then ensures a git repo exists there
+// so the baseline commit and `git diff HEAD` work. A bind workspace is mirrored
+// with rsync, a volume with a tar stream. retry is unused: a local container is
+// reachable as soon as it is created.
 func (b *Provider) Sync(ctx context.Context, id, repoPath, cwd string, _ bool, status iostream.StatusFunc) error {
-	dir, ok := b.hostDir(id)
+	m, ok := b.member(id)
 	if !ok {
 		return fmt.Errorf("docker: sync: unknown container %s", id)
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("Syncing workspace %s...", repoPath))
-	// Mirror cwd -> hostDir. The worktree's own .git is excluded; a fresh git
-	// repo is initialised below, matching the CircleCI worktree sync.
-	if err := rsyncMirror(ctx, cwd, dir, "--exclude=/.git", "--filter=:- .gitignore"); err != nil {
-		return fmt.Errorf("docker: sync: %w", err)
+	var err error
+	if m.volume != "" {
+		err = b.syncVolume(ctx, id, repoPath, cwd)
+	} else {
+		err = syncBind(ctx, m.hostDir, cwd)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".git")); errors.Is(err, os.ErrNotExist) {
-		if out, err := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
-			return fmt.Errorf("docker: sync: git init: %w: %s", err, strings.TrimSpace(string(out)))
-		}
+	if err != nil {
+		return fmt.Errorf("docker: sync: %w", err)
 	}
 	status(iostream.LevelDone, "Synced")
 	return nil
 }
 
-// Pull mirrors the member's workspace back into localDir with rsync, excluding
-// every .git and files git ignores, matching the CircleCI pull's intent.
+// syncBind mirrors cwd -> dir. The worktree's own .git is excluded; a fresh git
+// repo is initialised, matching the CircleCI worktree sync.
+func syncBind(ctx context.Context, dir, cwd string) error {
+	if err := rsyncMirror(ctx, cwd, dir, "--exclude=/.git", "--filter=:- .gitignore"); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); errors.Is(err, os.ErrNotExist) {
+		if out, err := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+			return fmt.Errorf("git init: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// Pull mirrors the member's workspace back into localDir, excluding every .git
+// and files git ignores, matching the CircleCI pull's intent.
 func (b *Provider) Pull(ctx context.Context, id, repoPath, localDir string, status iostream.StatusFunc) error {
-	dir, ok := b.hostDir(id)
+	m, ok := b.member(id)
 	if !ok {
 		return fmt.Errorf("docker: pull: unknown container %s", id)
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("Pulling workspace %s...", repoPath))
-	if err := rsyncMirror(ctx, dir, localDir, "--exclude=.git", "--filter=:- .gitignore"); err != nil {
+	var err error
+	if m.volume != "" {
+		err = b.pullVolume(ctx, id, repoPath, localDir)
+	} else {
+		err = rsyncMirror(ctx, m.hostDir, localDir, "--exclude=.git", "--filter=:- .gitignore")
+	}
+	if err != nil {
 		return fmt.Errorf("docker: pull: %w", err)
 	}
 	status(iostream.LevelDone, "Pulled")
