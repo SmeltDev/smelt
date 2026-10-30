@@ -1,15 +1,22 @@
 package cmd
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
@@ -173,4 +180,75 @@ func TestFactoryImageTagUsesDefaultToolchain(t *testing.T) {
 	assert.Equal(t, factoryImageTag(root, cfg), plan.SandboxPlan(ref).Tag)
 	cfg.Image = "custom:tag"
 	assert.Equal(t, factoryImageTag(root, cfg), cfg.Image)
+}
+
+// manifestDocker is a Docker API with one labeled sandbox image whose kit
+// manifest can only be read by creating a container; it counts those.
+func manifestDocker(t *testing.T, creates *atomic.Int32) *sandboximage.Builder {
+	t.Helper()
+	manifest := `{"kit":6,"tools":[{"name":"claude","version":"2.1.310","sha256":"x"}]}`
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	assert.NilError(t, tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifest))}))
+	_, err := tw.Write([]byte(manifest))
+	assert.NilError(t, err)
+	assert.NilError(t, tw.Close())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/containers/create"):
+			creates.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"Id":"c1"}`))
+		case strings.HasSuffix(r.URL.Path, "/containers/c1/archive"):
+			w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString([]byte(`{"name":"manifest.json"}`)))
+			_, _ = w.Write(archive.Bytes())
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/images/json"):
+			_, _ = w.Write([]byte(`[{"Id":"sha256:img"}]`))
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			_, _ = w.Write([]byte(`{"Id":"sha256:img","Config":{"Labels":{"` + sandboximage.LabelHarnesses + `":"claude","` + sandboximage.LabelKit + `":"6"}}}`))
+		default:
+			http.Error(w, "unexpected", http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(server.Close)
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.47"))
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = cli.Close() })
+	return sandboximage.NewBuilder(cli)
+}
+
+func TestHarnessStatusJSONIsUnchangedWhenTheManifestComesFromTheCache(t *testing.T) {
+	project := t.TempDir()
+	assert.NilError(t, exec.Command("git", "-C", project, "init", "-q").Run())
+	gitPath, err := exec.LookPath("git")
+	assert.NilError(t, err)
+	isolatedHarnessStatus(t)
+	// The project root is found with git, and no agent CLI is on the PATH.
+	bin := t.TempDir()
+	assert.NilError(t, os.Symlink(gitPath, filepath.Join(bin, "git")))
+	t.Setenv("PATH", bin)
+	t.Setenv(config.EnvXDGStateHome, t.TempDir())
+	assert.NilError(t, os.MkdirAll(filepath.Join(project, ".smelt"), 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(project, ".smelt", "config.json"), []byte(`{"factory":{"image":"proj:img"}}`), 0o600))
+	t.Chdir(project)
+
+	var creates atomic.Int32
+	previous := connectDocker
+	t.Cleanup(func() { connectDocker = previous })
+	connectDocker = func() (*sandboximage.Builder, error) { return manifestDocker(t, &creates), nil }
+
+	first, err := runRoot(t, "harness", "status", "--json")
+	assert.NilError(t, err, first)
+	assert.Assert(t, strings.Contains(first, "2.1.310"), first)
+	assert.Equal(t, creates.Load(), int32(1))
+
+	for range 3 {
+		again, err := runRoot(t, "harness", "status", "--json")
+		assert.NilError(t, err, again)
+		assert.Equal(t, again, first)
+	}
+	assert.Equal(t, creates.Load(), int32(1), "the cached manifest starts no container")
 }

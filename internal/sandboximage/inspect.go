@@ -42,6 +42,9 @@ type ImageInfo struct {
 	// KitLabeled is whether the image carries LabelKit, to tell an image from
 	// before kit labels (Kit 1) from one built with kit 1.
 	KitLabeled bool
+	// Manifest is the kit manifest from LabelKitManifest; nil when the image
+	// has no usable label.
+	Manifest *KitManifest
 }
 
 // InspectImage looks tag up on the host and reads its agent labels.
@@ -60,10 +63,24 @@ func (b *Builder) InspectImage(ctx context.Context, tag string) (ImageInfo, erro
 	if v, err := strconv.Atoi(info.Config.Labels[LabelKit]); err == nil && v > 0 {
 		out.Kit, out.KitLabeled = v, true
 	}
+	out.Manifest = manifestLabel(info.Config.Labels[LabelKitManifest])
 	if l := info.Config.Labels[LabelHarnesses]; l != "" {
 		out.Status, out.Harnesses = ImageLabeled, strings.Split(l, ",")
 	}
 	return out, nil
+}
+
+// manifestLabel parses a LabelKitManifest value; nil when it is absent or
+// malformed, so the caller falls back to reading the image.
+func manifestLabel(v string) *KitManifest {
+	if v == "" {
+		return nil
+	}
+	var m KitManifest
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return nil
+	}
+	return &m
 }
 
 // ProbeScript prints the agent CLIs found on the image's PATH, one per line.

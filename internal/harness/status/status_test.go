@@ -369,3 +369,18 @@ func TestHostAndSandboxVersions(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(raw), `"host_version":"claude-host-123"`))
 	assert.Assert(t, strings.Contains(string(raw), `"image_version":"claude-sandbox-456"`))
 }
+
+func TestLabelManifestIsPreferredOverReadingTheImage(t *testing.T) {
+	f := &fakeImages{info: sandboximage.ImageInfo{
+		Status: sandboximage.ImageLabeled, ID: "sha256:1", Harnesses: []string{"claude"}, Kit: 2,
+		Manifest: &sandboximage.KitManifest{Kit: 7, Tools: []sandboximage.KitTool{{Name: "claude", Version: "claude-label"}}},
+	}}
+	d := imageDeps(t, f)
+	d.Manifest = func(context.Context, string) (sandboximage.KitManifest, error) {
+		t.Error("the manifest must come from the label, not the image")
+		return sandboximage.KitManifest{}, nil
+	}
+	rep := Build(t.Context(), d)
+	assert.Equal(t, rep.Image.Kit, 7)
+	assert.Equal(t, entry(t, rep, harness.Claude).ImageVersion, "claude-label")
+}

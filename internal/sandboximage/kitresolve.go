@@ -46,6 +46,8 @@ type KitChoice struct {
 	FoundOnDisk bool
 	// Notice records source build provenance independently of terminal output.
 	Notice string
+	// Manifest, when set, is written to the sandbox image as LabelKitManifest.
+	Manifest *KitManifest
 }
 
 // kitPuller is the part of a Builder ResolveKit uses.

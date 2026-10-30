@@ -712,6 +712,8 @@ smelt
   token expiring mid-run could not be exercised in the sandbox.
 - **Agent versions and refresh.** `harness status` reports `host_version` from each host CLI's
   `--version` and `image_version` from `/opt/smelt/manifest.json` in the sandbox, in text and JSON.
+  The image's manifest comes from its `LabelKitManifest` label when it has one, else it is read once per
+  image ID and cached in `kit-manifests.json` under smelt's state directory, so repeated calls start no container.
   `harness refresh` pulls and selects the current published kit; `harness refresh --kit-ref
   ghcr.io/smeltdev/smelt-kit:6` selects another published kit without upgrading smelt. Run
   `smelt factory image` afterward to assemble it with the existing toolchain. Future factory
