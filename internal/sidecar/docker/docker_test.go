@@ -351,3 +351,34 @@ func TestExecPipesALargeScriptToTheContainer(t *testing.T) {
 	assert.Equal(t, code, 0)
 	assert.Equal(t, strings.TrimSpace(stdout.String()), "1048576")
 }
+
+// TestLiveVolumeWorkspaceRunsGoTest syncs this repository into a volume
+// workspace and runs its tests there. It needs a daemon that can run a Go image
+// (golang:1.26) and asserts no mount of the
+// container is a bind mount.
+func TestLiveVolumeWorkspaceRunsGoTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	b := newLiveBackend(t)
+	b.Workspace = WorkspaceVolume
+	const image = "golang:1.26"
+	ctx := context.Background()
+	if _, err := b.cli.ImageInspect(ctx, image); err != nil {
+		t.Skipf("image %s not present: %v", image, err)
+	}
+	root, err := filepath.Abs("../../..")
+	assert.NilError(t, err)
+
+	inst, err := b.Create(ctx, "smelt-test-livego", image, repoPath)
+	assert.NilError(t, err)
+	defer func() { _ = b.Delete(ctx, inst.ID) }()
+	assert.NilError(t, b.Sync(ctx, inst.ID, repoPath, root, true, noStatus))
+
+	insp, err := b.cli.ContainerInspect(ctx, inst.ID)
+	assert.NilError(t, err)
+	for _, m := range insp.Mounts {
+		assert.Assert(t, m.Type != "bind", "unexpected bind mount %s -> %s", m.Source, m.Destination)
+	}
+	execOutput(t, b, inst.ID, "cd "+repoPath+" && go test ./internal/brand/...")
+}

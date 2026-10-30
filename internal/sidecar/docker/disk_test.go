@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,10 @@ type storageEngine struct {
 	active, failMeasure, failStart, cancelWait       bool
 	emptyImages                                      bool
 	pulls                                            int
+	// usedVolumes are the volumes a container mounts; removedNames the volumes
+	// removed by name.
+	usedVolumes  map[string]bool
+	removedNames []string
 }
 
 func (f *storageEngine) serve(w http.ResponseWriter, r *http.Request) {
@@ -71,10 +76,13 @@ func (f *storageEngine) serve(w http.ResponseWriter, r *http.Request) {
 			vols = append(vols, &vol)
 		}
 		_ = json.NewEncoder(w).Encode(volume.ListResponse{Volumes: vols})
+	case strings.HasPrefix(path, "/volumes/") && r.Method == http.MethodDelete:
+		f.removedNames = append(f.removedNames, strings.TrimPrefix(path, "/volumes/"))
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(path, "/volumes/"):
 		_ = json.NewEncoder(w).Encode(f.volumes[strings.TrimPrefix(path, "/volumes/")])
 	case path == "/containers/json":
-		if f.active {
+		if f.active || f.usedVolumes[volumeFilter(r)] {
 			_, _ = fmt.Fprint(w, `[{"Id":"consumer"}]`)
 		} else {
 			_, _ = fmt.Fprint(w, `[]`)
@@ -359,4 +367,50 @@ func TestDiskRefusalWithWorkingDiscovery(t *testing.T) {
 	err := b.CheckStorage(context.Background())
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.HasPrefix(err.Error(), "disk almost full: "), err.Error())
+}
+
+// volumeFilter is the volume a ContainerList request filters on.
+func volumeFilter(r *http.Request) string {
+	var args map[string]map[string]bool
+	_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &args)
+	for name := range args["volume"] {
+		return name
+	}
+	return ""
+}
+
+func TestPruneOrphanWorkspacesRemovesOnlyOldUnusedVolumes(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	fresh := time.Now().UTC().Format(time.RFC3339)
+	labels := ownedLabels(nil)
+	f.volumes["smelt-work-old"] = volume.Volume{Name: "smelt-work-old", CreatedAt: old, Labels: labels}
+	f.volumes["smelt-snap-old"] = volume.Volume{Name: "smelt-snap-old", CreatedAt: old, Labels: labels}
+	f.volumes["smelt-work-used"] = volume.Volume{Name: "smelt-work-used", CreatedAt: old, Labels: labels}
+	f.volumes["smelt-work-new"] = volume.Volume{Name: "smelt-work-new", CreatedAt: fresh, Labels: labels}
+	f.usedVolumes = map[string]bool{"smelt-work-used": true}
+	b.pruneOrphanWorkspaces(context.Background())
+	slices.Sort(f.removedNames)
+	assert.DeepEqual(t, f.removedNames, []string{"smelt-snap-old", "smelt-work-old"})
+}
+
+func TestStorageReportListsWorkspaceAndSnapshotVolumes(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	labels := ownedLabels(nil)
+	for _, n := range []string{"smelt-work-a", "smelt-snap-b"} {
+		f.volumes[n] = volume.Volume{Name: n, CreatedAt: "2026-10-25T00:00:00Z", Labels: labels}
+	}
+	f.cacheKB = 8
+	report, err := b.ReportStorage(context.Background())
+	assert.NilError(t, err)
+	got := map[string]WorkspaceUsage{}
+	for _, w := range report.Workspaces {
+		got[w.Name] = w
+	}
+	assert.Equal(t, len(got), 2)
+	for _, n := range []string{"smelt-work-a", "smelt-snap-b"} {
+		assert.Equal(t, got[n].Bytes, int64(8*1024), n)
+		assert.Equal(t, got[n].Unavailable, "", n)
+	}
 }
