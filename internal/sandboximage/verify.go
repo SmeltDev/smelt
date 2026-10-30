@@ -185,7 +185,7 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 	if err := b.Sync(ctx, inst.ID, repoPath, opts.Dir, false, func(iostream.Level, string) {}); err != nil {
 		return VerifyResult{}, fmt.Errorf("copy the repo into the container: %w", err)
 	}
-	if err := seedHistory(ctx, inst.HostDir, opts.Dir); err != nil {
+	if err := seedHistory(ctx, b, inst, opts.Dir); err != nil {
 		return VerifyResult{}, fmt.Errorf("copy the repo's history into the container: %w", err)
 	}
 

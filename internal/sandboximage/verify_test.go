@@ -3,6 +3,7 @@ package sandboximage
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,17 +214,20 @@ func TestVerifyRunsLizardAndOnlyWarnsWhenItIsMissing(t *testing.T) {
 	}
 }
 
-// hostBackend gives the container a real host directory, as the docker
-// provider does, and runs scripts there on the host.
+// hostBackend stands in for a container with a host directory: uploads are
+// unpacked there and scripts run there on the host.
 type hostBackend struct {
 	fakeBackend
 	hostDir string
 }
 
-func (h *hostBackend) Create(ctx context.Context, name, image, repoPath string) (sidecar.Instance, error) {
-	inst, err := h.fakeBackend.Create(ctx, name, image, repoPath)
-	inst.HostDir = h.hostDir
-	return inst, err
+func (h *hostBackend) Upload(_ context.Context, _, _ string, content io.Reader) error {
+	cmd := exec.Command("tar", "-x", "-C", h.hostDir)
+	cmd.Stdin = content
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }
 
 // Sync mimics the docker provider: files without .git, then a bare git init.
@@ -237,10 +241,11 @@ func (h *hostBackend) Sync(_ context.Context, _, _, cwd string, _ bool, _ iostre
 }
 
 func (h *hostBackend) Exec(_ context.Context, _, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
-	if !strings.Contains(script, "rev-parse") {
+	if !strings.Contains(script, "rev-parse") && !strings.Contains(script, seedDir) {
 		return 0, nil
 	}
 	script = strings.Replace(script, "cd "+sidecar.ShellEscape(h.repoPath)+" && ", "", 1)
+	script = strings.Replace(script, "cd "+sidecar.ShellEscape(h.repoPath)+"\n", "", 1)
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = h.hostDir
 	out, err := cmd.CombinedOutput()

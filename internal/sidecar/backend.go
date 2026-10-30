@@ -40,12 +40,10 @@ type Backend interface {
 }
 
 // Instance is a sidecar a Backend provisioned. ID identifies it to the
-// backend. HostDir and RepoPath are set by backends whose workspace is a local
-// directory (Docker); they are empty for remote backends (CircleCI), where the
-// pool supplies the workspace path.
+// backend. RepoPath is set by backends that choose the workspace path (Docker);
+// it is empty for remote backends (CircleCI), where the pool supplies it.
 type Instance struct {
 	ID       string
-	HostDir  string
 	RepoPath string
 }
 

@@ -23,6 +23,7 @@ func DockerBackend(root string, cfg *config.ProjectConfig, machineRuns int) (sid
 	b.ProjectPath = root
 	b.MinFreeBytes = cfg.Factory.MinFreeBytes()
 	b.CacheMaxBytes = cfg.Factory.CacheMaxBytes()
+	b.Workspace = docker.WorkspaceMode(cfg.DockerWorkspace())
 	b.StopGrace = cfg.Factory.StopGraceDuration()
 	b.Runs = max(machineRuns, cfg.Factory.ConcurrentRuns())
 	if cfg.Factory != nil {

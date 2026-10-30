@@ -201,7 +201,7 @@ func (b *Provider) cacheMounts(l cacheLayout) []mount.Mount {
 			Type: mount.TypeVolume, Source: v.Name, Target: v.Target,
 			// Copying image contents into a fresh volume would fill it after
 			// maintenance measured it, bypassing the pre-mount cap check.
-			VolumeOptions: &mount.VolumeOptions{NoCopy: true, Labels: map[string]string{label: "1", labelCacheKey: b.CacheKey}},
+			VolumeOptions: &mount.VolumeOptions{NoCopy: true, Labels: ownedLabels(map[string]string{labelCacheKey: b.CacheKey})},
 		})
 	}
 	return out

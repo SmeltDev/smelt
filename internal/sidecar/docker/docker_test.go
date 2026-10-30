@@ -30,9 +30,6 @@ func noStatus(iostream.Level, string) {}
 // workspaces live under a temp dir and it runs the small test image.
 func newLiveBackend(t *testing.T) *Provider {
 	t.Helper()
-	if _, err := exec.LookPath("rsync"); err != nil {
-		t.Skip("rsync is not installed")
-	}
 	b, err := New()
 	if err != nil {
 		t.Skipf("no docker client: %v", err)
@@ -92,91 +89,134 @@ func TestExecPassesEnv(t *testing.T) {
 	assert.Equal(t, stdout.String(), "hello-env")
 }
 
+// liveModes are the workspace modes the live tests run in. The bind mode needs
+// rsync on the host; the volume mode needs nothing but the daemon.
+var liveModes = []WorkspaceMode{WorkspaceBind, WorkspaceVolume}
+
+// forEachLiveMode runs fn against a live backend in each workspace mode.
+func forEachLiveMode(t *testing.T, fn func(t *testing.T, b *Provider)) {
+	for _, mode := range liveModes {
+		t.Run(string(mode), func(t *testing.T) {
+			b := newLiveBackend(t)
+			if mode == WorkspaceBind {
+				if _, err := exec.LookPath("rsync"); err != nil {
+					t.Skip("rsync is not installed")
+				}
+			}
+			b.Workspace = mode
+			fn(t, b)
+		})
+	}
+}
+
+// execOutput runs script in the container and returns its stdout.
+func execOutput(t *testing.T, b *Provider, id, script string) string {
+	t.Helper()
+	var out strings.Builder
+	code, err := b.Exec(context.Background(), id, script, nil, func(stream string, data []byte) {
+		if stream == iostream.StreamStdout {
+			out.Write(data)
+		}
+	}, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, code, 0, "%s: %s", script, out.String())
+	return out.String()
+}
+
 // TestSyncSnapshotCloneAndPull exercises the whole provisioning + transport
 // path the pool drives: sync a tree in, snapshot it, create a clone from the
 // snapshot, confirm the clone has the files, then pull a container's workspace
 // back out.
 func TestSyncSnapshotCloneAndPull(t *testing.T) {
-	b := newLiveBackend(t)
-	ctx := context.Background()
+	forEachLiveMode(t, func(t *testing.T, b *Provider) {
+		ctx := context.Background()
 
-	// A local source tree with a tracked file and a gitignored one.
-	srcTree := t.TempDir()
-	write(t, filepath.Join(srcTree, "main.go"), "package main\n")
-	write(t, filepath.Join(srcTree, ".gitignore"), "ignored.txt\n")
-	write(t, filepath.Join(srcTree, "ignored.txt"), "do not sync\n")
+		// A local source tree with a tracked file and a gitignored one.
+		srcTree := t.TempDir()
+		write(t, filepath.Join(srcTree, "main.go"), "package main\n")
+		write(t, filepath.Join(srcTree, ".gitignore"), "ignored.txt\n")
+		write(t, filepath.Join(srcTree, "ignored.txt"), "do not sync\n")
 
-	// The seed runs an explicit image while the provider's default is bogus:
-	// a clone must run the seed's image (recorded in the snapshot), and would
-	// fail to pull the default if it fell back to it.
-	b.baseImage = "smelt-test/does-not-exist:never"
-	seed, err := b.Create(ctx, "smelt-test-seed", testImage, repoPath)
-	assert.NilError(t, err)
-	defer func() { _ = b.Delete(ctx, seed.ID) }()
+		// The seed runs an explicit image while the provider's default is bogus:
+		// a clone must run the seed's image (recorded in the snapshot), and would
+		// fail to pull the default if it fell back to it.
+		b.baseImage = "smelt-test/does-not-exist:never"
+		seed, err := b.Create(ctx, "smelt-test-seed", testImage, repoPath)
+		assert.NilError(t, err)
+		defer func() { _ = b.Delete(ctx, seed.ID) }()
 
-	assert.NilError(t, b.Sync(ctx, seed.ID, repoPath, srcTree, true, noStatus))
+		assert.NilError(t, b.Sync(ctx, seed.ID, repoPath, srcTree, true, noStatus))
 
-	// The tracked file landed in the bind-mounted host dir; the ignored one did
-	// not; and Sync initialised a git repo.
-	assert.Equal(t, readFile(t, filepath.Join(seed.HostDir, "main.go")), "package main\n")
-	assert.Assert(t, !exists(filepath.Join(seed.HostDir, "ignored.txt")), "gitignored file should not sync")
-	assert.Assert(t, exists(filepath.Join(seed.HostDir, ".git")), "git repo should be initialised")
+		// The container sees the tracked file at repoPath; the ignored one did not
+		// sync.
+		assert.Equal(t, execOutput(t, b, seed.ID, "cat "+repoPath+"/main.go"), "package main\n")
+		assert.Equal(t, execOutput(t, b, seed.ID, "ls -A "+repoPath+" | grep -c '^ignored.txt$' || true"), "0\n")
 
-	// The container sees the file at repoPath through the bind mount.
-	var catOut strings.Builder
-	code, err := b.Exec(ctx, seed.ID, "cat "+repoPath+"/main.go", nil,
-		func(stream string, data []byte) {
-			if stream == iostream.StreamStdout {
-				catOut.Write(data)
-			}
-		}, nil)
-	assert.NilError(t, err)
-	assert.Equal(t, code, 0)
-	assert.Equal(t, catOut.String(), "package main\n")
+		// Snapshot the seed and clone from it: the clone's workspace has the files.
+		snap, err := b.Snapshot(ctx, seed.ID, "smelt-test-snap")
+		assert.NilError(t, err)
+		assert.Assert(t, strings.HasPrefix(snap, snapshotScheme))
+		defer func() { removeSnapshot(t, b, snap) }()
 
-	// Snapshot the seed and clone from it: the clone's workspace has the files.
-	snap, err := b.Snapshot(ctx, seed.ID, "smelt-test-snap")
-	assert.NilError(t, err)
-	assert.Assert(t, strings.HasPrefix(snap, snapshotScheme))
-	snapDir := strings.TrimPrefix(snap, snapshotScheme)
-	assert.Equal(t, strings.TrimSpace(readFile(t, filepath.Join(snapDir, snapshotImageFile))), testImage)
+		clone, err := b.Create(ctx, "smelt-test-clone", snap, repoPath)
+		assert.NilError(t, err)
+		defer func() { _ = b.Delete(ctx, clone.ID) }()
+		assert.Equal(t, execOutput(t, b, clone.ID, "cat "+repoPath+"/main.go"), "package main\n")
 
-	clone, err := b.Create(ctx, "smelt-test-clone", snap, repoPath)
-	assert.NilError(t, err)
-	defer func() { _ = b.Delete(ctx, clone.ID) }()
-	assert.Equal(t, readFile(t, filepath.Join(clone.HostDir, "main.go")), "package main\n")
-	assert.Assert(t, exists(filepath.Join(clone.HostDir, ".git")), "clone should carry the snapshot's .git")
+		// Pull the seed's workspace back out: the tracked file comes, .git does not.
+		dest := t.TempDir()
+		assert.NilError(t, b.Pull(ctx, seed.ID, repoPath, dest, noStatus))
+		assert.Equal(t, readFile(t, filepath.Join(dest, "main.go")), "package main\n")
+		assert.Assert(t, !exists(filepath.Join(dest, ".git")), "pull must not bring back .git")
+	})
+}
 
-	// Pull the seed's workspace back out: the tracked file comes, .git does not.
-	dest := t.TempDir()
-	assert.NilError(t, b.Pull(ctx, seed.ID, repoPath, dest, noStatus))
-	assert.Equal(t, readFile(t, filepath.Join(dest, "main.go")), "package main\n")
-	assert.Assert(t, !exists(filepath.Join(dest, ".git")), "pull must not bring back .git")
+// removeSnapshot deletes what a snapshot ref names: a directory or a volume.
+func removeSnapshot(t *testing.T, b *Provider, ref string) {
+	t.Helper()
+	src, err := parseSnapshotRef(ref, b.Workspace)
+	if err != nil {
+		t.Errorf("snapshot ref: %v", err)
+		return
+	}
+	if src.volume != "" {
+		b.removeVolume(context.Background(), src.volume)
+		return
+	}
+	_ = os.RemoveAll(src.dir)
 }
 
 // TestCreateSameNameTwice mirrors the pool, which names the seed and the first
 // clone from its snapshot alike: both must come up, with their own workspaces.
 func TestCreateSameNameTwice(t *testing.T) {
-	b := newLiveBackend(t)
-	ctx := context.Background()
-	first, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
-	assert.NilError(t, err)
-	defer func() { _ = b.Delete(ctx, first.ID) }()
-	second, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
-	assert.NilError(t, err)
-	defer func() { _ = b.Delete(ctx, second.ID) }()
-	assert.Assert(t, first.ID != second.ID)
-	assert.Assert(t, first.HostDir != second.HostDir, "each member needs its own workspace dir")
+	forEachLiveMode(t, func(t *testing.T, b *Provider) {
+		ctx := context.Background()
+		first, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
+		assert.NilError(t, err)
+		defer func() { _ = b.Delete(ctx, first.ID) }()
+		second, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
+		assert.NilError(t, err)
+		defer func() { _ = b.Delete(ctx, second.ID) }()
+		assert.Assert(t, first.ID != second.ID)
+		execOutput(t, b, first.ID, "touch "+repoPath+"/only-first")
+		assert.Equal(t, execOutput(t, b, second.ID, "ls "+repoPath), "", "each member needs its own workspace")
+	})
 }
 
 func TestDeleteRemovesWorkspace(t *testing.T) {
-	b := newLiveBackend(t)
-	ctx := context.Background()
-	inst, err := b.Create(ctx, "smelt-test-del", "", repoPath)
-	assert.NilError(t, err)
-	assert.Assert(t, exists(inst.HostDir))
-	assert.NilError(t, b.Delete(ctx, inst.ID))
-	assert.Assert(t, !exists(inst.HostDir), "Delete should remove the host workspace")
+	forEachLiveMode(t, func(t *testing.T, b *Provider) {
+		ctx := context.Background()
+		inst, err := b.Create(ctx, "smelt-test-del", "", repoPath)
+		assert.NilError(t, err)
+		m, _ := b.member(inst.ID)
+		assert.NilError(t, b.Delete(ctx, inst.ID))
+		if m.volume != "" {
+			_, err := b.cli.VolumeInspect(ctx, m.volume)
+			assert.Assert(t, err != nil, "Delete should remove the workspace volume")
+			return
+		}
+		assert.Assert(t, !exists(m.hostDir), "Delete should remove the host workspace")
+	})
 }
 
 func write(t *testing.T, path, content string) {
@@ -310,4 +350,35 @@ func TestExecPipesALargeScriptToTheContainer(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, code, 0)
 	assert.Equal(t, strings.TrimSpace(stdout.String()), "1048576")
+}
+
+// TestLiveVolumeWorkspaceRunsGoTest syncs this repository into a volume
+// workspace and runs its tests there. It needs a daemon that can run a Go image
+// (golang:1.26) and asserts no mount of the
+// container is a bind mount.
+func TestLiveVolumeWorkspaceRunsGoTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	b := newLiveBackend(t)
+	b.Workspace = WorkspaceVolume
+	const image = "golang:1.26"
+	ctx := context.Background()
+	if _, err := b.cli.ImageInspect(ctx, image); err != nil {
+		t.Skipf("image %s not present: %v", image, err)
+	}
+	root, err := filepath.Abs("../../..")
+	assert.NilError(t, err)
+
+	inst, err := b.Create(ctx, "smelt-test-livego", image, repoPath)
+	assert.NilError(t, err)
+	defer func() { _ = b.Delete(ctx, inst.ID) }()
+	assert.NilError(t, b.Sync(ctx, inst.ID, repoPath, root, true, noStatus))
+
+	insp, err := b.cli.ContainerInspect(ctx, inst.ID)
+	assert.NilError(t, err)
+	for _, m := range insp.Mounts {
+		assert.Assert(t, m.Type != "bind", "unexpected bind mount %s -> %s", m.Source, m.Destination)
+	}
+	execOutput(t, b, inst.ID, "cd "+repoPath+" && go test ./internal/brand/...")
 }

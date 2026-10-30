@@ -30,8 +30,41 @@ func (f *fakeDocker) ContainerExecCreate(_ context.Context, _ string, opts conta
 }
 
 func (f *fakeDocker) ContainerExecAttach(context.Context, string, container.ExecAttachOptions) (types.HijackedResponse, error) {
-	conn, _ := net.Pipe()
-	return types.HijackedResponse{Conn: conn, Reader: bufio.NewReader(strings.NewReader(""))}, nil
+	conn, peer := net.Pipe()
+	var framed string
+	if f.execOut != nil {
+		if out := f.execOut(f.execs[len(f.execs)-1]); out != "" {
+			framed = string([]byte{1, 0, 0, 0, 0, 0, 0, byte(len(out))}) + out
+		}
+	}
+	var src io.Reader = strings.NewReader(framed)
+	if f.execs[len(f.execs)-1].AttachStdin {
+		// The output waits for the script written to stdin, so a test can read
+		// it as soon as the exec returns.
+		got := make(chan struct{})
+		go func() {
+			buf := make([]byte, 1<<20)
+			n, _ := peer.Read(buf)
+			f.stdinMu.Lock()
+			f.stdins = append(f.stdins, string(buf[:n]))
+			f.stdinMu.Unlock()
+			close(got)
+		}()
+		src = io.MultiReader(readerFunc(func([]byte) (int, error) { <-got; return 0, io.EOF }), src)
+	}
+	return types.HijackedResponse{Conn: conn, Reader: bufio.NewReader(src)}, nil
+}
+
+// readerFunc adapts a function to io.Reader.
+type readerFunc func([]byte) (int, error)
+
+func (r readerFunc) Read(p []byte) (int, error) { return r(p) }
+
+// sentScripts are the stdin scripts execs received so far.
+func (f *fakeDocker) sentScripts() []string {
+	f.stdinMu.Lock()
+	defer f.stdinMu.Unlock()
+	return slices.Clone(f.stdins)
 }
 
 func (f *fakeDocker) ContainerExecInspect(context.Context, string) (container.ExecInspect, error) {
