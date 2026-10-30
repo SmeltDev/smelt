@@ -217,3 +217,32 @@ func TestKitImageRefSaysWhenItFoundTheKitOnDisk(t *testing.T) {
 	assert.Assert(t, strings.Contains(out.String(), "using the kit found on disk: sha256:ondisk"), out.String())
 	assert.Assert(t, !strings.Contains(out.String(), "pulled last"), out.String())
 }
+
+// manifestKits is a fakeKits that can also read the kit image's manifest.
+type manifestKits struct {
+	fakeKits
+	manifest sandboximage.KitManifest
+	readErr  error
+}
+
+func (m *manifestKits) ReadKitManifest(context.Context, string) (sandboximage.KitManifest, error) {
+	return m.manifest, m.readErr
+}
+
+func TestWithAgentKitLabelsTheImageWithTheManifest(t *testing.T) {
+	const ref = sandboximage.KitRegistryRepo + "@sha256:3333"
+	root := kitProject(t, "FROM x\n")
+	toolchain, err := sandboximage.NewPlan(root, "Dockerfile.smelt")
+	assert.NilError(t, err)
+
+	kits := &manifestKits{fakeKits: fakeKits{ref: ref}, manifest: sandboximage.KitManifest{Kit: 7, Tools: []sandboximage.KitTool{{Name: "claude", Version: "1.2.3"}}}}
+	got, _, err := withAgentKit(t.Context(), iostream.Streams{}, kits, toolchain, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(got.Context.Content, "LABEL "+sandboximage.LabelKitManifest+"="), got.Context.Content)
+	assert.Assert(t, strings.Contains(got.Context.Content, `1.2.3`), got.Context.Content)
+
+	kits.readErr = errors.New("cannot read")
+	got, _, err = withAgentKit(t.Context(), iostream.Streams{}, kits, toolchain, kitSource{Root: root})
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(got.Context.Content, sandboximage.LabelKitManifest), got.Context.Content)
+}

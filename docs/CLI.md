@@ -661,6 +661,12 @@ smelt
   with `--reviewers N` when running several at once. `factory status` with no run ID still shows the
   newest run; `factory list` and `smelt watch` show every active one. Finished runs are kept until
   more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
+- **`factory list` does not read the worktrees unless asked.** Whether a worktree has uncommitted
+  changes costs a `git status` per worktree, so `factory list [--json]` omits `dirty` and the table's
+  WORKTREE column reads `kept` or `missing`. `factory list --dirty` computes it (running runs first, the
+  rest four at a time): `dirty` is then in the JSON and the column reads `dirty` or `clean`. A status
+  that cannot be read counts as dirty. Callers that read `dirty` must pass `--dirty`. `factory clean`
+  always checks the runs it is about to remove, and only those.
 - **Machine-wide limits live in the user config** (`~/.config/smelt/config.json`), under `factory`, and
   are read when the daemon starts (restart it to change them). `factory.maxRuns` is the most unfinished
   runs across all projects; unset or `0` is no limit. Over it, a start or `--continue` is refused with
@@ -706,6 +712,8 @@ smelt
   token expiring mid-run could not be exercised in the sandbox.
 - **Agent versions and refresh.** `harness status` reports `host_version` from each host CLI's
   `--version` and `image_version` from `/opt/smelt/manifest.json` in the sandbox, in text and JSON.
+  The image's manifest comes from its `LabelKitManifest` label when it has one, else it is read once per
+  image ID and cached in `kit-manifests.json` under smelt's state directory, so repeated calls start no container.
   `harness refresh` pulls and selects the current published kit; `harness refresh --kit-ref
   ghcr.io/smeltdev/smelt-kit:6` selects another published kit without upgrading smelt. Run
   `smelt factory image` afterward to assemble it with the existing toolchain. Future factory

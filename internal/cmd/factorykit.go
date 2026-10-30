@@ -99,7 +99,25 @@ func withAgentKit(ctx context.Context, streams iostream.Streams, kits kitProvide
 	if err != nil {
 		return toolchain, "", err
 	}
+	choice.Manifest = kitManifestOf(ctx, kits, choice.Ref)
 	return toolchain.SandboxPlanWithKit(choice), choice.Ref, nil
+}
+
+// kitManifestOf reads the manifest of the kit image ref, to label the sandbox
+// image with it. It is best effort: a provider that cannot read it, or an
+// image that fails to, leaves the image unlabeled and status reads it later.
+func kitManifestOf(ctx context.Context, kits kitProvider, ref string) *sandboximage.KitManifest {
+	reader, ok := kits.(interface {
+		ReadKitManifest(context.Context, string) (sandboximage.KitManifest, error)
+	})
+	if !ok {
+		return nil
+	}
+	m, err := reader.ReadKitManifest(ctx, ref)
+	if err != nil {
+		return nil
+	}
+	return &m
 }
 
 // kitImageRef resolves the kit image to copy from, telling the user when it is

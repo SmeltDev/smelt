@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/gitexec"
 )
@@ -46,10 +48,12 @@ type RunEntry struct {
 	// Result and Rounds come from the latest record, if there is one.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
-	// WorktreeExists and Dirty describe the worktree directory. Dirty means
-	// uncommitted changes, or a status that could not be read.
+	// WorktreeExists says whether the worktree directory is still there.
 	WorktreeExists bool `json:"worktree_exists"`
-	Dirty          bool `json:"dirty"`
+	// Dirty is set only by MarkDirty, because finding it costs a git status per
+	// worktree. It is nil until then. True means uncommitted changes, or a
+	// status that could not be read.
+	Dirty *bool `json:"dirty,omitempty"`
 	// StartedAt is when the latest run started, read from its ID. It is zero
 	// when the ID is not a timestamp.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -66,6 +70,10 @@ func (e RunEntry) ID() string {
 	}
 	return e.RunIDs[len(e.RunIDs)-1]
 }
+
+// IsDirty reports whether MarkDirty found the worktree dirty. An entry MarkDirty
+// has not checked is not dirty here, so callers that discard work run MarkDirty first.
+func (e RunEntry) IsDirty() bool { return e.Dirty != nil && *e.Dirty }
 
 // Has reports whether runID is one of the entry's runs.
 func (e RunEntry) Has(runID string) bool {
@@ -115,7 +123,7 @@ func Inventory(ctx context.Context, root string, active map[string]bool) ([]RunE
 
 	entries := make([]RunEntry, 0, len(g.groups))
 	for _, grp := range g.groups {
-		entries = append(entries, grp.entry(ctx, active))
+		entries = append(entries, grp.entry(active))
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].ID() > entries[j].ID() })
 	return entries, nil
@@ -245,7 +253,7 @@ func resolvePath(p string) string {
 }
 
 // entry works out the group's state from its records and its worktree.
-func (g *group) entry(ctx context.Context, active map[string]bool) RunEntry {
+func (g *group) entry(active map[string]bool) RunEntry {
 	sort.Slice(g.records, func(i, j int) bool { return g.records[i].RunID < g.records[j].RunID })
 	e := RunEntry{Branch: g.branch, Worktree: g.worktree, State: StateOrphaned}
 	for _, r := range g.records {
@@ -276,7 +284,6 @@ func (g *group) entry(ctx context.Context, active map[string]bool) RunEntry {
 	if e.Worktree != "" {
 		if info, err := os.Stat(e.Worktree); err == nil && info.IsDir() {
 			e.WorktreeExists = true
-			e.Dirty = worktreeDirty(ctx, e.Worktree)
 		}
 	}
 	return e
@@ -294,6 +301,47 @@ func worktreeDirty(ctx context.Context, path string) bool {
 	return err != nil || strings.TrimSpace(string(out)) != ""
 }
 
+// dirtyWorkers bounds how many worktrees MarkDirty checks at once.
+const dirtyWorkers = 4
+
+// MarkDirty sets Dirty on every entry that still has a worktree, running
+// entries first and the rest through a pool of dirtyWorkers. Entries without a
+// worktree keep a nil Dirty.
+func MarkDirty(ctx context.Context, entries []RunEntry) {
+	markDirty(ctx, entries, worktreeDirty)
+}
+
+// markDirty is MarkDirty with the per-worktree check passed in.
+func markDirty(ctx context.Context, entries []RunEntry, check func(context.Context, string) bool) {
+	var g errgroup.Group
+	g.SetLimit(dirtyWorkers)
+	for _, i := range dirtyOrder(entries) {
+		g.Go(func() error {
+			dirty := check(ctx, entries[i].Worktree)
+			// Each worker writes only its own entry.
+			entries[i].Dirty = &dirty
+			return nil
+		})
+	}
+	_ = g.Wait()
+}
+
+// dirtyOrder is the indices of the entries to check: those with a worktree,
+// running ones before the rest, each group in list order.
+func dirtyOrder(entries []RunEntry) []int {
+	var running, rest []int
+	for i, e := range entries {
+		switch {
+		case !e.WorktreeExists:
+		case e.State == StateRunning:
+			running = append(running, i)
+		default:
+			rest = append(rest, i)
+		}
+	}
+	return append(running, rest...)
+}
+
 // Removal is what RemoveRun took away. Parts already gone are not counted.
 type Removal struct {
 	Worktree bool
@@ -308,7 +356,8 @@ var ErrRunning = errors.New("the run is still in progress")
 var ErrDirty = errors.New("the worktree has uncommitted changes")
 
 // RemoveRun deletes the entry's worktree, branch and records. It never removes
-// a running entry, and refuses a dirty worktree unless force is set. Each step
+// a running entry, and refuses a dirty worktree unless force is set. Callers
+// must run MarkDirty on the entry first: an unchecked entry counts as clean here. Each step
 // tolerates what is already gone, so a clean that was interrupted can be run
 // again. The branch is deleted with -D because a factory branch is never merged
 // in git's sense; the caller's confirmation is what makes that safe.
@@ -317,7 +366,7 @@ func RemoveRun(ctx context.Context, root string, e RunEntry, force bool) (Remova
 	if e.State == StateRunning {
 		return done, fmt.Errorf("run %s: %w", e.ID(), ErrRunning)
 	}
-	if e.Dirty && !force {
+	if e.IsDirty() && !force {
 		return done, fmt.Errorf("run %s: %w at %s", e.ID(), ErrDirty, e.Worktree)
 	}
 	if e.Branch != "" && !strings.HasPrefix(e.Branch, branchPrefix) {
