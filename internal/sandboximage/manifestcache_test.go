@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
@@ -21,9 +22,11 @@ import (
 // countingDocker is a Docker API that lists the given image IDs, serves one
 // kit manifest from any container and counts the containers created.
 type countingDocker struct {
-	creates atomic.Int32
-	images  []string
-	labels  map[string]string // labels of the inspected image
+	creates  atomic.Int32
+	images   []string
+	labels   map[string]string // labels of the inspected image
+	creating chan struct{}
+	release  chan struct{}
 }
 
 const testManifestJSON = `{"kit":6,"tools":[{"name":"claude","version":"2.1.310","sha256":"pinned"}]}`
@@ -41,6 +44,14 @@ func (c *countingDocker) builder(t *testing.T) *Builder {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/containers/create"):
 			c.creates.Add(1)
+			if c.creating != nil {
+				c.creating <- struct{}{}
+				select {
+				case <-c.release:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"Id":"c1"}`))
 		case strings.HasSuffix(r.URL.Path, "/containers/c1/archive"):
@@ -98,6 +109,44 @@ func TestCachedKitManifestReadsOncePerImageID(t *testing.T) {
 	_, err = b.CachedKitManifest(t.Context(), path, "sha256:b")
 	assert.NilError(t, err)
 	assert.Equal(t, d.creates.Load(), int32(2))
+}
+
+func TestCachedKitManifestConcurrentImages(t *testing.T) {
+	d := &countingDocker{
+		images:   []string{"sha256:a", "sha256:b"},
+		creating: make(chan struct{}, 2),
+		release:  make(chan struct{}),
+	}
+	b := d.builder(t)
+	path := filepath.Join(t.TempDir(), "kit-manifests.json")
+	errs := make(chan error, 2)
+	go func() {
+		_, err := b.CachedKitManifest(t.Context(), path, "sha256:a")
+		errs <- err
+	}()
+	<-d.creating
+	go func() {
+		_, err := b.CachedKitManifest(t.Context(), path, "sha256:b")
+		errs <- err
+	}()
+	// Give the second caller a chance to read the initially empty cache while
+	// the first population is in flight. With transaction locking it waits;
+	// without it both reads finish with independent snapshots and lose an entry.
+	select {
+	case <-d.creating:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(d.release)
+	for range 2 {
+		assert.NilError(t, <-errs)
+	}
+	for _, id := range d.images {
+		got, err := b.CachedKitManifest(t.Context(), path, id)
+		assert.NilError(t, err)
+		assert.Equal(t, got.Kit, 6)
+	}
+	assert.Equal(t, d.creates.Load(), int32(2))
+	assert.Equal(t, len(cachedIDs(t, path)), 2)
 }
 
 func TestCachedKitManifestPrunesVanishedImages(t *testing.T) {

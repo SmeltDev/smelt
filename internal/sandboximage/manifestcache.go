@@ -6,8 +6,10 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/docker/docker/api/types/image"
+	"github.com/gofrs/flock"
 )
 
 // CachedKitManifest is ReadKitManifest for the image with the given ID, kept
@@ -18,6 +20,18 @@ import (
 // skips it.
 func (b *Builder) CachedKitManifest(ctx context.Context, path, id string) (KitManifest, error) {
 	if id == "" || path == "" {
+		return b.ReadKitManifest(ctx, id)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return b.ReadKitManifest(ctx, id)
+	}
+	// Keep the lock in a separate, stable file: the cache itself is replaced
+	// by rename. Hold it through pruning and population so another process
+	// cannot overwrite an entry using a snapshot taken before this update.
+	lock := flock.New(path + ".lock")
+	defer func() { _ = lock.Close() }()
+	locked, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil || !locked {
 		return b.ReadKitManifest(ctx, id)
 	}
 	entries := readManifestCache(path)
