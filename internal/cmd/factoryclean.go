@@ -24,14 +24,19 @@ import (
 const maxPromptWidth = 40
 
 func newFactoryListCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, dirty bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the project's factory runs",
 		Long: `List the factory runs of this project: their state, result, age, whether the
-worktree has uncommitted changes, and the start of the prompt. Runs come from
-their records, their worktrees and their branches, so a run is listed even when
-one of them is gone.`,
+worktree is kept, and the start of the prompt. Runs come from their records,
+their worktrees and their branches, so a run is listed even when one of them is
+gone.
+
+Whether a worktree has uncommitted changes takes a git status per worktree, so
+it is left out unless --dirty is given: the WORKTREE column then reads dirty or
+clean instead of kept, and the JSON "dirty" field is present. Without --dirty
+the field is omitted, so callers that read it must pass --dirty.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -39,6 +44,9 @@ one of them is gone.`,
 			_, entries, err := loadFactoryRuns(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if dirty {
+				factory.MarkDirty(cmd.Context(), entries)
 			}
 			if jsonOut {
 				return iostream.PrintJSON(streams.Out, entries)
@@ -52,6 +60,7 @@ one of them is gone.`,
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&dirty, "dirty", false, "check each worktree for uncommitted changes (slow with many runs)")
 	return cmd
 }
 
@@ -148,9 +157,10 @@ func runFactoryClean(cmd *cobra.Command, args []string, flags cleanFlags) error 
 	if err != nil {
 		return err
 	}
+	factory.MarkDirty(ctx, sel)
 	var selected, skipped []factory.RunEntry
 	for _, e := range sel {
-		if e.Dirty && !flags.force {
+		if e.IsDirty() && !flags.force {
 			skipped = append(skipped, e)
 			streams.ErrPrintf("skipped %s: worktree has uncommitted changes (use --force to discard them)\n", e.ID())
 			continue
@@ -377,7 +387,9 @@ func worktreeCell(e factory.RunEntry) string {
 	switch {
 	case !e.WorktreeExists:
 		return "missing"
-	case e.Dirty:
+	case e.Dirty == nil:
+		return "kept"
+	case *e.Dirty:
 		return "dirty"
 	}
 	return "clean"

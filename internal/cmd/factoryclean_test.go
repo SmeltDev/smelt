@@ -168,7 +168,7 @@ func TestFactoryListShowsAFinishedRun(t *testing.T) {
 
 	out, err := runFactoryListCmd(t)
 	assert.NilError(t, err)
-	for _, want := range []string{"RUN", "20261010-100000", "finished", "passed", "clean", "do the thing"} {
+	for _, want := range []string{"RUN", "20261010-100000", "finished", "passed", "kept", "do the thing"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
 	}
 
@@ -186,6 +186,18 @@ func TestFactoryListShowsAFinishedRun(t *testing.T) {
 	assert.Equal(t, raw[0]["run_id"], "20261010-100000")
 	assert.Equal(t, raw[0]["state"], "finished")
 	assert.Assert(t, entries[0].WorktreeExists)
+	_, hasDirty := raw[0]["dirty"]
+	assert.Assert(t, !hasDirty, "dirty must be omitted without --dirty: %s", out)
+
+	out, err = runFactoryListCmd(t, "--json", "--dirty")
+	assert.NilError(t, err)
+	raw = nil
+	assert.NilError(t, json.Unmarshal([]byte(out), &raw))
+	assert.Equal(t, raw[0]["dirty"], false)
+
+	out, err = runFactoryListCmd(t, "--dirty")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "clean") && !strings.Contains(out, "kept"), out)
 }
 
 func TestCleanCacheSelectionArgs(t *testing.T) {
