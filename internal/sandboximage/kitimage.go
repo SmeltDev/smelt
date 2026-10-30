@@ -1,6 +1,7 @@
 package sandboximage
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -117,7 +118,19 @@ func sandboxDockerfile(toolchainTag string, choice KitChoice) string {
 		"ENV PATH=" + KitDir + "/bin:$PATH\n" +
 		"ENV SSL_CERT_FILE=" + KitDir + "/libexec/runtime/ca-certificates.crt\n" +
 		"ENV NODE_EXTRA_CA_CERTS=" + KitDir + "/libexec/runtime/ca-certificates.crt\n" +
-		kitHarnessLabel(choice.Kit)
+		kitHarnessLabel(choice.Kit) + kitManifestLabel(choice.Manifest)
+}
+
+// kitManifestLabel is the LABEL line carrying m, or nothing without one.
+func kitManifestLabel(m *KitManifest) string {
+	if m == nil {
+		return ""
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return "LABEL " + LabelKitManifest + "=" + strconv.Quote(string(raw)) + "\n"
 }
 
 // SandboxTag names the sandbox image built from the toolchain image

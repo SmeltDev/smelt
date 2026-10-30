@@ -34,6 +34,10 @@ const LabelHarnesses = brand.LabelPrefix + "harnesses"
 // LabelKit records the agent-kit version the image was built from.
 const LabelKit = brand.LabelPrefix + "kit"
 
+// LabelKitManifest holds the kit's manifest as compact JSON, so the tools'
+// versions are read from the image without starting a container.
+const LabelKitManifest = brand.LabelPrefix + "kit-manifest"
+
 // logTailLines is how much of a failed build's log is kept for the error.
 const logTailLines = 150
 

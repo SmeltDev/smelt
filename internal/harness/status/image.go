@@ -58,22 +58,36 @@ func (d Deps) checkImage(ctx context.Context) imageCheck {
 		return imageCheck{report: rep, note: fmt.Sprintf("sandbox image %s is not built; run smelt factory image", d.ImageTag)}
 	case info.Status == sandboximage.ImageLabeled:
 		rep.Found = info.Harnesses
-		if d.Manifest != nil {
-			probeCtx, stop := context.WithTimeout(ctx, DefaultProbeTimeout)
-			defer stop()
-			manifest, err := d.Manifest(probeCtx, info.ID)
-			if err != nil {
-				return imageCheck{report: rep, note: "could not read kit manifest: " + err.Error()}
-			}
-			rep.Kit = manifest.Kit
-			rep.Versions = make(map[string]string, len(manifest.Tools))
-			for _, tool := range manifest.Tools {
-				rep.Versions[tool.Name] = tool.Version
-			}
+		if note := d.addManifest(ctx, rep, info); note != "" {
+			return imageCheck{report: rep, note: note}
 		}
 		return imageCheck{report: rep}
 	}
 	return d.probeUnlabeled(ctx, rep)
+}
+
+// addManifest sets the kit version and tool versions of rep from the image's
+// label, else from d.Manifest. It returns a note when the manifest cannot be read.
+func (d Deps) addManifest(ctx context.Context, rep *ImageReport, info sandboximage.ImageInfo) string {
+	manifest := info.Manifest
+	if manifest == nil {
+		if d.Manifest == nil {
+			return ""
+		}
+		probeCtx, stop := context.WithTimeout(ctx, DefaultProbeTimeout)
+		defer stop()
+		m, err := d.Manifest(probeCtx, info.ID)
+		if err != nil {
+			return "could not read kit manifest: " + err.Error()
+		}
+		manifest = &m
+	}
+	rep.Kit = manifest.Kit
+	rep.Versions = make(map[string]string, len(manifest.Tools))
+	for _, tool := range manifest.Tools {
+		rep.Versions[tool.Name] = tool.Version
+	}
+	return ""
 }
 
 // updateKitHint says how to get an image with a label.

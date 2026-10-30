@@ -117,7 +117,7 @@ func projectDeps(ctx context.Context, d status.Deps) status.Deps {
 type dockerImages struct{}
 
 func (dockerImages) InspectImage(ctx context.Context, tag string) (sandboximage.ImageInfo, error) {
-	b, err := sandboximage.Connect()
+	b, err := connectDocker()
 	if err != nil {
 		return sandboximage.ImageInfo{}, err
 	}
@@ -126,7 +126,7 @@ func (dockerImages) InspectImage(ctx context.Context, tag string) (sandboximage.
 }
 
 func (dockerImages) RunProbe(ctx context.Context, tag string) ([]string, error) {
-	b, err := sandboximage.Connect()
+	b, err := connectDocker()
 	if err != nil {
 		return nil, err
 	}
@@ -235,14 +235,26 @@ func versionText(v string) string {
 	return v
 }
 
-func readSandboxManifest(ctx context.Context, tag string) (sandboximage.KitManifest, error) {
-	b, err := sandboximage.Connect()
+// readSandboxManifest reads the kit manifest of the image with ID id, from
+// the cache under smelt's state directory when it was read before.
+func readSandboxManifest(ctx context.Context, id string) (sandboximage.KitManifest, error) {
+	b, err := connectDocker()
 	if err != nil {
 		return sandboximage.KitManifest{}, err
 	}
 	defer func() { _ = b.Close() }()
-	return b.ReadKitManifest(ctx, tag)
+	path := ""
+	if dir, err := config.AppState(); err == nil {
+		path = filepath.Join(dir, kitManifestsFile)
+	}
+	return b.CachedKitManifest(ctx, path, id)
 }
+
+// kitManifestsFile caches, per image ID, the kit manifest read from the image.
+const kitManifestsFile = "kit-manifests.json"
+
+// connectDocker is a seam for tests; production code never reassigns it.
+var connectDocker = sandboximage.Connect
 
 func newHarnessRefreshCmd() *cobra.Command {
 	var ref string
@@ -265,7 +277,7 @@ func newHarnessRefreshCmd() *cobra.Command {
 
 // refreshAgentKit is a test seam for the local Docker daemon.
 var refreshAgentKit = func(ctx context.Context, ref string) (sandboximage.KitChoice, error) {
-	b, err := sandboximage.Connect()
+	b, err := connectDocker()
 	if err != nil {
 		return sandboximage.KitChoice{}, err
 	}
