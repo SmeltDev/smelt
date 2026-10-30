@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -84,6 +86,7 @@ func TestInventoryStates(t *testing.T) {
 
 	entries := e.inventory(t)
 	assert.Equal(t, len(entries), 3)
+	MarkDirty(context.Background(), entries)
 	// Newest first.
 	assert.Equal(t, entries[0].ID(), "20261010-120000")
 	assert.Equal(t, entries[0].State, StateOrphaned)
@@ -96,7 +99,8 @@ func TestInventoryStates(t *testing.T) {
 	assert.Equal(t, entries[2].Rounds, 3)
 	assert.Equal(t, entries[2].Prompt, "Finish it")
 	assert.Assert(t, entries[2].WorktreeExists)
-	assert.Assert(t, !entries[2].Dirty)
+	assert.Assert(t, entries[2].Dirty != nil && !*entries[2].Dirty)
+	assert.Assert(t, entries[2].Dirty != nil)
 	assert.Equal(t, entries[2].StartedAt.Hour(), 10)
 
 	assert.Equal(t, e.inventory(t, "20261010-110000")[1].State, StateRunning)
@@ -135,7 +139,103 @@ func TestInventoryDirtyWorktree(t *testing.T) {
 	wt, br := e.worktree(t, "20261010-100000")
 	e.record(t, Record{RunID: "20261010-100000", Worktree: wt, Branch: br, Result: ResultPassed})
 	assert.NilError(t, os.WriteFile(filepath.Join(wt, "new.txt"), []byte("x"), 0o644))
-	assert.Assert(t, e.inventory(t)[0].Dirty)
+	entries := e.inventory(t)
+	MarkDirty(context.Background(), entries)
+	assert.Assert(t, entries[0].IsDirty())
+}
+
+func TestInventoryRunsNoGitStatus(t *testing.T) {
+	e := newCleanEnv(t)
+	wt, br := e.worktree(t, "20261010-100000")
+	e.record(t, Record{RunID: "20261010-100000", Worktree: wt, Branch: br, Result: ResultPassed})
+
+	realGit, err := exec.LookPath("git")
+	assert.NilError(t, err)
+	shimDir := t.TempDir()
+	logFile := filepath.Join(shimDir, "calls.log")
+	shim := "#!/bin/sh\necho \"$@\" >> '" + logFile + "'\nexec '" + realGit + "' \"$@\"\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755))
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	entries := e.inventory(t)
+	assert.Assert(t, entries[0].WorktreeExists)
+	assert.Assert(t, entries[0].Dirty == nil)
+	calls, err := os.ReadFile(logFile)
+	assert.NilError(t, err)
+	assert.Assert(t, len(calls) > 0, "the shim saw no git call, so it proves nothing")
+	assert.Assert(t, !strings.Contains(string(calls), "status"), string(calls))
+}
+
+func TestMarkDirtyCleanDirtyUnreadable(t *testing.T) {
+	e := newCleanEnv(t)
+	cleanWT, cleanBr := e.worktree(t, "20261010-100000")
+	e.record(t, Record{RunID: "20261010-100000", Worktree: cleanWT, Branch: cleanBr, Result: ResultPassed})
+	dirtyWT, dirtyBr := e.worktree(t, "20261010-110000")
+	e.record(t, Record{RunID: "20261010-110000", Worktree: dirtyWT, Branch: dirtyBr, Result: ResultPassed})
+	assert.NilError(t, os.WriteFile(filepath.Join(dirtyWT, "new.txt"), []byte("x"), 0o644))
+	brokenWT, brokenBr := e.worktree(t, "20261010-120000")
+	e.record(t, Record{RunID: "20261010-120000", Worktree: brokenWT, Branch: brokenBr, Result: ResultPassed})
+	assert.NilError(t, os.WriteFile(filepath.Join(brokenWT, ".git"), []byte("garbage"), 0o644))
+	e.git(t, e.root, "branch", branchPrefix+"lonely/20261009-000000")
+
+	entries := e.inventory(t)
+	MarkDirty(context.Background(), entries)
+	byID := map[string]RunEntry{}
+	for _, en := range entries {
+		byID[en.ID()] = en
+	}
+	assert.Assert(t, byID["20261010-100000"].Dirty != nil && !*byID["20261010-100000"].Dirty)
+	assert.Assert(t, byID["20261010-110000"].IsDirty())
+	assert.Assert(t, byID["20261010-120000"].IsDirty(), "an unreadable status counts as dirty")
+	assert.Assert(t, byID["20261009-000000"].Dirty == nil)
+}
+
+func TestDirtyOrder(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entries []RunEntry
+		want    []int
+	}{
+		"empty": {nil, nil},
+		"running first": {[]RunEntry{
+			{WorktreeExists: true, State: StateFinished},
+			{WorktreeExists: true, State: StateRunning},
+			{WorktreeExists: true, State: StateAbandoned},
+			{WorktreeExists: true, State: StateRunning},
+		}, []int{1, 3, 0, 2}},
+		"skips missing worktrees": {[]RunEntry{
+			{State: StateRunning},
+			{WorktreeExists: true, State: StateFinished},
+		}, []int{1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.DeepEqual(t, dirtyOrder(tc.entries), tc.want)
+		})
+	}
+}
+
+func TestMarkDirtyBoundsConcurrency(t *testing.T) {
+	entries := make([]RunEntry, 20)
+	for i := range entries {
+		entries[i] = RunEntry{WorktreeExists: true, State: StateFinished, Worktree: "wt"}
+	}
+	var cur, peak atomic.Int32
+	markDirty(context.Background(), entries, func(context.Context, string) bool {
+		n := cur.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		cur.Add(-1)
+		return false
+	})
+	assert.Assert(t, peak.Load() <= dirtyWorkers, "peak %d", peak.Load())
+	assert.Assert(t, peak.Load() > 1, "checks did not run concurrently")
+	for _, en := range entries {
+		assert.Assert(t, en.Dirty != nil)
+	}
 }
 
 func TestRemoveRunChain(t *testing.T) {
@@ -169,7 +269,9 @@ func TestRemoveRunDirty(t *testing.T) {
 	wt, br := e.worktree(t, "20261010-100000")
 	e.record(t, Record{RunID: "20261010-100000", Worktree: wt, Branch: br, Result: ResultPassed})
 	assert.NilError(t, os.WriteFile(filepath.Join(wt, "new.txt"), []byte("x"), 0o644))
-	entry := e.inventory(t)[0]
+	entries := e.inventory(t)
+	MarkDirty(context.Background(), entries)
+	entry := entries[0]
 
 	_, err := RemoveRun(context.Background(), e.root, entry, false)
 	assert.Assert(t, errors.Is(err, ErrDirty))

@@ -661,6 +661,12 @@ smelt
   with `--reviewers N` when running several at once. `factory status` with no run ID still shows the
   newest run; `factory list` and `smelt watch` show every active one. Finished runs are kept until
   more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
+- **`factory list` does not read the worktrees unless asked.** Whether a worktree has uncommitted
+  changes costs a `git status` per worktree, so `factory list [--json]` omits `dirty` and the table's
+  WORKTREE column reads `kept` or `missing`. `factory list --dirty` computes it (running runs first, the
+  rest four at a time): `dirty` is then in the JSON and the column reads `dirty` or `clean`. A status
+  that cannot be read counts as dirty. Callers that read `dirty` must pass `--dirty`. `factory clean`
+  always checks the runs it is about to remove, and only those.
 - **Machine-wide limits live in the user config** (`~/.config/smelt/config.json`), under `factory`, and
   are read when the daemon starts (restart it to change them). `factory.maxRuns` is the most unfinished
   runs across all projects; unset or `0` is no limit. Over it, a start or `--continue` is refused with
