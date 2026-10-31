@@ -325,7 +325,8 @@ func TestImageStorageDiscoveryFailureDoesNotBlockImageWork(t *testing.T) {
 	assert.Assert(t, strings.Contains(stderr.String(), "runs aren't protected from a full disk. See smelt factory doctor"), stderr.String())
 }
 
-func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
+func imageReportEngine(t *testing.T, failImage, failVolumes bool) (string, *bytes.Buffer, error) {
+	t.Helper()
 	root := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(root, ".smelt"), 0o700))
 	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(`{"factory":{"minFreeGB":0.000001,"cache":{"maxGB":3}}}`), 0o600))
@@ -343,10 +344,14 @@ func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"ID": "image-report-engine", "ServerVersion": "27.0.0", "OperatingSystem": "Linux", "DockerRootDir": root})
 		case strings.HasSuffix(r.URL.Path, "/images/json"):
 			_, _ = w.Write([]byte(`[]`))
+		case failVolumes && strings.Contains(r.URL.Path, "/volumes"):
+			http.Error(w, `{"message":"volumes failed"}`, http.StatusInternalServerError)
 		case strings.HasSuffix(r.URL.Path, "/volumes"):
 			_, _ = w.Write([]byte(`{"Volumes":[{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}]}`))
 		case strings.Contains(r.URL.Path, "/volumes/"):
 			_, _ = w.Write([]byte(`{"Name":"smelt-cache-abcdef123456","CreatedAt":"today"}`))
+		case failImage && strings.Contains(r.URL.Path, "/images/"):
+			http.Error(w, `{"message":"image work failed"}`, http.StatusInternalServerError)
 		case strings.HasSuffix(r.URL.Path, "/json") && strings.Contains(r.URL.Path, "/images/"):
 			_, _ = w.Write([]byte(`{"Id":"sha256:local"}`))
 		case strings.HasSuffix(r.URL.Path, "/containers/create"):
@@ -377,10 +382,30 @@ func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
 	streams.Err = &output
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, _ = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})
+	_, err = buildSandboxImage(ctx, streams, root, imageBuild{Dockerfile: "Dockerfile.smelt"})
+	return root, &output, err
+}
+
+func TestImageBuildReportsExistingCacheSizeAndCap(t *testing.T) {
+	_, output, _ := imageReportEngine(t, false, false)
 	assert.Assert(t, strings.Contains(output.String(), "smelt-cache-abcdef123456"), output.String())
 	assert.Assert(t, strings.Contains(output.String(), "20.48 GB"), output.String())
 	assert.Assert(t, strings.Contains(output.String(), "3.00 GB"), output.String())
+}
+
+// A failure that isn't about storage isn't buried under the storage report.
+func TestImageBuildFailureOmitsStorageReport(t *testing.T) {
+	_, output, err := imageReportEngine(t, true, false)
+	assert.Assert(t, err != nil)
+	assert.Assert(t, !strings.Contains(output.String(), "smelt-cache-abcdef123456"), output.String())
+	assert.Assert(t, !strings.Contains(output.String(), "20.48 GB"), output.String())
+}
+
+// A storage failure still prints the report.
+func TestImageBuildStorageFailurePrintsStorageReport(t *testing.T) {
+	_, output, err := imageReportEngine(t, false, true)
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(output.String(), "Storage unavailable"), output.String())
 }
 
 func TestEnsureSandboxImagePreservesKitProvenance(t *testing.T) {

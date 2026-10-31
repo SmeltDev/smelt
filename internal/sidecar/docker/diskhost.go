@@ -105,7 +105,7 @@ func (d hostDiscovery) desktop(report HostStorage) (HostStorage, error) {
 	if data == nil {
 		return report, fmt.Errorf("desktop settings missing in %s; open Settings > Resources > Advanced and check Disk image location", settingsDir)
 	}
-	folder, err := desktopDataFolder(data, report.Settings)
+	folder, err := d.desktopDataFolder(data, report.Settings)
 	if err != nil {
 		return report, err
 	}
@@ -143,27 +143,47 @@ func (d hostDiscovery) desktopImage(report HostStorage, folder string) (HostStor
 	return report, nil
 }
 
-func desktopDataFolder(data []byte, settingsPath string) (string, error) {
+// desktopDefaultFolder is where Docker Desktop keeps its disk image when the
+// settings leave dataFolder out. The Linux path is a best-effort guess.
+func (d hostDiscovery) desktopDefaultFolder() string {
+	if d.platform == "darwin" {
+		return filepath.Join(d.home, "Library", "Containers", "com.docker.docker", "Data", "vms", "0", "data")
+	}
+	return filepath.Join(d.home, ".docker", "desktop", "vms", "0", "data")
+}
+
+// desktopDataFolder returns the configured disk image folder. Desktop omits the
+// key while the image is at its default location, so a missing key falls back
+// to that location, provided an image is there.
+func (d hostDiscovery) desktopDataFolder(data []byte, settingsPath string) (string, error) {
 	var settings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return "", fmt.Errorf("decode %s: %w", settingsPath, err)
 	}
-	folder := ""
+	folder, present := "", false
 	for _, key := range []string{"dataFolder", "DataFolder"} {
 		if raw, ok := settings[key]; ok {
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
 				return "", fmt.Errorf("unsupported %s in %s: %w", key, settingsPath, err)
 			}
-			if folder != "" && folder != value {
+			if present && folder != value {
 				return "", fmt.Errorf("ambiguous Desktop dataFolder in %s", settingsPath)
 			}
-			folder = value
+			folder, present = value, true
 		}
 	}
-	if !filepath.IsAbs(folder) {
-		return "", fmt.Errorf("desktop dataFolder is missing or not absolute in %s; check Disk image location in Settings > Resources > Advanced", settingsPath)
+	if present {
+		if !filepath.IsAbs(folder) {
+			return "", fmt.Errorf("desktop dataFolder is not absolute in %s; check Disk image location in Settings > Resources > Advanced", settingsPath)
+		}
+		return folder, nil
 	}
-
-	return folder, nil
+	folder = d.desktopDefaultFolder()
+	for _, name := range []string{"Docker.raw", "Docker.qcow2"} {
+		if _, err := d.stat(filepath.Join(folder, name)); err == nil {
+			return folder, nil
+		}
+	}
+	return "", fmt.Errorf("no dataFolder in %s and no Docker.raw or Docker.qcow2 in the default %s; check Disk image location in Settings > Resources > Advanced", settingsPath, folder)
 }

@@ -57,6 +57,9 @@ type CacheUsage struct {
 	Bytes, Cap  int64
 	MeasuredAt  string
 	Unavailable string
+	// TrimDeferred is set when the cache is over its cap but containers use it,
+	// so the next start that finds it free trims it.
+	TrimDeferred bool
 }
 
 func availableBytes(ctx context.Context, path string) (int64, error) {
@@ -312,10 +315,14 @@ func (b *Provider) appendCacheUsage(ctx context.Context, report *StorageReport) 
 		record := readMeasurement(recordPath)
 		inspected, inspectErr := b.cli.VolumeInspect(ctx, name)
 		var refreshErr error
-		if inspectErr == nil && measurementDue(record, volumeIdentity(report.Host.DaemonID, inspected), b.clock()) {
+		if inspectErr == nil && report.HostError == "" && measurementDue(record, volumeIdentity(report.Host.DaemonID, inspected), b.clock()) {
 			refreshErr = b.refreshDiagnosticMeasurement(ctx, report, inspected, recordPath)
 		}
 		usage := b.cachedUsage(ctx, report.Host.DaemonID, name)
+		if usage.MeasuredAt != "" && usage.Bytes > usage.Cap {
+			users, usersErr := b.volumeUsers(ctx, name)
+			usage.TrimDeferred = usersErr == nil && users > 0
+		}
 		if refreshErr != nil {
 			usage.Unavailable = "measurement failed: " + refreshErr.Error()
 		}
@@ -343,7 +350,8 @@ func (b *Provider) appendWorkspaceUsage(ctx context.Context, report *StorageRepo
 		usage := WorkspaceUsage{Name: vol.Name}
 		switch {
 		case report.HostError != "":
-			usage.Unavailable = "backing storage unavailable: " + report.HostError
+			// The report states the host problem once.
+			usage.Unavailable = "not measured"
 		case err != nil:
 			usage.Unavailable = "measurement failed: " + err.Error()
 		default:
@@ -372,11 +380,9 @@ func (b *Provider) workspaceInVolume(ctx context.Context) bool {
 }
 
 // refreshDiagnosticMeasurement only reads the volume; diagnostics never trim it.
+// Callers skip it while host storage is unknown: no helper is pulled before
+// that is established and checked.
 func (b *Provider) refreshDiagnosticMeasurement(ctx context.Context, report *StorageReport, vol volume.Volume, recordPath string) error {
-	// Never pull a helper before establishing and checking host storage.
-	if report.HostError != "" {
-		return fmt.Errorf("backing storage unavailable: %s", report.HostError)
-	}
 	if err := b.reportHostFilesystems(ctx, &StorageReport{Host: report.Host}, storageGuard); err != nil {
 		return err
 	}

@@ -414,3 +414,44 @@ func TestStorageReportListsWorkspaceAndSnapshotVolumes(t *testing.T) {
 		assert.Equal(t, got[n].Unavailable, "", n)
 	}
 }
+
+// A host that can't be read is stated once by the report, not per volume.
+func TestStorageReportUnreadableHostIsNotRepeatedPerVolume(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	assert.NilError(t, os.RemoveAll(filepath.Join(b.discovery.home, "Library")))
+	labels := ownedLabels(nil)
+	for _, n := range []string{"smelt-work-a", "smelt-snap-b"} {
+		f.volumes[n] = volume.Volume{Name: n, CreatedAt: "2026-10-25T00:00:00Z", Labels: labels}
+	}
+	report, err := b.ReportStorage(context.Background())
+	assert.Assert(t, err != nil)
+	assert.Assert(t, report.HostError != "")
+	assert.Equal(t, len(report.Workspaces), 2)
+	for _, w := range report.Workspaces {
+		assert.Equal(t, w.Unavailable, "not measured")
+	}
+}
+
+// A deferred trim leaves the cache over its cap, so the free-space guard is
+// what keeps it from filling the disk.
+func TestStorageReportMarksDeferredTrimAndGuardStillRefuses(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.endpoint = "unix://" + filepath.Join(b.discovery.home, ".docker", "run", "docker.sock")
+	b.CacheMaxBytes = 10 * 1024
+	const name = "smelt-cache-abcdef123456-1001"
+	f.volumes[name] = volume.Volume{Name: name, CreatedAt: "today", Labels: ownedLabels(nil)}
+	f.cacheKB = 20
+	f.active = true
+	unlock, err := b.storageLock(context.Background())
+	assert.NilError(t, err)
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", name))
+	unlock()
+	report, err := b.ReportStorage(context.Background())
+	assert.NilError(t, err)
+	assert.Equal(t, len(report.Caches), 1)
+	assert.Assert(t, report.Caches[0].TrimDeferred)
+
+	b.freeBytes = func(context.Context, string) (int64, error) { return 1e6, nil }
+	assert.ErrorContains(t, b.CheckStorage(context.Background()), "disk almost full")
+}
