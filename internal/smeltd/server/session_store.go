@@ -186,6 +186,22 @@ type sessionStore struct {
 	// limits are the machine-wide limits; the zero value is no limit. Set before
 	// the store is shared and never reassigned.
 	limits MachineLimits
+
+	// requests maps the request key of a start to the session it admitted, so a
+	// retried start returns that session instead of starting another. Guarded
+	// by mu; swept on add; lost on restart.
+	requests map[string]requestClaim
+	// now is the clock the key TTL reads; time.Now when nil.
+	now func() time.Time
+}
+
+// requestKeyTTL is how long the daemon remembers a start's request key.
+const requestKeyTTL = 10 * time.Minute
+
+// requestClaim is a remembered request key.
+type requestClaim struct {
+	id string
+	at time.Time
 }
 
 // drainingError is add's refusal while the daemon is draining.
@@ -342,13 +358,62 @@ func (s *sessionStore) ended() {
 	}
 }
 
+// replayLocked returns the entry a live request key admitted, dropping keys
+// older than requestKeyTTL on the way. An empty key never matches.
+func (s *sessionStore) replayLocked(key string) *sessionEntry {
+	now := s.clock()
+	for k, c := range s.requests {
+		if now.Sub(c.at) > requestKeyTTL {
+			delete(s.requests, k)
+		}
+	}
+	if key == "" {
+		return nil
+	}
+	return s.sessions[s.requests[key].id]
+}
+
+// recordRequestLocked remembers that key admitted session id.
+func (s *sessionStore) recordRequestLocked(key, id string) {
+	if key == "" {
+		return
+	}
+	if s.requests == nil {
+		s.requests = make(map[string]requestClaim)
+	}
+	s.requests[key] = requestClaim{id: id, at: s.clock()}
+}
+
+func (s *sessionStore) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// replayed returns the session a live request key admitted, or nil.
+func (s *sessionStore) replayed(key string) *sessionEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replayLocked(key)
+}
+
 // add creates a running entry for s. If the daemon is draining, or the project
 // already has limit sessions that have not ended, it creates nothing and says
 // why; a draining refusal is a *drainingError.
+//
+// A request key (s.RequestID) seen within requestKeyTTL is a retried start: add
+// returns the session it admitted, with a nil context, and creates nothing. The
+// key is claimed here, under the admission lock, so a retry racing the first
+// request cannot start a second run; it is recorded only when a session is
+// admitted, so a refused start can be tried again.
 func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, context.Context, error) {
 	limit = max(limit, 1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if first := s.replayLocked(sess.RequestID); first != nil {
+		return first, nil, nil
+	}
 	if s.draining {
 		if s.ownerSocket == "" {
 			return nil, nil, &drainingError{active: s.activeLocked()}
@@ -381,6 +446,7 @@ func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, conte
 		done:   make(chan struct{}),
 	}
 	s.sessions[sess.ID] = entry
+	s.recordRequestLocked(sess.RequestID, sess.ID)
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot, retainedSessions(limit))
 	return entry, ctx, nil

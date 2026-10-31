@@ -40,14 +40,7 @@ func main() {
 		}
 		m, d, s, exitCode := errorDetails(err)
 		if jsonFlagPresent() {
-			type jsonErr struct {
-				Error      bool   `json:"error"`
-				Code       string `json:"code,omitempty"`
-				Message    string `json:"message"`
-				Detail     string `json:"detail,omitempty"`
-				Suggestion string `json:"suggestion,omitempty"`
-			}
-			b, jsonMarshalErr := json.MarshalIndent(jsonErr{Error: true, Code: errorCode(err), Message: m, Detail: d, Suggestion: s}, "", "  ")
+			b, jsonMarshalErr := jsonErrorBody(err, m, d, s)
 			if jsonMarshalErr != nil {
 				_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
 			} else {
@@ -58,6 +51,21 @@ func main() {
 		}
 		os.Exit(exitCode)
 	}
+}
+
+// jsonError is the body --json prints for a failed command.
+type jsonError struct {
+	Error      bool   `json:"error"`
+	Code       string `json:"code,omitempty"`
+	Message    string `json:"message"`
+	Detail     string `json:"detail,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
+}
+
+// jsonErrorBody renders err as the --json error document.
+func jsonErrorBody(err error, message, detail, suggestion string) ([]byte, error) {
+	return json.MarshalIndent(jsonError{Error: true, Code: errorCode(err), Message: message, Detail: detail, Suggestion: suggestion, RequestID: requestID(err)}, "", "  ")
 }
 
 func errorDetails(err error) (msg, detail, suggestion string, exitCode int) {
@@ -90,6 +98,14 @@ func errorDetails(err error) (msg, detail, suggestion string, exitCode int) {
 func errorCode(err error) string {
 	if ec, ok := err.(interface{ ErrorCode() string }); ok {
 		return ec.ErrorCode()
+	}
+	return ""
+}
+
+// requestID extracts the key of a start that may have made a run, if err has one.
+func requestID(err error) string {
+	if r, ok := err.(interface{ RequestID() string }); ok {
+		return r.RequestID()
 	}
 	return ""
 }

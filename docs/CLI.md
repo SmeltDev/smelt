@@ -675,6 +675,14 @@ smelt
   `smelt daemon status` shows `runs: 5 of 5 (machine limit)`, and `--json` has `max_runs`.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
+- **A `factory build` start is idempotent.** The client sends a random request key (`request_id`, 128 bits of hex)
+  and the daemon remembers it for 10 minutes: a second start with the same key returns the first run's ID instead of
+  starting another. The start POST waits up to 30 s (status reads keep 5 s). On a timeout it repeats the same request
+  twice, then looks for the key in the daemon's sessions. A run found there is followed as usual. With none, the error
+  is `factory.daemon_timeout` ("the daemon didn't confirm the start; no run was found with this request"), and
+  starting again is safe. If the sessions cannot be listed either, a run may exist: the `--json` error carries
+  `"code": "factory.start_unconfirmed"` and `"request_id"`, so a caller can look the run up (the key is on each
+  session's `request_id`) instead of starting again.
 - **`factory build` needs a coding agent.** `--harness claude|codex|grok`, then `factory.harness`, then (in a
   terminal) a question that marks the agents that are logged in and in the image and offers to save the
   answer as `factory.harness`. With none of them and no terminal it fails with a `userError` listing the

@@ -233,6 +233,7 @@ type userError struct {
 	errMsg     string // used only when err == nil
 	err        error  // when set, Error() delegates to err.Error()
 	hideDetail bool   // suppress the detail line entirely, see withoutDetail
+	requestID  string // key of a start that may have made a run, see withRequestID
 	blocked    bool   // the user cannot proceed until they fix something, see TelemetryOutcome
 }
 
@@ -247,6 +248,7 @@ func (e *userError) withDetail(detail string) *userError { e.detail = detail; re
 func (e *userError) withSuggestion(s string) *userError  { e.suggestion = s; return e }
 func (e *userError) withExitCode(code int) *userError    { e.exitCode = code; return e }
 func (e *userError) wrap(err error) *userError           { e.err = err; return e }
+func (e *userError) withRequestID(id string) *userError  { e.requestID = id; return e }
 func (e *userError) wrapMsg(msg string) *userError       { e.errMsg = msg; return e }
 
 // withoutDetail states that the message and suggestion say everything, so no
@@ -289,6 +291,10 @@ func (e *userError) HideDetail() bool { return e.hideDetail }
 // ErrorCode returns the namespaced error code, e.g. "auth.token_missing".
 // Empty string means no code was set.
 func (e *userError) ErrorCode() string { return e.code }
+
+// RequestID returns the key of the start request this error is about, so a
+// --json caller can look the run up instead of starting again.
+func (e *userError) RequestID() string { return e.requestID }
 
 // warnUserError reports err as a warning, for commands that carry on after a
 // failure instead of returning it. A userError is shown the way the root

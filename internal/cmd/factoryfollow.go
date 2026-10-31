@@ -74,7 +74,23 @@ func sessionProjectRoot(ctx context.Context) (string, error) {
 // sessionError renders a failure talking to the session API.
 func sessionError(err error) error {
 	var refused *smeltd.SessionRefused
+	var timedOut *smeltd.DaemonTimeoutError
+	var unconfirmed *smeltd.StartUnconfirmedError
 	switch {
+	case errors.As(err, &unconfirmed):
+		return newUserError("The daemon didn't confirm the start, and its runs could not be listed.").
+			withCode(smeltd.CodeStartUnconfirmed).
+			withSuggestion("A run may be going. Look for request " + unconfirmed.RequestID + " in 'smelt watch' before starting again.").
+			withRequestID(unconfirmed.RequestID).
+			withExitCode(ExitTempFail).
+			wrap(err)
+	case errors.As(err, &timedOut):
+		return newUserError(timedOut.Error()).
+			withCode(smeltd.CodeDaemonTimeout).
+			withSuggestion("The daemon is up but slow. Starting again is safe.").
+			withoutDetail().
+			withExitCode(ExitTempFail).
+			wrap(err)
 	case errors.Is(err, smeltd.ErrDaemonUnavailable):
 		return newUserError("The smelt daemon is not reachable.").
 			withSuggestion("Start it with 'smelt watch'.").

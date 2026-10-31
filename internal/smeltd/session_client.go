@@ -10,6 +10,7 @@ import (
 	neturl "net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // SessionRefused is the daemon's refusal of a session request: it was reachable
@@ -55,10 +56,13 @@ func sessionCall(method, path string, in, out any) error {
 }
 
 func sessionCallAt(socket, method, path string, in, out any) error {
-	client, err := daemonClient()
-	if socket != "" && TCPRemoteAddr() == "" {
-		client, err = unixClient(socket), nil
-	}
+	return sessionCallTimeout(socket, 0, method, path, in, out)
+}
+
+// sessionCallTimeout is sessionCallAt with its own bound on the whole request;
+// zero keeps the client's default.
+func sessionCallTimeout(socket string, timeout time.Duration, method, path string, in, out any) error {
+	client, err := callClient(socket, timeout)
 	if err != nil {
 		return err
 	}
@@ -107,34 +111,102 @@ func sessionCallAt(socket, method, path string, in, out any) error {
 	return nil
 }
 
+// callClient picks the client for a session call: the socket's when one is
+// named and no remote daemon is set, else the default.
+func callClient(socket string, timeout time.Duration) (*http.Client, error) {
+	var client *http.Client
+	if socket != "" && TCPRemoteAddr() == "" {
+		client = unixClient(socket)
+	} else {
+		var err error
+		if client, err = daemonClient(); err != nil {
+			return nil, err
+		}
+	}
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	return client, nil
+}
+
 // StartFactory asks the daemon to start a factory session and returns its ID
 // without waiting for it. It is followed and cancelled like any other session.
 func StartFactory(req FactoryRequest) (string, error) {
-	var resp SessionStartResponse
-	socket := ""
-	if req.Continue != "" {
-		sessions, err := ListSessions(req.ProjectRoot)
-		if err != nil && !errors.Is(err, ErrDaemonUnavailable) {
+	return StartFactoryWith(req, StartPolicy{})
+}
+
+// StartFactoryWith is StartFactory with an explicit policy. The request carries
+// a key the daemon remembers, so a POST that timed out is repeated safely: the
+// daemon answers with the first run instead of starting another. If every POST
+// times out, the daemon's sessions are searched for the key before giving up.
+func StartFactoryWith(req FactoryRequest, policy StartPolicy) (string, error) {
+	policy = policy.orDefault()
+	if req.RequestID == "" {
+		id, err := newRequestID()
+		if err != nil {
 			return "", err
 		}
-		for _, s := range sessions {
-			if s.Factory != nil && (s.Factory.RunID == strings.TrimSpace(req.Continue) || s.Factory.Branch == strings.TrimSpace(req.Continue)) {
-				socket = s.Socket
-				break
-			}
-		}
+		req.RequestID = id
 	}
-	err := sessionCallAt(socket, http.MethodPost, "/factory", req, &resp)
-	var refused *SessionRefused
-	if errors.As(err, &refused) && refused.Code == CodeDaemonHandover {
-		if err = EnsureRunning(); err == nil {
-			err = sessionCall(http.MethodPost, "/factory", req, &resp)
-		}
-	}
+	socket, err := startSocket(req)
 	if err != nil {
 		return "", err
 	}
-	return resp.ID, nil
+	id, err := postStart(socket, req, policy)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Code == CodeDaemonHandover {
+		if err = EnsureRunning(); err == nil {
+			id, err = postStart("", req, policy)
+		}
+	}
+	if isTimeout(err) {
+		return lookupStart(req, err)
+	}
+	return id, err
+}
+
+// startSocket is the daemon a start goes to: the one that owns the run being
+// continued, or the default one.
+func startSocket(req FactoryRequest) (string, error) {
+	if req.Continue == "" {
+		return "", nil
+	}
+	sessions, err := ListSessions(req.ProjectRoot)
+	if err != nil && !errors.Is(err, ErrDaemonUnavailable) {
+		return "", err
+	}
+	for _, s := range sessions {
+		if s.Factory != nil && (s.Factory.RunID == strings.TrimSpace(req.Continue) || s.Factory.Branch == strings.TrimSpace(req.Continue)) {
+			return s.Socket, nil
+		}
+	}
+	return "", nil
+}
+
+// postStart sends the start request, repeating it with the same key while it
+// times out.
+func postStart(socket string, req FactoryRequest, policy StartPolicy) (string, error) {
+	var err error
+	for attempt := 0; attempt <= policy.Retries; attempt++ {
+		var resp SessionStartResponse
+		err = sessionCallTimeout(socket, policy.Timeout, http.MethodPost, "/factory", req, &resp)
+		if !isTimeout(err) {
+			return resp.ID, err
+		}
+	}
+	return "", err
+}
+
+// lookupStart finds the run a timed-out start made, by its key.
+func lookupStart(req FactoryRequest, timedOut error) (string, error) {
+	sessions, err := ListSessions(req.ProjectRoot)
+	if err != nil {
+		return "", &StartUnconfirmedError{RequestID: req.RequestID, Err: err}
+	}
+	if s, ok := findByRequestID(sessions, req.RequestID); ok {
+		return s.ID, nil
+	}
+	return "", &DaemonTimeoutError{Err: timedOut}
 }
 
 // FetchSession returns one session with the text of its reviews.

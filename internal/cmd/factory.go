@@ -38,6 +38,11 @@ func newFactoryCmd() *cobra.Command {
 	return cmd
 }
 
+// startPolicy is how a factory start waits for the daemon. It is a test seam so
+// the timeout paths can run in milliseconds; production never assigns it, and
+// the zero value is the default policy.
+var startPolicy smeltd.StartPolicy
+
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
@@ -217,7 +222,7 @@ status --json' reports which one a run used under factory.sandbox.`,
 			if err := ensureRunningForCommand(cmd); err != nil {
 				return &userError{msg: "Could not start the smelt daemon.", err: err}
 			}
-			id, err := smeltd.StartFactory(smeltd.FactoryRequest{
+			id, err := smeltd.StartFactoryWith(smeltd.FactoryRequest{
 				ProjectRoot:             root,
 				Prompt:                  prompt,
 				Continue:                continueRun,
@@ -245,7 +250,7 @@ status --json' reports which one a run used under factory.sandbox.`,
 				Sandbox:                 settings.Sandbox,
 				Log:                     logArg,
 				Verbose:                 verbose,
-			})
+			}, startPolicy)
 			if err != nil {
 				return sessionError(err)
 			}

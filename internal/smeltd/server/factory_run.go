@@ -146,11 +146,11 @@ func recordRequest(record *smeltd.FactoryRun, req smeltd.FactoryRequest, cfg *co
 	return model, nil
 }
 
-// startFactory validates a request, records a factory session and starts it in
-// the background. It returns as soon as the session is accepted.
-func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error) {
+// checkStartRequest validates a start request and fills its defaults. It
+// returns the request, the agent it names and the trimmed prompt.
+func checkStartRequest(req smeltd.FactoryRequest) (smeltd.FactoryRequest, harness.Harness, string, error) {
 	if !config.ValidBackend(req.Backend) {
-		return smeltd.Session{}, apiErr(http.StatusBadRequest, "unknown backend %q (want %s or %s)",
+		return req, nil, "", apiErr(http.StatusBadRequest, "unknown backend %q (want %s or %s)",
 			req.Backend, smeltd.BackendCircleCI, smeltd.BackendDocker)
 	}
 	req.Backend = config.BackendOrDefault(req.Backend)
@@ -159,16 +159,26 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 	}
 	agent, err := all.ByName(harness.Name(req.Harness))
 	if err != nil {
-		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
+		return req, nil, "", apiErr(http.StatusBadRequest, "%v", err)
 	}
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" && req.Continue == "" {
-		return smeltd.Session{}, apiErr(http.StatusBadRequest, "prompt required")
+		return req, nil, "", apiErr(http.StatusBadRequest, "prompt required")
 	}
 	if req.From != "" && req.Continue != "" {
-		return smeltd.Session{}, apiErr(http.StatusBadRequest, "from cannot be combined with continue: a continued run keeps its base")
+		return req, nil, "", apiErr(http.StatusBadRequest, "from cannot be combined with continue: a continued run keeps its base")
 	}
 	if err := checkIntegrateRequest(req); err != nil {
+		return req, nil, "", err
+	}
+	return req, agent, prompt, nil
+}
+
+// startFactory validates a request, records a factory session and starts it in
+// the background. It returns as soon as the session is accepted.
+func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error) {
+	req, agent, prompt, err := checkStartRequest(req)
+	if err != nil {
 		return smeltd.Session{}, err
 	}
 	ps := d.lookupProject(req.ProjectRoot)
@@ -246,9 +256,14 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
 		Factory:     record,
+		RequestID:   req.RequestID,
 	}, cfg.Factory.ConcurrentRuns())
 	if busy != nil {
 		return smeltd.Session{}, admissionRefusal(busy)
+	}
+	// A nil context marks a retried start: the run is already going.
+	if ctx == nil {
+		return entry.snapshot(), nil
 	}
 	opts := factory.RunOptions{
 		Root:                    ps.root,
