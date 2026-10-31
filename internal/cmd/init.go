@@ -668,6 +668,21 @@ func detectInitCommands(ctx context.Context, workDir string, streams iostream.St
 	}
 }
 
+// seedInitConfig picks the config init starts from: the existing one with
+// --force, otherwise a fresh one that still carries the existing file's
+// unknown top-level keys.
+func seedInitConfig(existing *config.ProjectConfig, loadErr error, force bool) *config.ProjectConfig {
+	if loadErr != nil {
+		return &config.ProjectConfig{}
+	}
+	if force {
+		return existing
+	}
+	cfg := &config.ProjectConfig{}
+	cfg.KeepUnknownKeysFrom(existing)
+	return cfg
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
 	var projectDir, factoryBackend, factoryImage, factoryAuthor, harnessFlag string
@@ -724,10 +739,7 @@ hook config files.`,
 			}
 
 			// Seed from existing config when --force so skipped sections are preserved.
-			cfg := &config.ProjectConfig{}
-			if force && loadErr == nil {
-				cfg = existingCfg
-			}
+			cfg := seedInitConfig(existingCfg, loadErr, force)
 
 			// Step 0: where factory runs execute. Asked before anything else
 			// because it decides whether any CircleCI step below happens: an

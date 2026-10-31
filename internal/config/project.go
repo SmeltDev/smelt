@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -580,6 +582,153 @@ type ProjectConfig struct {
 	// else — an inert default, a small diff, and the "always" mode included,
 	// since a project naming a path here has said it wants to wait for it.
 	AsyncValidateBlocking []string `json:"asyncValidateBlocking,omitempty"`
+
+	// extras holds top-level keys this struct has no field for, so a load/save
+	// cycle does not delete settings that other tools keep in the same file.
+	// Nil when the file had none.
+	extras *unknownKeys
+}
+
+// unknownKeys records the top-level key order of a loaded config and the raw
+// value of every key with no ProjectConfig field.
+type unknownKeys struct {
+	order []string                   // each distinct key once, at its first position
+	raw   map[string]json.RawMessage // unknown keys only; the last duplicate wins
+}
+
+// keyValue is one top-level member of a JSON object.
+type keyValue struct {
+	key string
+	val json.RawMessage
+}
+
+// topLevelMembers decodes a JSON object into its members in file order,
+// keeping each value's bytes exactly as written.
+func topLevelMembers(data []byte) ([]keyValue, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	var members []keyValue
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		members = append(members, keyValue{key, val})
+	}
+	return members, nil
+}
+
+// knownKeyNames lists the JSON names of ProjectConfig's fields, in struct order.
+func knownKeyNames() []string {
+	t := reflect.TypeOf(ProjectConfig{})
+	var names []string
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// canonicalKey returns the field name that encoding/json would decode key into,
+// or "" when key matches no field.
+func canonicalKey(key string) string {
+	for _, name := range knownKeyNames() {
+		if strings.EqualFold(name, key) {
+			return name
+		}
+	}
+	return ""
+}
+
+// captureUnknownKeys reads the top-level members of data, returning nil when
+// every one belongs to a ProjectConfig field.
+func captureUnknownKeys(data []byte) (*unknownKeys, error) {
+	members, err := topLevelMembers(data)
+	if err != nil {
+		return nil, err
+	}
+	u := &unknownKeys{raw: map[string]json.RawMessage{}}
+	seen := map[string]bool{}
+	for _, m := range members {
+		if !seen[m.key] {
+			seen[m.key] = true
+			u.order = append(u.order, m.key)
+		}
+		if canonicalKey(m.key) == "" {
+			u.raw[m.key] = m.val
+		}
+	}
+	if len(u.raw) == 0 {
+		return nil, nil
+	}
+	return u, nil
+}
+
+// mergeUnknownKeys rebuilds the config object from marshaled, the indented JSON
+// of the known fields, and the unknown keys, so each unknown key stays where it
+// was relative to the others and to the known keys. Known keys the file did not
+// have follow in struct order.
+func mergeUnknownKeys(marshaled []byte, u *unknownKeys) ([]byte, error) {
+	members, err := topLevelMembers(marshaled)
+	if err != nil {
+		return nil, err
+	}
+	fresh := map[string]json.RawMessage{}
+	for _, m := range members {
+		fresh[m.key] = m.val
+	}
+	var out []keyValue
+	emitted := map[string]bool{}
+	for _, key := range u.order {
+		if val, ok := u.raw[key]; ok {
+			out = append(out, keyValue{key, val})
+			continue
+		}
+		name := canonicalKey(key)
+		if val, ok := fresh[name]; ok && !emitted[name] {
+			emitted[name] = true
+			out = append(out, keyValue{name, val})
+		}
+	}
+	for _, m := range members {
+		if !emitted[m.key] {
+			out = append(out, m)
+		}
+	}
+	var buf bytes.Buffer
+	buf.WriteString("{\n")
+	for i, m := range out {
+		k, err := json.Marshal(m.key)
+		if err != nil {
+			return nil, err
+		}
+		buf.WriteString("  ")
+		buf.Write(k)
+		buf.WriteString(": ")
+		buf.Write(m.val)
+		if i < len(out)-1 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('\n')
+	}
+	buf.WriteString("}")
+	return buf.Bytes(), nil
+}
+
+// KeepUnknownKeysFrom carries the unknown top-level keys loaded into other over
+// to c, for callers that start from a fresh config but still write over the
+// file other was loaded from.
+func (c *ProjectConfig) KeepUnknownKeysFrom(other *ProjectConfig) {
+	c.extras = other.extras
 }
 
 // LoadProjectConfig reads .smelt/config.json from workDir.
@@ -596,6 +745,11 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate config.json: %w", err)
 	}
+	extras, err := captureUnknownKeys(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse config.json: %w", err)
+	}
+	cfg.extras = extras
 	// Configs written by earlier versions may carry a "test" step in the saved
 	// environment. Drop it on load so it is neither run as a setup step nor
 	// written back out on the next save.
@@ -696,6 +850,11 @@ func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
+	}
+	if cfg.extras != nil {
+		if data, err = mergeUnknownKeys(data, cfg.extras); err != nil {
+			return fmt.Errorf("keep unknown keys in config.json: %w", err)
+		}
 	}
 	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
 }
