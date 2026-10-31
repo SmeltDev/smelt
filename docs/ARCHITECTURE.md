@@ -196,6 +196,8 @@ Project config lives in `.smelt/config.json` (per repository):
 }
 ```
 
+Top-level keys smelt has no field for (for example `pilot`) are preserved when the file is rewritten; their contents are never read or validated.
+
 ### Client constructors accept config, not env
 
 Client `New()` functions receive values from the resolved config. They

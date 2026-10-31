@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -596,4 +597,70 @@ func TestDockerWorkspaceValidation(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Equal(t, cfg.DockerWorkspace(), tt.value)
 	}
+}
+
+func TestSaveProjectConfigKeepsUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	pilot := `{"autopilot": {"auto_answer":"triage"},
+	    "sources": [ 1,  2 ]}`
+	writeProjectConfig(t, dir, `{
+  "pilot": `+pilot+`,
+  "orgID": "old",
+  "other":   {"a" :  1},
+  "asyncValidate": "always"
+}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	cfg.OrgID = "new"
+	cfg.StopHookMaxAttempts = 3
+	assert.NilError(t, SaveProjectConfig(dir, cfg))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".smelt", "config.json"))
+	assert.NilError(t, err)
+	members, err := topLevelMembers(data)
+	assert.NilError(t, err)
+	var keys []string
+	got := map[string]string{}
+	for _, m := range members {
+		keys = append(keys, m.key)
+		got[m.key] = string(m.val)
+	}
+	assert.DeepEqual(t, keys, []string{"pilot", "orgID", "other", "asyncValidate", "stopHookMaxAttempts"})
+	assert.Equal(t, got["pilot"], pilot)
+	assert.Equal(t, got["other"], `{"a" :  1}`)
+	assert.Equal(t, got["orgID"], `"new"`)
+
+	reloaded, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, reloaded.OrgID, "new")
+}
+
+func TestSaveProjectConfigWithoutUnknownKeysIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"OrgId": "x", "stopHookMaxAttempts": 2}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.extras == nil)
+	assert.NilError(t, SaveProjectConfig(dir, cfg))
+
+	want, err := marshalIndent(cfg)
+	assert.NilError(t, err)
+	data, err := os.ReadFile(filepath.Join(dir, ".smelt", "config.json"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), string(want)+"\n")
+}
+
+func TestKeepUnknownKeysFrom(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"pilot": {"a": 1}}`)
+	loaded, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+
+	fresh := &ProjectConfig{OrgID: "org"}
+	fresh.KeepUnknownKeysFrom(loaded)
+	assert.NilError(t, SaveProjectConfig(dir, fresh))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".smelt", "config.json"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), `"pilot": {"a": 1}`), string(data))
 }
