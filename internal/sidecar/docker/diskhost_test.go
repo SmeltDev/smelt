@@ -103,3 +103,38 @@ func TestDiscoverNativeDocker(t *testing.T) {
 	_, err = d.discover("ssh://remote", "id", root, "Ubuntu Linux")
 	assert.Assert(t, strings.Contains(err.Error(), "unsupported storage discovery"))
 }
+
+func TestDesktopDataFolder(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+		image          bool
+		want           string // relative to home; empty means an error
+		wantAbs        string
+	}{
+		{name: "key present", settings: `{"dataFolder":"/data/desktop"}`, wantAbs: "/data/desktop"},
+		{name: "key present ignores default image", settings: `{"DataFolder":"/data/desktop"}`, image: true, wantAbs: "/data/desktop"},
+		{name: "absent with default image", settings: `{}`, image: true, want: "Library/Containers/com.docker.docker/Data/vms/0/data"},
+		{name: "absent with no image", settings: `{}`},
+		{name: "relative", settings: `{"dataFolder":"relative"}`, image: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := hostDiscovery{"darwin", t.TempDir(), os.ReadFile, filepath.EvalSymlinks, os.Stat}
+			if tc.image {
+				dir := d.desktopDefaultFolder()
+				assert.NilError(t, os.MkdirAll(dir, 0o700))
+				assert.NilError(t, os.WriteFile(filepath.Join(dir, "Docker.raw"), nil, 0o600))
+			}
+			got, err := d.desktopDataFolder([]byte(tc.settings), "settings-store.json")
+			want := tc.wantAbs
+			if tc.want != "" {
+				want = filepath.Join(d.home, filepath.FromSlash(tc.want))
+			}
+			if want == "" {
+				assert.Assert(t, err != nil)
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, got, want)
+		})
+	}
+}

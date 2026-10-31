@@ -77,6 +77,9 @@ func printStorageReport(w io.Writer, report docker.StorageReport, err error) {
 			}
 		}
 		_, _ = fmt.Fprintf(w, "%s: %s / %.2f GB cap (%s)\n", cache.Name, size, float64(cache.Cap)/1e9, measurement)
+		if cache.TrimDeferred {
+			_, _ = fmt.Fprintf(w, "%s: trim deferred (in use)\n", cache.Name)
+		}
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "Storage unavailable: %v\n", err)

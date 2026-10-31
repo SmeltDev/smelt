@@ -91,26 +91,46 @@ func TestCoordinatedMaintenance(t *testing.T) {
 	assert.Equal(t, f.measurements, 3)
 }
 
-func TestMaintenanceRefusesConsumerAndRetriesFailedMeasurement(t *testing.T) {
+func TestMaintenanceRetriesFailedMeasurement(t *testing.T) {
 	b, f, _ := storageProvider(t)
 	b.CacheMaxBytes = 10 * 1024
-	for _, scenario := range []string{"measurement fails", "consumer attached", "success"} {
-		f.failMeasure = scenario == "measurement fails"
-		f.active = scenario == "consumer attached"
-		f.cacheKB = 20
-		unlock, err := b.storageLock(context.Background())
-		assert.NilError(t, err)
-		err = b.maintainVolume(context.Background(), "engine", "local-image", "smelt-cache-project-1")
-		unlock()
-		if scenario == "success" {
-			assert.NilError(t, err)
-		} else {
-			assert.Assert(t, err != nil)
-			assert.Equal(t, f.trims, 0)
-			assert.Assert(t, readMeasurement(b.measurementPath("engine", "smelt-cache-project-1")).At.IsZero())
-		}
-	}
+	f.cacheKB = 20
+	f.failMeasure = true
+	unlock, err := b.storageLock(context.Background())
+	assert.NilError(t, err)
+	defer unlock()
+	err = b.maintainVolume(context.Background(), "engine", "local-image", "smelt-cache-project-1")
+	assert.Assert(t, err != nil)
+	assert.Equal(t, f.trims, 0)
+	assert.Assert(t, readMeasurement(b.measurementPath("engine", "smelt-cache-project-1")).At.IsZero())
+	f.failMeasure = false
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", "smelt-cache-project-1"))
 	assert.Equal(t, f.trims, 1)
+}
+
+// A cache over its cap that a run uses is left alone and the start goes on;
+// the next start that finds it free trims it.
+func TestMaintenanceDefersTrimWhileInUse(t *testing.T) {
+	b, f, _ := storageProvider(t)
+	b.CacheMaxBytes = 10 * 1024
+	const name = "smelt-cache-project-1"
+	f.cacheKB = 20
+	f.active = true
+	unlock, err := b.storageLock(context.Background())
+	assert.NilError(t, err)
+	defer unlock()
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", name))
+	assert.Equal(t, f.trims, 0)
+	record := readMeasurement(b.measurementPath("engine", name))
+	assert.Equal(t, record.Bytes, int64(20*1024))
+	// Still deferred on the next start while the run holds the volume.
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", name))
+	assert.Equal(t, f.trims, 0)
+
+	f.active = false
+	assert.NilError(t, b.maintainVolume(context.Background(), "engine", "local-image", name))
+	assert.Equal(t, f.trims, 1)
+	assert.Equal(t, readMeasurement(b.measurementPath("engine", name)).Bytes, int64(4*1024))
 }
 
 func TestStorageLockCancellation(t *testing.T) {

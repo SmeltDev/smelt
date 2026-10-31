@@ -122,6 +122,10 @@ type Provider struct {
 	// storageWarned logs the undiscoverable-storage warning once per provider.
 	storageWarned sync.Once
 
+	// trimDeferred holds the cache volumes whose deferred trim was logged, so
+	// a start creating several sidecars logs each volume once.
+	trimDeferred sync.Map
+
 	// engineCPUs caches the engine's CPU count once read; cpuMu guards it.
 	cpuMu      sync.Mutex
 	engineCPUs int

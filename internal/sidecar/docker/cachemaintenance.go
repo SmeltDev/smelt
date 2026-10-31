@@ -194,17 +194,6 @@ func (b *Provider) volumeUsers(ctx context.Context, name string) (int, error) {
 	return len(consumers), err
 }
 
-func (b *Provider) refuseConsumers(ctx context.Context, name string) error {
-	users, err := b.volumeUsers(ctx, name)
-	if err != nil {
-		return fmt.Errorf("check consumers of %s: %w", name, err)
-	}
-	if users != 0 {
-		return fmt.Errorf("cache volume %s is in use; stop its runs before trimming or removing it", name)
-	}
-	return nil
-}
-
 func (b *Provider) maintainCaches(ctx context.Context, image string, layout cacheLayout) error {
 	if b.CacheMaxBytes <= 0 || len(layout.Volumes) == 0 {
 		return nil
@@ -250,10 +239,20 @@ func (b *Provider) maintainVolume(ctx context.Context, engine, image, name strin
 	}
 	target, trim := trimTarget(size, b.CacheMaxBytes)
 	if trim {
-		if err := b.refuseConsumers(ctx, name); err != nil {
-			return err
+		users, err := b.volumeUsers(ctx, name)
+		if err != nil {
+			return fmt.Errorf("check consumers of %s: %w", name, err)
 		}
-		_, err := b.helper(ctx, image, []mount.Mount{{Type: mount.TypeVolume, Source: name, Target: "/smelt-cache"}}, trimScript("/smelt-cache", target, volumeKind(name)))
+		if users != 0 {
+			// Trimming under a running workload would corrupt it; the saved
+			// measurement keeps the volume over the cap for the next start.
+			if _, logged := b.trimDeferred.LoadOrStore(name, true); !logged {
+				//nolint:gosec // G706: the name is escaped; the rest is numeric.
+				log.Printf("docker: cache %s is %.1f GB, over its %.0f GB cap; in use by %d containers, trim deferred", strconv.Quote(name), float64(size)/1e9, float64(b.CacheMaxBytes)/1e9, users)
+			}
+			return writeMeasurement(recordPath, cacheMeasurement{Identity: identity, Cap: b.CacheMaxBytes, Bytes: size, At: b.clock()})
+		}
+		_, err = b.helper(ctx, image, []mount.Mount{{Type: mount.TypeVolume, Source: name, Target: "/smelt-cache"}}, trimScript("/smelt-cache", target, volumeKind(name)))
 		if err != nil {
 			return err
 		}

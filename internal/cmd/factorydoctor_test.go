@@ -45,3 +45,15 @@ func TestPrintStorageReportWorkspace(t *testing.T) {
 		assert.Assert(t, strings.Contains(out.String(), want), out.String())
 	}
 }
+
+func TestPrintStorageReportDeferredTrimAndOneHostLine(t *testing.T) {
+	var out bytes.Buffer
+	printStorageReport(&out, docker.StorageReport{
+		Caches:     []docker.CacheUsage{{Name: "smelt-cache-a", Bytes: 15e9, Cap: 10e9, MeasuredAt: "2026-10-31T00:00:00Z", TrimDeferred: true}},
+		Workspaces: []docker.WorkspaceUsage{{Name: "smelt-work-a", Unavailable: "not measured"}, {Name: "smelt-snap-b", Unavailable: "not measured"}},
+		HostError:  "no disk",
+	}, fmt.Errorf("docker backing-storage discovery failed: no disk"))
+	assert.Assert(t, strings.Contains(out.String(), "smelt-cache-a: trim deferred (in use)"), out.String())
+	assert.Equal(t, strings.Count(out.String(), "no disk"), 1, out.String())
+	assert.Equal(t, strings.Count(out.String(), "backing storage unavailable"), 0, out.String())
+}

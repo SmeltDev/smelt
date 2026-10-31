@@ -102,11 +102,11 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 		return builtImage{}, &userError{msg: err.Error(), err: err}
 	}
 	report, reportErr := provider.ReportStorage(ctx)
-	// stdout carries --json output; the report is progress, so it goes to stderr.
-	printStorageReport(streams.Err, report, reportErr)
-	// Not finding Docker's backing storage is reported above and doesn't stop
-	// the build; CheckStorage already refused if space was measured low.
+	// Not finding Docker's backing storage is reported and doesn't stop the
+	// build; CheckStorage already refused if space was measured low.
 	if reportErr != nil && report.HostError == "" {
+		// stdout carries --json output; the report is progress, so it goes to stderr.
+		printStorageReport(streams.Err, report, reportErr)
 		return builtImage{}, &userError{msg: reportErr.Error(), err: reportErr}
 	}
 	if guardWarning != "" {
@@ -117,7 +117,13 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root strin
 		return builtImage{}, dockerUnreachable(err)
 	}
 	defer func() { _ = builder.Close() }()
-	return ensureSandboxImage(ctx, streams, root, b, plan, builder)
+	built, err := ensureSandboxImage(ctx, streams, root, b, plan, builder)
+	if err != nil {
+		// A failure unrelated to storage isn't buried under the storage report.
+		return builtImage{}, err
+	}
+	printStorageReport(streams.Err, report, reportErr)
+	return built, nil
 }
 
 // imageEnsurer is the part of a sandboximage.Builder that buildSandboxImage
