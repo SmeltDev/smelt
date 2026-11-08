@@ -55,6 +55,9 @@ type Notes struct {
 	// are set from the checks, not written by the model, so a green test gate
 	// cannot hide them.
 	Skipped []string `json:"skipped,omitempty"`
+	// SkipsNotMeasured is set when no validation command's output came from a
+	// runner smelt reads skips from, so the absence of Skipped is not a zero.
+	SkipsNotMeasured bool `json:"skipsNotMeasured,omitempty"`
 	// Low are the findings smelt downgraded to low because a later round raised
 	// them on code the fix had not touched. Set from the checks like Skipped.
 	Low []string `json:"low,omitempty"`
@@ -237,6 +240,9 @@ func (n Notes) sections(label func(string) string) string {
 	}
 	if len(n.Skipped) > 0 {
 		parts = append(parts, "Skipped in the sandbox: "+strings.Join(n.Skipped, ", "))
+	}
+	if n.SkipsNotMeasured {
+		parts = append(parts, "Skips not measured: the test output is not from a runner smelt reads skips from")
 	}
 	if len(n.Low) > 0 {
 		parts = append(parts, "Low findings (new in a later round on code the fix did not touch):\n- "+strings.Join(n.Low, "\n- "))

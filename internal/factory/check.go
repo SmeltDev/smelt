@@ -86,6 +86,9 @@ type Check struct {
 	// Skipped are the tests a validation command's output reports as skipped,
 	// so that a green test gate cannot hide them.
 	Skipped []string
+	// SkipsMeasured is whether the output came from a test runner smelt
+	// reads skips from; when false, an empty Skipped says nothing.
+	SkipsMeasured bool
 	// Findings are a review's findings, kept as data for display.
 	Findings []review.Finding
 	// Prose is a review's prose alongside its findings, kept for display.

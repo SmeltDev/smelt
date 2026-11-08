@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/iostream"
@@ -79,10 +80,10 @@ func UnverifiedItems(summary string) []string {
 
 // implementerSystemPrompt returns the base system prompt, followed by the
 // run's own instructions when there are any.
-func implementerSystemPrompt(instructions string, gates []config.Command) string {
+func implementerSystemPrompt(instructions, stack string, gates []config.Command) string {
 	prompt := baseImplementerSystemPrompt
 	if len(gates) > 0 {
-		prompt += "\n\n" + gatesInstructions(gates)
+		prompt += "\n\n" + gatesInstructions(stack, gates)
 	}
 	if strings.TrimSpace(instructions) == "" {
 		return prompt
@@ -94,9 +95,12 @@ func implementerSystemPrompt(instructions string, gates []config.Command) string
 // full gates after its turn and sends back any failure, so running them in the
 // turn too would make every round pay for them twice. A gate that is fast
 // anyway is the exception, since a failure found in the turn costs no round.
-func gatesInstructions(gates []config.Command) string {
+func gatesInstructions(stack string, gates []config.Command) string {
 	var b strings.Builder
-	b.WriteString("After your last edit, build and run the tests of the packages you changed (for Go: `go build ./...` and `go test ./<changed packages>/...`), and fix what fails. ")
+	fmt.Fprintf(&b, "After your last edit, run the project's checks: %s, and fix what fails. ", strings.Join(checkCommands(gates), "; "))
+	if stack == envspec.StackGo {
+		b.WriteString("For Go, build and run the tests of the packages you changed: `go build ./...` and `go test ./<changed packages>/...`. ")
+	}
 	b.WriteString("smelt runs the full gates (listed below) right after your turn and sends you any failure, so don't run them yourself unless you need one to find a problem.\n")
 	if fast := fastGateNames(gates); len(fast) > 0 {
 		fmt.Fprintf(&b, "These gates are quick: run them in full after your last edit, and fix what fails: %s.\n", strings.Join(fast, ", "))
@@ -110,6 +114,15 @@ func gatesInstructions(gates []config.Command) string {
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// checkCommands are the gates' own commands, as the project defines them.
+func checkCommands(gates []config.Command) []string {
+	out := make([]string, 0, len(gates))
+	for _, g := range gates {
+		out = append(out, g.Run)
+	}
+	return out
 }
 
 // fastGateNames are the names of the gates cheap enough to run in full.
@@ -181,7 +194,10 @@ type Implementer struct {
 	ContextWindow int
 	// Gates are the commands the implementer is asked to run before it
 	// finishes; see gateCommands.
-	Gates      []config.Command
+	Gates []config.Command
+	// Stack is the project's stack (envspec.StackGo, ...), empty when unknown.
+	// Stack-specific advice in the prompt is only given for a known stack.
+	Stack      string
 	OnActivity func(Activity)
 
 	sessionID string
@@ -227,7 +243,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	})
 	var stdout, stderr bytes.Buffer
 	script := h.ImplementScript(harness.ImplementInput{
-		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Gates),
+		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Stack, im.Gates),
 		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
 		LongestGate: longestGate(im.Gates), Timeout: timeout, ContextWindow: im.ContextWindow,
 	})

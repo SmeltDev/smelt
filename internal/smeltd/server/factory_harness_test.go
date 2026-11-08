@@ -55,6 +55,22 @@ func TestFactoryRunUsesTheRequestedHarnessAndItsOwnCredential(t *testing.T) {
 	assert.Equal(t, got.Model, "o3")
 }
 
+func TestFactoryRunCarriesTheConfiguredStack(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
+	cfg := `{"orgID":"org-1","environment":{"stack":"go"},"commands":[{"name":"test","run":"go test ./..."}]}`
+	assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go"})
+	assert.NilError(t, err)
+	waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, got.Stack, "go")
+}
+
 func TestFactoryRunRefusesAHarnessWithoutACredential(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
 	_, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "go", Harness: "codex"})

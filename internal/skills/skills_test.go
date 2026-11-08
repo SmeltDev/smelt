@@ -2,7 +2,9 @@ package skills_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -353,5 +355,66 @@ func TestAllSkillsHaveEmbeddedContent(t *testing.T) {
 		data, err := embeddedSkills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
 		assert.NilError(t, err, "embedded content missing for %s", s.Name)
 		assert.Assert(t, len(data) > 0, "embedded content empty for %s", s.Name)
+	}
+}
+
+// baseBranchSnippet is the shell block a skill tells the agent to run to find
+// the branch to diff against, tagged "sh base-branch" in its SKILL.md.
+func baseBranchSnippet(t *testing.T, skill string) string {
+	t.Helper()
+	data, err := embeddedSkills.Content.ReadFile(filepath.Join(skill, "SKILL.md"))
+	assert.NilError(t, err)
+	_, rest, ok := strings.Cut(string(data), "```sh base-branch\n")
+	assert.Assert(t, ok, "%s has no base-branch snippet", skill)
+	snippet, _, ok := strings.Cut(rest, "```")
+	assert.Assert(t, ok)
+	return snippet
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, "git %v: %s", args, out)
+}
+
+func TestSkillsResolveTheBaseBranch(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		want  string
+	}{
+		{"only master and no origin/HEAD", func(t *testing.T, dir string) {
+			gitIn(t, dir, "branch", "-m", "master")
+		}, "master"},
+		{"main wins over master", func(t *testing.T, dir string) {
+			gitIn(t, dir, "branch", "-m", "main")
+			gitIn(t, dir, "branch", "master")
+		}, "main"},
+		{"origin/HEAD wins", func(t *testing.T, dir string) {
+			gitIn(t, dir, "branch", "-m", "master")
+			gitIn(t, dir, "update-ref", "refs/remotes/origin/develop", "HEAD")
+			gitIn(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+		}, "origin/develop"},
+		{"no base at all", func(t *testing.T, dir string) {
+			gitIn(t, dir, "branch", "-m", "trunk")
+		}, ""},
+	}
+	for _, skill := range []string{"smelt-review", "smelt-testing-gaps"} {
+		snippet := baseBranchSnippet(t, skill)
+		for _, tt := range tests {
+			t.Run(skill+"/"+tt.name, func(t *testing.T) {
+				dir := t.TempDir()
+				gitIn(t, dir, "init", "-q")
+				gitIn(t, dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init")
+				tt.setup(t, dir)
+				cmd := exec.Command("sh", "-c", snippet)
+				cmd.Dir = dir
+				out, err := cmd.Output()
+				assert.NilError(t, err)
+				assert.Equal(t, strings.TrimSpace(string(out)), tt.want)
+			})
+		}
 	}
 }

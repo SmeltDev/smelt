@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/smeltdev/smelt/internal/anthropic"
 	"github.com/smeltdev/smelt/internal/authprompt"
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
@@ -643,8 +642,7 @@ func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostr
 // in cfg, keeping any timeout that was raised by hand.
 // It returns the note explaining why no test gate was found, if that is so.
 func detectInitCommands(ctx context.Context, workDir string, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig) (noTestGate string) {
-	claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-	det, err := validate.DetectCommands(ctx, claude, workDir)
+	det, err := validate.DetectCommands(ctx, detectionAsker(rc, workDir), workDir)
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", err)))
 		return ""
@@ -760,12 +758,19 @@ hook config files.`,
 				return err
 			}
 
+			// Step 2: the coding agent's credential. Before anything that may
+			// ask Claude: command detection reads it, and so does the repair
+			// the image step offers when its verify fails.
+			authRC, _ := config.Resolve("", "", insecureStorage)
+			agentAuthStep(ctx, streams, authRC, cfg, insecureStorage, skipAuth, ui.Confirm)
+
+			// Resolved after the login, which may have stored a credential.
 			rc, rcErr := config.Resolve("", "", insecureStorage)
 			if rcErr != nil {
 				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not load config: %v", rcErr)))
 			}
 
-			// Step 2: Validate command detection
+			// Step 2b: Validate command detection
 			if !skipValidate {
 				noTestGate = detectInitCommands(ctx, workDir, streams, rc, cfg)
 			}
@@ -812,11 +817,6 @@ hook config files.`,
 			if !skipSkills {
 				installSkillsStep(workDir, streams, plan.Skills)
 			}
-
-			// Step 8: the coding agent's credential. Re-resolve: earlier steps may not have
-			// changed it, but this keeps the report accurate.
-			authRC, _ := config.Resolve("", "", insecureStorage)
-			agentAuthStep(ctx, streams, authRC, cfg, insecureStorage, skipAuth, ui.Confirm)
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			printInitSummary(cfg.Commands, plan.RemoteHints, streams)

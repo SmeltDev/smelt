@@ -71,6 +71,9 @@ type RunOptions struct {
 	Reviewers int
 	Prompts   []review.Prompt
 	Commands  []config.Command
+	// Stack is the project's stack from its environment config, empty when
+	// unknown; it keeps stack-specific text out of other projects' prompts.
+	Stack string
 	// Plan has the implementer write a plan, and the plan reviewed, before it
 	// writes code. A continued run never plans: its plan is in the record.
 	Plan bool
@@ -459,7 +462,7 @@ func (o RunOptions) prepareSidecars(request string, wt Worktree, pool *sidecar.P
 	steps.Implementer = &Implementer{
 		Harness: o.Harness, Exec: exec, Entry: impl, Credential: o.Credential, BaseURL: o.BaseURL,
 		Model: o.Model, Timeout: o.ImplementTimeout, Instructions: o.ImplementerInstructions, ContextWindow: o.ContextWindow,
-		OnActivity: o.OnActivity, Gates: gateCommands(o.Commands),
+		OnActivity: o.OnActivity, Gates: gateCommands(o.Commands), Stack: o.Stack,
 	}
 	steps.Acquire, steps.Release = pool.Acquire, pool.Release
 	steps.WaitReviewers = reviewersOf(pool, impl)
@@ -557,6 +560,7 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	status(iostream.LevelStep, "writing PR notes…")
 	notes, err := steps.WriteNotes(ctx, in)
 	notes.Skipped = rep.Outcome.Skipped()
+	notes.SkipsNotMeasured = rep.Outcome.SkipsNotMeasured()
 	notes.Low = steps.Downgraded()
 	if q := rep.Outcome.Quality(); q != nil {
 		notes.Quality = q.Line()

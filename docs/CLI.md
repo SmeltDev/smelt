@@ -531,8 +531,8 @@ smelt
     `"ratchet": {"new": 0, "fixed": 3, "existing": 214}`.
   - Only factory runs ratchet. `smelt validate` keeps the exit-code behaviour for these commands.
 - **The implementer runs quick checks; smelt runs the gates.** Its prompt asks it, after its last edit, to
-  build and run the tests of the packages it changed (for Go `go build ./...` and `go test ./<changed
-  packages>/...`) and not to run the full gates itself: smelt runs them right after the turn and sends back any
+  run the project's checks (the gate commands) and, for a Go project only (`environment.stack` is `go`), to
+  build and test the packages it changed (`go build ./...` and `go test ./<changed packages>/...`), and not to run the full gates itself: smelt runs them right after the turn and sends back any
   failure, so a round does not pay for them twice. The prompt lists the project's `role: gate` commands under
   "smelt runs these after your turn". A command may set `quick`, free text shown as that gate's quick check
   (`"quick": "go test ./<package>/... for each package you changed, without -race"`); smelt never runs it.
