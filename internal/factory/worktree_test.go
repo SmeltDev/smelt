@@ -9,6 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
@@ -46,6 +47,48 @@ func TestCreateWorktreeStartsFromTheDevelopersFiles(t *testing.T) {
 	// The developer's checkout is left exactly as it was.
 	assert.Equal(t, gitOutput(t, root, "status", "--porcelain"), before)
 	assert.Equal(t, gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD"), branch)
+}
+
+func TestCreateWorktreeNamesTheUncommittedFiles(t *testing.T) {
+	root := newProject(t)
+	writeFile(t, root, "pkg/deep/new.go", "package deep\n")
+
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, wt.Uncommitted, []string{"main.go", "mine.go", "pkg/deep/new.go"})
+}
+
+func TestCreateWorktreeCleanBaseLeavesUncommittedWorkOut(t *testing.T) {
+	root := newProject(t)
+
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x", CleanBase: true})
+	assert.NilError(t, err)
+	assert.Equal(t, wt.Baseline, wt.Head)
+	assert.Equal(t, len(wt.Uncommitted), 0)
+	assert.Equal(t, readFile(t, wt.Path, "main.go"), "package main\n")
+	_, statErr := os.Stat(filepath.Join(wt.Path, "mine.go"))
+	assert.Assert(t, os.IsNotExist(statErr), "mine.go is in the branch")
+}
+
+func TestUncommittedNote(t *testing.T) {
+	files := []string{"a", "b", "c", "d", "e", "f"}
+	assert.Equal(t, UncommittedNote(Worktree{Baseline: "b", Head: "h", Uncommitted: files}),
+		"starting from uncommitted work: 6 files (a, b, c, d, e, …)")
+	assert.Equal(t, UncommittedNote(Worktree{Baseline: "b", Head: "h", Uncommitted: files[:2]}),
+		"starting from uncommitted work: 2 files (a, b)")
+	assert.Equal(t, UncommittedNote(Worktree{Baseline: "h", Head: "h"}), "")
+	assert.Equal(t, UncommittedNote(Worktree{Baseline: "b", Head: "h", Uncommitted: files, From: &FromRef{}}), "")
+}
+
+func TestAnnounceStartWarnsAboutUncommittedWork(t *testing.T) {
+	var got []string
+	status := func(_ iostream.Level, msg string) { got = append(got, msg) }
+	AnnounceStart(context.Background(), t.TempDir(), Worktree{Baseline: "b", Head: "h", Uncommitted: []string{"mine.go"}}, status)
+	assert.DeepEqual(t, got, []string{"starting from uncommitted work: 1 files (mine.go)"})
+
+	got = nil
+	AnnounceStart(context.Background(), t.TempDir(), Worktree{Baseline: "h", Head: "h"}, status)
+	assert.Equal(t, len(got), 0)
 }
 
 func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {

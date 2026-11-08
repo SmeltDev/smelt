@@ -159,9 +159,16 @@ the build or that check fails, it offers to let Claude repair
 **Commit what init wrote:**
 
 ```bash
-git add .smelt/config.json Dockerfile.smelt
-git commit -m "Set up smelt factory"
+git add .smelt/config.json Dockerfile.smelt .gitignore .claude/settings.json \
+        .codex/hooks.json .claude/skills/smelt-validate-config .agents/skills/smelt-validate-config
+git commit -m "Set up smelt"
 ```
+
+Init ends by printing the exact `git add` for the files it wrote on your machine
+(`.codex/hooks.json` only when Codex is installed). Commit them before the first
+factory run: a run starts from your working tree, so anything left uncommitted
+rides along in the branch and the PR. Runs warn when that happens, and
+`smelt factory build --clean-base` starts from `HEAD` only.
 
 `Dockerfile.smelt` is yours to edit. The image tag is a hash of the Dockerfile
 and the lockfiles it copies, so when either changes, the next

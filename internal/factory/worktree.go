@@ -31,6 +31,10 @@ type Worktree struct {
 	// Head is the developer's HEAD when the run started. It differs from
 	// Baseline when their uncommitted work was committed as the baseline.
 	Head string
+	// Uncommitted are the files the baseline holds that HEAD does not, as they
+	// were when the run started: the developer's uncommitted work riding along.
+	// Empty when Baseline is HEAD. It is not recomputed when the baseline moves.
+	Uncommitted []string
 	// BaseBranch is the branch the developer was on when the run started, or
 	// the one --from named; "" for a detached HEAD or a commit. DefaultBranch is the repository's default branch,
 	// "" when none is recorded. Publishing reads both to pick the PR's base.
@@ -69,6 +73,9 @@ type WorktreeOptions struct {
 	// the tip of From while its baseline is the merge base with Against, so
 	// the branch's own commits are the change under review.
 	Against string
+	// CleanBase starts from HEAD with no snapshot of the checkout, so the
+	// developer's uncommitted work is left out. It has no effect with From.
+	CleanBase bool
 	// Host, when set, names the repository's default branch; the git remote's
 	// HEAD answers when it is nil or fails.
 	Host DefaultBranchHost
@@ -181,22 +188,29 @@ func (o WorktreeOptions) startFromCheckout(ctx context.Context) (Worktree, error
 	if err != nil {
 		return Worktree{}, fmt.Errorf("resolve HEAD: %w", err)
 	}
-	tree, err := gitutil.SnapshotTree(root)
-	if err != nil {
-		return Worktree{}, fmt.Errorf("snapshot your working tree: %w", err)
-	}
-
-	start := head
-	if tree != strings.TrimSpace(string(headTree)) {
-		out, err := (gitexec.Runner{Dir: root, Env: commitEnv(o.Author)}).Output(ctx, "commit-tree", tree, "-p", head,
-			"-m", "smelt factory baseline: uncommitted changes when run "+o.RunID+" started")
+	start, uncommitted := head, []string(nil)
+	if !o.CleanBase {
+		tree, err := gitutil.SnapshotTree(root)
 		if err != nil {
-			return Worktree{}, fmt.Errorf("commit your uncommitted changes as the baseline: %w", err)
+			return Worktree{}, fmt.Errorf("snapshot your working tree: %w", err)
 		}
-		start = strings.TrimSpace(string(out))
+		if tree != strings.TrimSpace(string(headTree)) {
+			out, err := (gitexec.Runner{Dir: root, Env: commitEnv(o.Author)}).Output(ctx, "commit-tree", tree, "-p", head,
+				"-m", "smelt factory baseline: uncommitted changes when run "+o.RunID+" started")
+			if err != nil {
+				return Worktree{}, fmt.Errorf("commit your uncommitted changes as the baseline: %w", err)
+			}
+			start = strings.TrimSpace(string(out))
+			// Not git status: it collapses untracked directories.
+			names, err := git.Output(ctx, "diff", "--name-only", "-z", head, start)
+			if err != nil {
+				return Worktree{}, fmt.Errorf("list your uncommitted files: %w", err)
+			}
+			uncommitted = strings.FieldsFunc(string(names), func(r rune) bool { return r == 0 })
+		}
 	}
 
-	w := Worktree{Path: o.Path, Branch: branchName(o.Prompt, o.RunID), Baseline: start, Head: head, Author: o.Author}
+	w := Worktree{Path: o.Path, Branch: branchName(o.Prompt, o.RunID), Baseline: start, Head: head, Uncommitted: uncommitted, Author: o.Author}
 	// A detached HEAD has no branch, which is routine.
 	w.BaseBranch, _ = gitutil.CurrentBranchInCtx(ctx, root)
 	return w, nil

@@ -287,6 +287,13 @@ func (n Notes) PRBody(runID string, o Outcome, stat string) string {
 		}
 		b.WriteString("\n")
 	}
+	if len(o.Uncommitted) > 0 {
+		b.WriteString("## Not from this run\n\nThe run started from uncommitted work in the checkout; these files were already there:\n\n")
+		for _, name := range o.Uncommitted {
+			b.WriteString("- `" + name + "`\n")
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("---\n")
 	b.WriteString(footer(runID, o, stat))
 	b.WriteString("\n")

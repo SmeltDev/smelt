@@ -184,3 +184,16 @@ func publishProjectAt(t *testing.T, root string) (factoryWorktree, string) {
 }
 
 type factoryWorktree struct{ Worktree, Branch string }
+
+// The files a run started with, uncommitted, come out of the record into the
+// PR body publishing writes.
+func TestPublishableRunCarriesTheUncommittedFiles(t *testing.T) {
+	rec := factory.Record{RunID: "run-1", Prompt: "x", Worktree: t.TempDir(), Result: factory.ResultPassed, Uncommitted: []string{"mine.go"}}
+
+	run, err := publishableRun(rec)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, run.Uncommitted, []string{"mine.go"})
+	body := factory.ResolveNotes(run.Prompt, nil).PRBody(run.RunID, factory.Outcome{Result: factory.Result(run.Result), Uncommitted: run.Uncommitted}, "")
+	assert.Assert(t, strings.Contains(body, "## Not from this run"), body)
+	assert.Assert(t, strings.Contains(body, "`mine.go`"), body)
+}

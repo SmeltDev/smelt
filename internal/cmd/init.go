@@ -571,6 +571,17 @@ func printInitSummary(commands []config.Command, remoteHints bool, streams iostr
 	}
 }
 
+// printCommitStep tells the developer which of the files init wrote or changed
+// to commit, so runs start from them and the first PR holds only the run's work.
+func printCommitStep(workDir string, before map[string]string, candidates []string, streams iostream.Streams) {
+	step := formatCommitStep(changedInitFiles(before, snapshotInitFiles(workDir, candidates), candidates))
+	if step == "" {
+		return
+	}
+	streams.ErrPrintln("")
+	streams.ErrPrintf("%s", step)
+}
+
 // detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.
 // Auto-selects when the user belongs to exactly one org; shows a picker when
 // interactive with multiple orgs. Skipped gracefully on auth failure, no TTY,
@@ -745,6 +756,8 @@ hook config files.`,
 			}
 
 			var noTestGate string
+			candidates := initCandidates()
+			before := snapshotInitFiles(workDir, candidates)
 
 			// Seed from existing config when --force so skipped sections are preserved.
 			cfg := seedInitConfig(existingCfg, loadErr, force)
@@ -820,6 +833,7 @@ hook config files.`,
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			printInitSummary(cfg.Commands, plan.RemoteHints, streams)
+			printCommitStep(workDir, before, candidates, streams)
 			if noTestGate != "" {
 				streams.ErrPrintln(ui.Dim(noTestGate))
 			}

@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -177,7 +178,7 @@ func TestStartWorktreeSaysWhenTheCheckoutIsNotOnTheDefaultBranch(t *testing.T) {
 	// DefaultBranchIn reads this symref.
 	gitOutput(t, root, "remote", "set-head", "origin", "main")
 	var got []string
-	opts := RunOptions{Root: root, Prompt: "x", Status: func(_ iostream.Level, msg string) { got = append(got, msg) }}
+	opts := RunOptions{Root: root, Prompt: "x", CleanBase: true, Status: func(_ iostream.Level, msg string) { got = append(got, msg) }}
 
 	_, err := startWorktree(context.Background(), opts, "run-1", t.TempDir(), config.CommitAuthor{})
 	assert.NilError(t, err)
@@ -187,4 +188,33 @@ func TestStartWorktreeSaysWhenTheCheckoutIsNotOnTheDefaultBranch(t *testing.T) {
 	_, err = startWorktree(context.Background(), opts, "run-2", t.TempDir(), config.CommitAuthor{})
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got, []string{"starting from feature/x (not main); the PR will target main"})
+}
+
+// RunOptions.CleanBase must reach the worktree: the checkout's uncommitted
+// work stays out of the branch and the run says nothing about it.
+func TestStartWorktreeHonoursCleanBase(t *testing.T) {
+	root := newProject(t)
+	var got []string
+	status := func(_ iostream.Level, msg string) { got = append(got, msg) }
+
+	wt, err := startWorktree(context.Background(), RunOptions{Root: root, Prompt: "x", CleanBase: true, Status: status}, "run-1", t.TempDir(), config.CommitAuthor{})
+	assert.NilError(t, err)
+	assert.Equal(t, wt.Baseline, wt.Head)
+	assert.Equal(t, len(wt.Uncommitted), 0)
+	assert.Equal(t, len(got), 0)
+	_, statErr := os.Stat(filepath.Join(wt.Path, "mine.go"))
+	assert.Assert(t, os.IsNotExist(statErr))
+
+	wt, err = startWorktree(context.Background(), RunOptions{Root: root, Prompt: "x", Status: status}, "run-2", t.TempDir(), config.CommitAuthor{})
+	assert.NilError(t, err)
+	assert.Assert(t, wt.Baseline != wt.Head)
+	assert.Assert(t, len(got) == 1 && strings.Contains(got[0], "starting from uncommitted work: 2 files (main.go, mine.go)"), got)
+}
+
+// A record built from a worktree that started from uncommitted work keeps the
+// list, so a later publish can name it in the PR body.
+func TestRecordKeepsTheUncommittedFiles(t *testing.T) {
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: newProject(t), Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, newRecord("run-1", "x", wt).Uncommitted, []string{"main.go", "mine.go"})
 }
