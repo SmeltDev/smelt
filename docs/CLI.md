@@ -47,6 +47,7 @@ smelt
 │
 ├── init                            # Initialize project configuration
 │   --force                         # Overwrite existing config
+│   --hooks-only                    # Install the hooks for the existing config once its gates pass
 │   --skip-hooks                    # Skip hook file generation
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions              # Skip shell completion installation
@@ -187,6 +188,7 @@ smelt
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 10)
 │       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
+│       --clean-base                # Start from HEAD only: your uncommitted changes stay out of the branch (not with --from or --continue)
 │       --integrate                 # With --from: check the finished branch against the whole spec (the prompt) and fix only what fails
 │       --against <ref>             # With --integrate: what the branch is compared with (default: the default branch)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
@@ -275,6 +277,18 @@ smelt
 ```
 
 ## Behavior Decisions
+
+- **`init` installs hooks only for gates that pass today.** It runs each `role: gate` command once
+  (never `install` or autofix commands). If one fails, it shows the command and the end of its output,
+  installs no hook (`.claude/settings.json`, `.codex/hooks.json`, `.git/hooks/pre-commit`) and prints
+  `hooks not installed: <gate> fails today; fix it, then run smelt init --hooks-only`. Init still exits 0.
+  `smelt init --hooks-only` repeats the check against the existing config and installs the hooks.
+- **A Python repo gets a `pytest` gate only with tracked test files and pytest declared** (pyproject,
+  requirements, setup.py/cfg or Pipfile). Otherwise init writes no test gate and ends with
+  `no test gate: no tests found (add tests, then run smelt init again)`. A pytest exit 5 (no tests collected)
+  passes only when the repo has no test files, locally and in the factory sandbox.
+- **`install` is setup, not a gate.** `smelt validate` and factory runs skip it; `smelt validate install`
+  still runs it, and a factory run installs once per container.
 
 - `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/smelt/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
 - `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `smelt auth remove circleci` first to clear it. Existing accounts should use `smelt auth login`.
@@ -518,8 +532,8 @@ smelt
     `"ratchet": {"new": 0, "fixed": 3, "existing": 214}`.
   - Only factory runs ratchet. `smelt validate` keeps the exit-code behaviour for these commands.
 - **The implementer runs quick checks; smelt runs the gates.** Its prompt asks it, after its last edit, to
-  build and run the tests of the packages it changed (for Go `go build ./...` and `go test ./<changed
-  packages>/...`) and not to run the full gates itself: smelt runs them right after the turn and sends back any
+  run the project's checks (the gate commands) and, for a Go project only (`environment.stack` is `go`), to
+  build and test the packages it changed (`go build ./...` and `go test ./<changed packages>/...`), and not to run the full gates itself: smelt runs them right after the turn and sends back any
   failure, so a round does not pay for them twice. The prompt lists the project's `role: gate` commands under
   "smelt runs these after your turn". A command may set `quick`, free text shown as that gate's quick check
   (`"quick": "go test ./<package>/... for each package you changed, without -race"`); smelt never runs it.
@@ -901,6 +915,15 @@ smelt
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
+- **A run warns when it starts from uncommitted work, and `--clean-base` avoids it.** A run's baseline
+  snapshots tracked and untracked (non-ignored) files, and the branch push carries them. When the
+  baseline is not the checkout's `HEAD`, the run prints `starting from uncommitted work: <n> files
+  (<first 5>)` and the PR body lists every file under `## Not from this run` (kept in the run record, so
+  `factory publish` does it too). `--clean-base` starts from `HEAD` with no snapshot; it is a user error
+  with `--from` or `--continue`, which already decide the start. `smelt init` ends with `Commit these so
+  runs start from them:` and a `git add` of exactly the files it wrote or changed (not the `.example.json`
+  fallbacks or the git hook). The Claude harness passes `--setting-sources user,local`, so the repo's
+  `.claude/settings.json` hooks (which call `smelt validate`) do not run in the sandbox; `CLAUDE.md` still loads.
 - **`factory build --from <ref>` bases a run on a branch or commit, not on the checkout.**
   The ref (`epic/x`, `origin/epic/x`, a SHA) is resolved with
   `git rev-parse --verify <ref>^{commit}`. A branch is first fetched from `origin`

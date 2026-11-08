@@ -48,13 +48,18 @@ func (Harness) Name() harness.Name { return harness.Claude }
 // Binary implements harness.Harness.
 func (Harness) Binary() string { return binary }
 
+// settingSources leaves out the project's settings: its hooks call smelt, which
+// the sandbox does not have, so each would fail every turn. CLAUDE.md is not a
+// settings source and still loads.
+const settingSources = "user,local"
+
 // ImplementScript implements harness.Harness. The sidecar is a sandbox, which
 // is what lets claude skip permission prompts there even when the image runs it
 // as root.
 func (Harness) ImplementScript(in harness.ImplementInput) string {
 	args := []string{
 		binary, "-p", "--output-format", "stream-json", "--verbose",
-		"--dangerously-skip-permissions",
+		"--dangerously-skip-permissions", "--setting-sources", settingSources,
 		"--disallowedTools", strings.Join(disallowedGit, ","),
 		"--append-system-prompt", in.SystemPrompt,
 	}
@@ -112,7 +117,7 @@ func (Harness) ReviewScript(in harness.ReviewInput) string {
 	if in.Stream {
 		format = "stream-json"
 	}
-	args := []string{binary, "-p", "--output-format", format, "--allowedTools", strings.Join(in.Tools, ",")}
+	args := []string{binary, "-p", "--output-format", format, "--allowedTools", strings.Join(in.Tools, ","), "--setting-sources", settingSources}
 	if in.Stream {
 		// stream-json refuses to run without --verbose.
 		args = append(args, "--verbose")

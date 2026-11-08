@@ -168,6 +168,9 @@ func checkStartRequest(req smeltd.FactoryRequest) (smeltd.FactoryRequest, harnes
 	if req.From != "" && req.Continue != "" {
 		return req, nil, "", apiErr(http.StatusBadRequest, "from cannot be combined with continue: a continued run keeps its base")
 	}
+	if req.CleanBase && (req.From != "" || req.Continue != "") {
+		return req, nil, "", apiErr(http.StatusBadRequest, "clean base cannot be combined with from or continue: they already decide where the run starts")
+	}
 	if err := checkIntegrateRequest(req); err != nil {
 		return req, nil, "", err
 	}
@@ -270,6 +273,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Prompt:                  prompt,
 		Continue:                cont,
 		From:                    req.From,
+		CleanBase:               req.CleanBase,
 		Integrate:               integrate,
 		Attempts:                attempts,
 		Rounds:                  cfg.Factory.RoundPolicy(),
@@ -277,6 +281,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
 		Commands:                commands,
+		Stack:                   projectStack(cfg),
 		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
 		Pack:                    packOptions(req, cfg),
 		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
@@ -481,6 +486,7 @@ func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
 	defer e.mu.Unlock()
 	f := e.s.Factory
 	f.RunID, f.Worktree, f.Branch, f.Baseline, f.Head = runID, wt.Path, wt.Branch, wt.Baseline, wt.Head
+	f.Uncommitted = wt.Uncommitted
 	f.BaseBranch, f.DefaultBranch, f.PRBase = wt.BaseBranch, wt.DefaultBranch, wt.PRBase
 	if wt.From != nil {
 		f.From = &smeltd.FromRef{Ref: wt.From.Ref, Commit: wt.From.Commit}
@@ -879,6 +885,15 @@ func wireTiming(t factory.Timing) *smeltd.FactoryTiming {
 		GatesMS: t.Gates.Milliseconds(), ReviewsMS: t.Reviews.Milliseconds(), NotesMS: t.Notes.Milliseconds(),
 		TotalMS: t.Total.Milliseconds(), ContextPeakMax: t.PeakMax(), GateOnlyRounds: t.GateOnlyRounds, SlowCalls: t.Warnings(),
 	}
+}
+
+// projectStack is the stack named in the project's environment config, empty
+// when it has none.
+func projectStack(cfg *config.ProjectConfig) string {
+	if cfg == nil || cfg.Environment == nil {
+		return ""
+	}
+	return cfg.Environment.Stack
 }
 
 // imageInstallCommand is the dependency install to run on each sidecar. Only

@@ -1209,3 +1209,46 @@ func TestFactoryBackendRunsFollowMachineLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectStack(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.ProjectConfig
+		want string
+	}{
+		{"nil config", nil, ""},
+		{"no environment", &config.ProjectConfig{}, ""},
+		{"go", &config.ProjectConfig{Environment: &envspec.Environment{Stack: envspec.StackGo}}, envspec.StackGo},
+		{"python", &config.ProjectConfig{Environment: &envspec.Environment{Stack: "python"}}, "python"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, projectStack(tt.cfg), tt.want)
+		})
+	}
+}
+
+// The files a run started with, uncommitted, reach the session's record, where
+// publishing reads them from.
+func TestFactoryRecorderStartedKeepsTheUncommittedFiles(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.NilError(t, busy)
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	rec.started("run-1", factory.Worktree{Path: "/wt", Uncommitted: []string{"a.go", "b.go"}})
+
+	assert.DeepEqual(t, entry.snapshot().Factory.Uncommitted, []string{"a.go", "b.go"})
+}
+
+func TestCheckStartRequestRefusesCleanBaseWithFromOrContinue(t *testing.T) {
+	_, _, _, err := checkStartRequest(smeltd.FactoryRequest{Prompt: "x", CleanBase: true})
+	assert.NilError(t, err)
+	for _, req := range []smeltd.FactoryRequest{
+		{Prompt: "x", CleanBase: true, From: "epic/x"},
+		{CleanBase: true, Continue: "run-1"},
+	} {
+		_, _, _, err := checkStartRequest(req)
+		assert.ErrorContains(t, err, "clean base cannot be combined")
+	}
+}

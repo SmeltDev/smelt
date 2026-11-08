@@ -48,6 +48,7 @@ func newFactoryBuildCmd() *cobra.Command {
 	var keepSidecars, noValidate, noPlan, noPack, jsonOut, logOn, verbose, detach, integrate bool
 	var fallback []string
 	var orgID, image, sandboxDockerfile, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, overlay, harnessFlag, from, against string
+	var cleanBase bool
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -227,6 +228,7 @@ status --json' reports which one a run used under factory.sandbox.`,
 				Prompt:                  prompt,
 				Continue:                continueRun,
 				From:                    from,
+				CleanBase:               cleanBase,
 				Integrate:               integrate,
 				Against:                 against,
 				ReviewsDir:              relReviews,
@@ -275,6 +277,7 @@ status --json' reports which one a run used under factory.sandbox.`,
 	cmd.Flags().StringVar(&overlay, "overlay", "", "read sandbox.dockerfile from a JSON file; --sandbox-dockerfile wins (paths relative to current directory)")
 	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
 	cmd.Flags().StringVar(&from, "from", "", "start from this branch or commit (e.g. epic/x, origin/epic/x, a SHA) instead of your files; your uncommitted changes are left out and your checkout is not touched")
+	cmd.Flags().BoolVar(&cleanBase, "clean-base", false, "start from HEAD only: your uncommitted changes are left out of the run's branch (cannot be combined with --from or --continue)")
 	cmd.Flags().BoolVar(&integrate, "integrate", false, "check the finished work on --from against the whole spec in the prompt and fix only what fails: one broad review, one fix turn, one focused re-check")
 	cmd.Flags().StringVar(&against, "against", "", "with --integrate, the ref the branch is compared with (default: the default branch)")
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")

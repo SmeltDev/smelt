@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/smeltdev/smelt/internal/anthropic"
 	"github.com/smeltdev/smelt/internal/authprompt"
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
@@ -571,6 +570,17 @@ func printInitSummary(commands []config.Command, remoteHints bool, streams iostr
 	}
 }
 
+// printCommitStep tells the developer which of the files init wrote or changed
+// to commit, so runs start from them and the first PR holds only the run's work.
+func printCommitStep(workDir string, before map[string]string, candidates []string, streams iostream.Streams) {
+	step := formatCommitStep(changedInitFiles(before, snapshotInitFiles(workDir, candidates), candidates))
+	if step == "" {
+		return
+	}
+	streams.ErrPrintln("")
+	streams.ErrPrintf("%s", step)
+}
+
 // detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.
 // Auto-selects when the user belongs to exactly one org; shows a picker when
 // interactive with multiple orgs. Skipped gracefully on auth failure, no TTY,
@@ -641,12 +651,12 @@ func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostr
 
 // detectInitCommands detects the project's validation commands and records them
 // in cfg, keeping any timeout that was raised by hand.
-func detectInitCommands(ctx context.Context, workDir string, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig) {
-	claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-	det, err := validate.DetectCommands(ctx, claude, workDir)
+// It returns the note explaining why no test gate was found, if that is so.
+func detectInitCommands(ctx context.Context, workDir string, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig) (noTestGate string) {
+	det, err := validate.DetectCommands(ctx, detectionAsker(rc, workDir), workDir)
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", err)))
-		return
+		return ""
 	}
 	printDetectionSource(det, streams)
 	allCommands := []config.Command{}
@@ -666,6 +676,7 @@ func detectInitCommands(ctx context.Context, workDir string, streams iostream.St
 	for _, c := range det.Commands {
 		streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
 	}
+	return det.NoTestGate
 }
 
 // seedInitConfig picks the config init starts from: the existing one with
@@ -684,7 +695,7 @@ func seedInitConfig(existing *config.ProjectConfig, loadErr error, force bool) *
 }
 
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
+	var force, hooksOnly, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
 	var projectDir, factoryBackend, factoryImage, factoryAuthor, harnessFlag string
 
 	cmd := &cobra.Command{
@@ -718,8 +729,12 @@ hook config files.`,
 				return err
 			}
 
-			// Guard: exit cleanly if config exists and --force not set
 			existingCfg, loadErr := config.LoadProjectConfig(workDir)
+			if hooksOnly {
+				return runInitHooksOnly(ctx, workDir, existingCfg, loadErr, hookInstall{GitCommonDir: gitCommonDir, SkipGitHook: skipGitHook}, streams)
+			}
+
+			// Guard: exit cleanly if config exists and --force not set
 			if loadErr == nil && !force {
 				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil
 				if hasData {
@@ -738,6 +753,10 @@ hook config files.`,
 				}
 			}
 
+			var noTestGate string
+			candidates := initCandidates()
+			before := snapshotInitFiles(workDir, candidates)
+
 			// Seed from existing config when --force so skipped sections are preserved.
 			cfg := seedInitConfig(existingCfg, loadErr, force)
 
@@ -752,14 +771,21 @@ hook config files.`,
 				return err
 			}
 
+			// Step 2: the coding agent's credential. Before anything that may
+			// ask Claude: command detection reads it, and so does the repair
+			// the image step offers when its verify fails.
+			authRC, _ := config.Resolve("", "", insecureStorage)
+			agentAuthStep(ctx, streams, authRC, cfg, insecureStorage, skipAuth, ui.Confirm)
+
+			// Resolved after the login, which may have stored a credential.
 			rc, rcErr := config.Resolve("", "", insecureStorage)
 			if rcErr != nil {
 				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not load config: %v", rcErr)))
 			}
 
-			// Step 2: Validate command detection
+			// Step 2b: Validate command detection
 			if !skipValidate {
-				detectInitCommands(ctx, workDir, streams, rc, cfg)
+				noTestGate = detectInitCommands(ctx, workDir, streams, rc, cfg)
 			}
 
 			// Step 3: CircleCI org ID, for the circleci backend only
@@ -781,13 +807,8 @@ hook config files.`,
 
 			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {
-				if err := writeAllHookFiles(workDir, cfg.Commands, streams); err != nil {
+				if err := installHooksIfGatesPass(ctx, workDir, cfg, hookInstall{GitCommonDir: gitCommonDir, SkipGitHook: skipGitHook}, streams); err != nil {
 					return err
-				}
-				if !skipGitHook {
-					if err := writeGitHook(gitCommonDir, streams); err != nil {
-						return err
-					}
 				}
 			}
 
@@ -810,18 +831,18 @@ hook config files.`,
 				installSkillsStep(workDir, streams, plan.Skills)
 			}
 
-			// Step 8: the coding agent's credential. Re-resolve: earlier steps may not have
-			// changed it, but this keeps the report accurate.
-			authRC, _ := config.Resolve("", "", insecureStorage)
-			agentAuthStep(ctx, streams, authRC, cfg, insecureStorage, skipAuth, ui.Confirm)
-
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			printInitSummary(cfg.Commands, plan.RemoteHints, streams)
+			printCommitStep(workDir, before, candidates, streams)
+			if noTestGate != "" {
+				streams.ErrPrintln(ui.Dim(noTestGate))
+			}
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config")
+	cmd.Flags().BoolVar(&hooksOnly, "hooks-only", false, "Install the hooks for the existing config, once its gates pass")
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipGitHook, "skip-git-hook", false, "Skip git pre-commit hook installation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")

@@ -1739,3 +1739,39 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "format\nlint\ntest\n")
 }
+
+func TestPlanValidationExecutionTreatsInstallAsSetup(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: config.CmdInstall, Run: "pip install -e ."},
+		{Name: "test", Run: "pytest"},
+	}}
+
+	plan := planValidationExecution(cfg, &validateOpts{}, "")
+	assert.Equal(t, len(plan.LocalCommands), 1)
+	assert.Equal(t, plan.LocalCommands[0].Name, "test")
+
+	// Asking for install by name still runs it.
+	plan = planValidationExecution(cfg, &validateOpts{}, config.CmdInstall)
+	assert.Equal(t, len(plan.LocalCommands), 1)
+	assert.Equal(t, plan.LocalCommands[0].Name, config.CmdInstall)
+}
+
+func TestPrepareValidateConfig_NoCommands(t *testing.T) {
+	status := func(iostream.Level, string) {}
+
+	t.Run("empty config is done without error", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{}))
+		cfg, done, err := prepareValidateConfig(dir, nil, &validateOpts{}, "test", status)
+		assert.NilError(t, err)
+		assert.Assert(t, done)
+		assert.Assert(t, cfg == nil)
+	})
+
+	t.Run("missing config is a user error", func(t *testing.T) {
+		_, done, err := prepareValidateConfig(t.TempDir(), nil, &validateOpts{}, "test", status)
+		assert.Assert(t, !done)
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	})
+}

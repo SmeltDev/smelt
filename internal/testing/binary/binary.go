@@ -110,8 +110,20 @@ func RunCLI(t *testing.T, args []string, e *env.TestEnv, workDir string) CLIResu
 // and optional stdin data.
 func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin []byte) CLIResult {
 	t.Helper()
+	return runCLI(t, args, e, workDir, stdin, 30*time.Second)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// RunCLIWithTimeout is RunCLI with a caller-chosen timeout, for commands that
+// build or verify images and take minutes.
+func RunCLIWithTimeout(t *testing.T, args []string, e *env.TestEnv, workDir string, timeout time.Duration) CLIResult {
+	t.Helper()
+	return runCLI(t, args, e, workDir, nil, timeout)
+}
+
+func runCLI(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin []byte, timeout time.Duration) CLIResult {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Prepend --insecure-storage so acceptance tests never touch the system keychain.

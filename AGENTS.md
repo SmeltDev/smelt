@@ -14,6 +14,7 @@ It also provides `build-prompt`, a secondary tool that mines PR review comments 
 task build              # Build binary → dist/smelt
 task test               # Run all tests
 task acceptance-test    # Run acceptance tests
+task e2e:python-repo    # Docker e2e: init, image, validate on a Python repo (task test and acceptance-test skip it)
 task upstream:check    # List upstream (the fork's origin) commits since the one recorded in UPSTREAM.md
 task lint               # Run linters, shellcheck on install.sh, scripts/upstream-check.sh and scripts/capture-lizard-fixtures.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
 task fmt                # Format code

@@ -64,6 +64,9 @@ type RunOptions struct {
 	// the developer's files; see ResolveFrom. Their uncommitted changes are
 	// not part of the run.
 	From string
+	// CleanBase starts the run from HEAD alone, leaving out the developer's
+	// uncommitted changes; see WorktreeOptions.CleanBase.
+	CleanBase bool
 	// Attempts is the most rounds to check. A continued run that checks the
 	// work first counts that round as one of them.
 	Attempts int
@@ -71,6 +74,9 @@ type RunOptions struct {
 	Reviewers int
 	Prompts   []review.Prompt
 	Commands  []config.Command
+	// Stack is the project's stack from its environment config, empty when
+	// unknown; it keeps stack-specific text out of other projects' prompts.
+	Stack string
 	// Plan has the implementer write a plan, and the plan reviewed, before it
 	// writes code. A continued run never plans: its plan is in the record.
 	Plan bool
@@ -459,7 +465,7 @@ func (o RunOptions) prepareSidecars(request string, wt Worktree, pool *sidecar.P
 	steps.Implementer = &Implementer{
 		Harness: o.Harness, Exec: exec, Entry: impl, Credential: o.Credential, BaseURL: o.BaseURL,
 		Model: o.Model, Timeout: o.ImplementTimeout, Instructions: o.ImplementerInstructions, ContextWindow: o.ContextWindow,
-		OnActivity: o.OnActivity, Gates: gateCommands(o.Commands),
+		OnActivity: o.OnActivity, Gates: gateCommands(o.Commands), Stack: o.Stack,
 	}
 	steps.Acquire, steps.Release = pool.Acquire, pool.Release
 	steps.WaitReviewers = reviewersOf(pool, impl)
@@ -557,6 +563,7 @@ func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report,
 	status(iostream.LevelStep, "writing PR notes…")
 	notes, err := steps.WriteNotes(ctx, in)
 	notes.Skipped = rep.Outcome.Skipped()
+	notes.SkipsNotMeasured = rep.Outcome.SkipsNotMeasured()
 	notes.Low = steps.Downgraded()
 	if q := rep.Outcome.Quality(); q != nil {
 		notes.Quality = q.Line()
@@ -778,10 +785,29 @@ func StrayBranchNote(wt Worktree) string {
 	return fmt.Sprintf("starting from %s (not %s); the PR will target %s", wt.BaseBranch, wt.DefaultBranch, wt.PRBase)
 }
 
+// maxAnnouncedFiles is how many uncommitted files the start line names.
+const maxAnnouncedFiles = 5
+
+// UncommittedNote says that a run starts from uncommitted work, and names the
+// first files. "" when the baseline is the checkout's HEAD.
+func UncommittedNote(wt Worktree) string {
+	if wt.From != nil || wt.Baseline == wt.Head || len(wt.Uncommitted) == 0 {
+		return ""
+	}
+	names := strings.Join(wt.Uncommitted[:min(len(wt.Uncommitted), maxAnnouncedFiles)], ", ")
+	if len(wt.Uncommitted) > maxAnnouncedFiles {
+		names += ", …"
+	}
+	return fmt.Sprintf("starting from uncommitted work: %d files (%s)", len(wt.Uncommitted), names)
+}
+
 // AnnounceStart tells the developer what a new run starts from: what --from
-// ignores, and a checkout branch the PR will not target.
+// ignores, their uncommitted work, and a checkout branch the PR will not target.
 func AnnounceStart(ctx context.Context, root string, wt Worktree, status iostream.StatusFunc) {
 	announceFrom(ctx, root, wt, status)
+	if note := UncommittedNote(wt); note != "" {
+		status(iostream.LevelWarn, note)
+	}
 	if note := StrayBranchNote(wt); note != "" {
 		status(iostream.LevelInfo, note)
 	}
@@ -800,7 +826,7 @@ func startWorktree(ctx context.Context, opts RunOptions, runID, dataDir string, 
 	}
 	wt, err := CreateWorktree(ctx, WorktreeOptions{
 		Root: opts.Root, Path: filepath.Join(dataDir, "factory", runID),
-		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From, Against: opts.againstRef(),
+		RunID: runID, Prompt: opts.Prompt, Author: author, From: opts.From, CleanBase: opts.CleanBase, Against: opts.againstRef(),
 		Host: ghHostFor(opts.Root, dataDir),
 	})
 	if err != nil {

@@ -46,7 +46,19 @@ AskUserQuestion:
     - "Files changed in this branch"
       description: "Only mutate code touched in the current branch — good for
                     pre-merge coverage checks."
-      → run: git diff --name-only origin/main...HEAD
+      → resolve the base branch first (origin/HEAD when set, else main, else master):
+
+        ```sh base-branch
+        base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+        if [ -z "$base" ]; then
+          for b in main master; do
+            if git rev-parse --verify --quiet "refs/heads/$b" >/dev/null || git rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null; then base=$b; break; fi
+          done
+        fi
+        echo "$base"
+        ```
+
+        then run: git diff --name-only <base>...HEAD
         filter Stage 1 candidates to those files only
 ```
 

@@ -17,7 +17,19 @@ Use the team's generated review prompt to review recent code changes. Runs the a
      - If no PR number/URL was given but you are on a branch with an open PR, run `gh pr view --json number,title,body,baseRefName,headRefName,headRepositoryOwner,headRepository` to auto-detect it, then fetch the diff the same way
    - If the user specified a commit range, branch, or file list — use that
    - If there are staged changes (`git diff --cached`) — review those
-   - Otherwise, review uncommitted changes against the main branch (`git diff main...HEAD` or `git diff origin/main...HEAD`)
+   - Otherwise, review the branch against its base. Resolve the base first (the default branch is not always `main`: it is `origin/HEAD` when set, else `main`, else `master`), then run `git diff <base>...HEAD`:
+
+     ```sh base-branch
+     base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+     if [ -z "$base" ]; then
+       for b in main master; do
+         if git rev-parse --verify --quiet "refs/heads/$b" >/dev/null || git rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null; then base=$b; break; fi
+       done
+     fi
+     echo "$base"
+     ```
+
+     If it prints nothing, ask the user which branch to compare against.
 
 2. **Get the diff**: Obtain the changes using the method selected above. If the diff is empty, tell the user there is nothing to review. Store the full diff text — you will pass it inline to the subagent. For PR reviews also store the PR title and body.
 

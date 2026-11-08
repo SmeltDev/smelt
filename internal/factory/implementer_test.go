@@ -15,6 +15,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/review"
@@ -272,28 +273,54 @@ func TestLoopFailsWhenCodexCannotStartItsCommandHost(t *testing.T) {
 }
 
 func TestGatesInstructionsAskForQuickChecks(t *testing.T) {
-	gates := []config.Command{
+	tail := "smelt runs the full gates (listed below) right after your turn and sends you any failure, so don't run them yourself unless you need one to find a problem.\n" +
+		"These gates are quick: run them in full after your last edit, and fix what fails: lint.\n" +
+		"smelt runs these after your turn:\n"
+	goLine := "For Go, build and run the tests of the packages you changed: `go build ./...` and `go test ./<changed packages>/...`. "
+	goGates := []config.Command{
 		{Name: "test", Run: "task ci:test", Role: config.RoleGate, Timeout: 300, Quick: "go test ./<package>/... for each package you changed"},
 		{Name: "lint", Run: "task ci:lint", Role: config.RoleGate, Timeout: 60},
 		{Name: "vet", Run: "go vet ./...", Role: config.RoleGate},
 	}
-	want := "After your last edit, build and run the tests of the packages you changed (for Go: `go build ./...` and `go test ./<changed packages>/...`), and fix what fails. " +
-		"smelt runs the full gates (listed below) right after your turn and sends you any failure, so don't run them yourself unless you need one to find a problem.\n" +
-		"These gates are quick: run them in full after your last edit, and fix what fails: lint.\n" +
-		"smelt runs these after your turn:\n" +
-		"- test: task ci:test (quick check: go test ./<package>/... for each package you changed)\n" +
-		"- lint: task ci:lint\n" +
-		"- vet: go vet ./..."
-	assert.Equal(t, gatesInstructions(gates), want)
+	pyGates := []config.Command{
+		{Name: "test", Run: "pytest -q", Role: config.RoleGate},
+		{Name: "lint", Run: "ruff check .", Role: config.RoleGate, Timeout: 60},
+	}
+	tests := []struct {
+		name  string
+		stack string
+		gates []config.Command
+		want  string
+	}{
+		{"go", envspec.StackGo, goGates, "After your last edit, run the project's checks: task ci:test; task ci:lint; go vet ./..., and fix what fails. " + goLine + tail +
+			"- test: task ci:test (quick check: go test ./<package>/... for each package you changed)\n- lint: task ci:lint\n- vet: go vet ./..."},
+		{"python", "python", pyGates, "After your last edit, run the project's checks: pytest -q; ruff check ., and fix what fails. " + tail +
+			"- test: pytest -q\n- lint: ruff check ."},
+		{"unknown stack", "", pyGates, "After your last edit, run the project's checks: pytest -q; ruff check ., and fix what fails. " + tail +
+			"- test: pytest -q\n- lint: ruff check ."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, gatesInstructions(tt.stack, tt.gates), tt.want)
+		})
+	}
+}
+
+func TestImplementerPromptHasNoGoTextForAPythonProject(t *testing.T) {
+	gates := []config.Command{{Name: "test", Run: "pytest -q", Role: config.RoleGate, Timeout: 60}}
+	p := implementerSystemPrompt("be brief", "python", gates)
+	for _, goText := range []string{"go build", "go test", "for Go", "For Go"} {
+		assert.Assert(t, !strings.Contains(p, goText), "%q in %s", goText, p)
+	}
 }
 
 func TestGatesInstructionsNameNoQuickGateWithoutATimeout(t *testing.T) {
-	got := gatesInstructions([]config.Command{{Name: "test", Run: "go test ./...", Role: config.RoleGate}})
+	got := gatesInstructions(envspec.StackGo, []config.Command{{Name: "test", Run: "go test ./...", Role: config.RoleGate}})
 	assert.Assert(t, !strings.Contains(got, "are quick"), got)
 }
 
 func TestSystemPromptTellsTheAgentToWaitInTheForeground(t *testing.T) {
-	assert.Assert(t, strings.Contains(implementerSystemPrompt("", nil), "Run long commands in the foreground and wait for them. Don't background a command and poll its output with sleep loops."))
+	assert.Assert(t, strings.Contains(implementerSystemPrompt("", "", nil), "Run long commands in the foreground and wait for them. Don't background a command and poll its output with sleep loops."))
 }
 
 func TestLongestGate(t *testing.T) {

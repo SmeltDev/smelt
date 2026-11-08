@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/smeltdev/smelt/internal/anthropic"
 	"github.com/smeltdev/smelt/internal/config"
 )
 
@@ -35,6 +34,23 @@ type Detection struct {
 	Commands []config.Command
 	Source   string   // human-readable origin, empty when nothing was detected
 	Notes    []string // what detection could not resolve
+	// NoTestGate says why no test gate was written, for a repo that has the
+	// toolchain but could not pass one. Empty when there is nothing to say.
+	NoTestGate string
+}
+
+// layoutGuess is what the repository layout suggests: commands, plus the
+// reason there is no test gate when the toolchain is recognised but a gate
+// could not pass.
+type layoutGuess struct {
+	Commands   []config.Command
+	NoTestGate string
+}
+
+// Asker answers a single prompt with text. *anthropic.Client is one, with an
+// API key; callers with only a subscription login supply their own.
+type Asker interface {
+	Ask(ctx context.Context, model string, maxTokens int, prompt string, system ...string) (string, error)
 }
 
 // DetectCommands returns the full set of validate commands for the repo with metadata.
@@ -45,9 +61,9 @@ type Detection struct {
 // a bazel monorepo containing a package.json, say — are misdetected otherwise.
 //
 // Failing that, known toolchains return richer commands without calling Claude.
-// Claude is only used as a fallback for unknown toolchains, and only when a
-// client is provided.
-func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) (Detection, error) {
+// Claude is only used as a fallback for unknown toolchains, and only when an
+// Asker is provided.
+func DetectCommands(ctx context.Context, claude Asker, workDir string) (Detection, error) {
 	entries, _ := os.ReadDir(workDir)
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -64,8 +80,14 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		return withDefaults(ci, commandsFromFilenames(workDir, has)), nil
 	}
 
-	if cmds := commandsFromFilenames(workDir, has); len(cmds) > 0 {
-		return Detection{Commands: cmds, Source: sourceLayout, Notes: fallbackNotes(ci)}, nil
+	guess := commandsFromFilenames(workDir, has)
+	if len(guess.Commands) > 0 {
+		return Detection{Commands: guess.Commands, Source: sourceLayout, Notes: fallbackNotes(ci)}, nil
+	}
+	// A recognised toolchain with nothing that could pass: asking Claude would
+	// only bring back the test command that cannot pass.
+	if guess.NoTestGate != "" {
+		return Detection{Notes: fallbackNotes(ci), NoTestGate: guess.NoTestGate}, nil
 	}
 
 	// Unknown toolchain — ask Claude. With no client there is nothing left to
@@ -123,11 +145,11 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 // otherwise be written out test-less. Gates other than test stay unnamed when
 // CI does not name them: a lint gate the repo never runs is a tool that may not
 // even be installed, and it would fail every validate run.
-func withDefaults(ci Detection, defaults []config.Command) Detection {
+func withDefaults(ci Detection, guess layoutGuess) Detection {
 	names := func(cmds []config.Command, name string) bool {
 		return slices.ContainsFunc(cmds, func(c config.Command) bool { return c.Name == name })
 	}
-	for _, d := range defaults {
+	for _, d := range guess.Commands {
 		if d.Role != config.RoleAutofix && d.Name != roleTest {
 			continue
 		}
@@ -143,7 +165,9 @@ func withDefaults(ci Detection, defaults []config.Command) Detection {
 	// Neither source named a test. Nothing can be filled in, but the user is
 	// about to get a config that gates on lint alone, and should hear it here
 	// rather than discover it the first time validate passes on a broken tree.
-	if !names(ci.Commands, roleTest) {
+	if !names(ci.Commands, roleTest) && guess.NoTestGate != "" {
+		ci.NoTestGate = guess.NoTestGate
+	} else if !names(ci.Commands, roleTest) {
 		ci.Notes = append(ci.Notes, fmt.Sprintf(
 			"no test command was found in %s, and the repository layout does not suggest one", ci.Source))
 	}
@@ -181,7 +205,26 @@ func fallbackNotes(ci Detection) []string {
 // commandsFromFilenames guesses commands from the repo's root filenames. It is
 // the fallback for repos with no usable CircleCI config, and the source of
 // autofix commands CI configs do not name.
-func commandsFromFilenames(workDir string, has map[string]bool) []config.Command {
+func commandsFromFilenames(workDir string, has map[string]bool) layoutGuess {
+	if isPythonLayout(has) {
+		cmds, noTestGate := detectPython(workDir)
+		return layoutGuess{Commands: cmds, NoTestGate: noTestGate}
+	}
+	return layoutGuess{Commands: layoutCommands(workDir, has)}
+}
+
+// isPythonLayout reports whether the root files make Python the toolchain, in
+// the same precedence the switch in layoutCommands gives it.
+func isPythonLayout(has map[string]bool) bool {
+	for _, earlier := range []string{"Taskfile.yml", "Taskfile.yaml", "Makefile", "go.mod", "Cargo.toml"} {
+		if has[earlier] {
+			return false
+		}
+	}
+	return has["pyproject.toml"] || has["requirements.txt"] || has["setup.py"] || has["Pipfile"]
+}
+
+func layoutCommands(workDir string, has map[string]bool) []config.Command {
 	isGo := has["go.mod"]
 
 	switch {
@@ -218,11 +261,6 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 	case has["Cargo.toml"]:
 		return []config.Command{
 			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
-		}
-
-	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
-		return []config.Command{
-			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["Gemfile"]:

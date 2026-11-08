@@ -25,6 +25,21 @@ import (
 	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
+// writeGateConfig writes a config whose commands are the given gates, named
+// gate1, gate2, ...: install is setup and never part of a validate run.
+func writeGateConfig(t *testing.T, workDir string, runs ...string) {
+	t.Helper()
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
+	var commands []map[string]string
+	for i, run := range runs {
+		commands = append(commands, map[string]string{"name": fmt.Sprintf("gate%d", i+1), "run": run, "role": "gate"})
+	}
+	data, err := json.Marshal(map[string]interface{}{"commands": commands, "factory": map[string]string{"backend": "circleci"}})
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644))
+}
+
 func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string) {
 	t.Helper()
 	smeltDir := filepath.Join(workDir, ".smelt")
@@ -248,7 +263,7 @@ func TestValidateRunLocalFlagFailure(t *testing.T) {
 // running commands after the first failure.
 func TestValidateRunLocalFlagStopsOnFirstFailure(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeProjectConfig(t, workDir, "false", "echo should-not-run")
+	writeGateConfig(t, workDir, "false", "echo should-not-run")
 
 	env := testenv.NewTestEnv(t)
 
@@ -521,7 +536,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	cfg := map[string]interface{}{
 		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
-			{"name": "install", "run": "echo install"},
+			{"name": "lint", "run": "echo lint", "role": "gate"},
 			{"name": "test", "run": "echo test", "role": "gate"},
 		},
 		"validation": map[string]interface{}{
@@ -548,7 +563,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 
 	reqs := cci.Recorder.AllRequests()
 
-	// "install" and "test" are two independent remote commands, so validate
+	// "lint" and "test" are two independent remote commands, so validate
 	// grows the pool to match: one sidecar from resolveOrCreateSidecarID, and
 	// a second to fill the pool out. Both must carry the configured image.
 	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")

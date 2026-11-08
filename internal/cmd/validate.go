@@ -730,7 +730,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name string) validate.Plan {
 	var commands []config.Command
 	if cfg != nil {
-		commands = cfg.Commands
+		// Install is setup, not a gate; it runs only when asked for by name.
+		commands = slices.DeleteFunc(slices.Clone(cfg.Commands), config.Command.IsInstall)
 	}
 	if opts.inlineCmd != "" {
 		commandName := name
@@ -948,6 +949,11 @@ func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
 		if hook != nil {
 			return nil, true, nil // no config in hook context: skip silently
+		}
+		if err == nil {
+			// init ran and deliberately wrote no commands (e.g. no tests yet).
+			statusFn(iostream.LevelWarn, "No validate commands configured; nothing to validate.")
+			return nil, true, nil
 		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
