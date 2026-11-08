@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -808,4 +809,129 @@ func TestInitFactoryAuthorFlag(t *testing.T) {
 	_, err = runInitCmd(t, dir, "--factory-author", "ada@example.com")
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(userMsg(err), "--factory-author"))
+}
+
+// hookFiles are what init writes only when the gates pass today.
+func hookFiles(dir string) []string {
+	return []string{
+		filepath.Join(dir, ".git", "hooks", "pre-commit"),
+		filepath.Join(dir, ".claude", "settings.json"),
+		filepath.Join(dir, ".codex", "hooks.json"),
+	}
+}
+
+// runInitWithHooks runs init with the hook steps on, unlike runInitCmd.
+func runInitWithHooks(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	cmd := newInitCmd()
+	var errOut bytes.Buffer
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs(append([]string{
+		"--project-dir", dir, "--skip-org-id", "--skip-factory",
+		"--skip-completions", "--skip-skills", "--skip-auth",
+	}, args...))
+	cmd.SetContext(t.Context())
+	err := cmd.Execute()
+	return errOut.String(), err
+}
+
+func seedGateConfig(t *testing.T, dir, run string) {
+	t.Helper()
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: run, Role: config.RoleGate}}}
+	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
+}
+
+func TestInitSkipsHooksWhenAGateFailsToday(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	seedGateConfig(t, dir, "echo first; echo boom-detail >&2; exit 3")
+
+	stderr, err := runInitWithHooks(t, dir, "--force", "--skip-validate")
+	assert.NilError(t, err, stderr)
+	for _, f := range hookFiles(dir) {
+		_, statErr := os.Stat(f)
+		assert.Assert(t, errors.Is(statErr, fs.ErrNotExist), "%s must not exist", f)
+	}
+	assert.Assert(t, strings.Contains(stderr, "echo first; echo boom-detail >&2; exit 3"), stderr)
+	assert.Assert(t, strings.Contains(stderr, "boom-detail"), stderr)
+	assert.Assert(t, strings.Contains(stderr, "hooks not installed: test fails today; fix it, then run smelt init --hooks-only"), stderr)
+	assert.Assert(t, strings.Contains(stderr, "Project initialized"), stderr)
+}
+
+func TestInitInstallsHooksWhenGatesPass(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	seedGateConfig(t, dir, "true")
+
+	stderr, err := runInitWithHooks(t, dir, "--force", "--skip-validate")
+	assert.NilError(t, err, stderr)
+	for _, f := range hookFiles(dir) {
+		_, statErr := os.Stat(f)
+		assert.NilError(t, statErr)
+	}
+	assert.Assert(t, !strings.Contains(stderr, "hooks not installed"), stderr)
+}
+
+func TestInitHooksOnlyInstallsAfterTheGateIsFixed(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	seedGateConfig(t, dir, "test -f fixed")
+
+	stderr, err := runInitWithHooks(t, dir, "--hooks-only")
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, strings.Contains(stderr, "hooks not installed: test fails today"), stderr)
+	_, statErr := os.Stat(hookFiles(dir)[0])
+	assert.Assert(t, errors.Is(statErr, fs.ErrNotExist))
+
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "fixed"), nil, 0o644))
+	stderr, err = runInitWithHooks(t, dir, "--hooks-only")
+	assert.NilError(t, err, stderr)
+	for _, f := range hookFiles(dir) {
+		_, statErr := os.Stat(f)
+		assert.NilError(t, statErr)
+	}
+}
+
+func TestInitHooksOnlyNeedsAConfig(t *testing.T) {
+	isolateConfig(t)
+	dir := initGitRepo(t)
+	_, err := runInitWithHooks(t, dir, "--hooks-only")
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(userMsg(err), "init first"), userMsg(err))
+}
+
+func TestInitDryRunIgnoresInstallAndAutofix(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: config.CmdInstall, Run: "exit 1"},
+		{Name: "format", Run: "exit 1", Role: config.RoleAutofix},
+		{Name: "test", Run: "true", Role: config.RoleGate},
+	}}
+	gates := gatesOnly(cfg)
+	assert.Equal(t, len(gates.Commands), 1)
+	assert.Equal(t, gates.Commands[0].Name, "test")
+	assert.Equal(t, len(cfg.Commands), 3)
+}
+
+func TestInitPrintsNoTestGateLast(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644))
+
+	stderr, err := runInitWithHooks(t, dir)
+	assert.NilError(t, err, stderr)
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	for _, c := range cfg.Commands {
+		assert.Assert(t, c.Name != "test", "no test gate expected: %+v", cfg.Commands)
+	}
+	note := "no test gate: no tests found (add tests, then run smelt init again)"
+	// Other tests may leave colour on, so compare the text without escapes.
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(stderr, "")
+	assert.Assert(t, strings.HasSuffix(strings.TrimSpace(plain), note), plain)
 }

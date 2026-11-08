@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/commandutil"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -21,12 +22,12 @@ const defaultCommandTimeout = 5 * time.Minute
 const maxCommandOutput = 256 * 1024
 
 // ValidationCommands picks the configured commands the loop runs: those that
-// check rather than fix, can run remotely, and need no template expanded
+// check rather than fix (install is setup, run once per container), can run remotely, and need no template expanded
 // against the developer's local changes.
 func ValidationCommands(cmds []config.Command) []config.Command {
 	var out []config.Command
 	for _, c := range cmds {
-		if c.Role == config.RoleAutofix || c.RunsLocally() || strings.Contains(c.Run, "{{") {
+		if c.IsInstall() || c.Role == config.RoleAutofix || c.RunsLocally() || strings.Contains(c.Run, "{{") {
 			continue
 		}
 		out = append(out, c)
@@ -103,7 +104,7 @@ func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntr
 	// Both streams go into one buffer, interleaved as they arrive, the way a
 	// developer would see them in a terminal.
 	var out strings.Builder
-	script := fmt.Sprintf("cd %s && %s", sidecar.ShellEscape(entry.RepoPath), c.Run)
+	script := fmt.Sprintf("cd %s && %s", sidecar.ShellEscape(entry.RepoPath), commandutil.WrapPytestNoTests(c.Run))
 	code, err := exec(ctx, entry, script, nil, func(_ string, data []byte) {
 		if room := maxCommandOutput - out.Len(); room > 0 {
 			out.Write(data[:min(len(data), room)])

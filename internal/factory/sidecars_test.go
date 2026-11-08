@@ -12,6 +12,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -344,9 +345,15 @@ func TestCheckReportsAReviewerWithOtherCode(t *testing.T) {
 func TestInstallDependenciesRunsOnEverySidecar(t *testing.T) {
 	var mu sync.Mutex
 	ran := map[string]string{}
-	exec := func(_ context.Context, e *sidecar.PoolEntry, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+	calls := map[string]int{}
+	var deadline time.Duration
+	exec := func(ctx context.Context, e *sidecar.PoolEntry, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
 		mu.Lock()
 		ran[e.ID] = script
+		calls[e.ID]++
+		if d, ok := ctx.Deadline(); ok {
+			deadline = time.Until(d)
+		}
 		mu.Unlock()
 		onOutput(iostream.StreamStdout, []byte("installed\n"))
 		return 0, nil
@@ -365,6 +372,9 @@ func TestInstallDependenciesRunsOnEverySidecar(t *testing.T) {
 	}
 	assert.NilError(t, s.installDependencies(context.Background(), append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...)))
 	assert.Equal(t, len(ran), 2)
+	// Install is setup: once per container, never per gate round.
+	assert.DeepEqual(t, calls, map[string]int{"impl": 1, "r1": 1})
+	assert.Assert(t, deadline > time.Duration(config.DefaultInstallTimeout-60)*time.Second, deadline)
 	assert.Assert(t, strings.Contains(ran["r1"], "pnpm install --offline"), ran["r1"])
 	assert.Equal(t, len(lines), 2)
 
