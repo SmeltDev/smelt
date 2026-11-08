@@ -811,12 +811,12 @@ func TestInitFactoryAuthorFlag(t *testing.T) {
 	assert.Assert(t, strings.Contains(userMsg(err), "--factory-author"))
 }
 
-// hookFiles are what init writes only when the gates pass today.
+// hookFiles are what init writes only when the gates pass today. Codex's
+// hooks.json is left out: init writes it only where Codex is installed.
 func hookFiles(dir string) []string {
 	return []string{
 		filepath.Join(dir, ".git", "hooks", "pre-commit"),
 		filepath.Join(dir, ".claude", "settings.json"),
-		filepath.Join(dir, ".codex", "hooks.json"),
 	}
 }
 
