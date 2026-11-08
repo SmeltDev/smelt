@@ -1210,7 +1210,6 @@ func TestFactoryBackendRunsFollowMachineLimit(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestProjectStack(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1226,7 +1225,9 @@ func TestProjectStack(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, projectStack(tt.cfg), tt.want)
 		})
-=======
+	}
+}
+
 // The files a run started with, uncommitted, reach the session's record, where
 // publishing reads them from.
 func TestFactoryRecorderStartedKeepsTheUncommittedFiles(t *testing.T) {
@@ -1249,6 +1250,5 @@ func TestCheckStartRequestRefusesCleanBaseWithFromOrContinue(t *testing.T) {
 	} {
 		_, _, _, err := checkStartRequest(req)
 		assert.ErrorContains(t, err, "clean base cannot be combined")
->>>>>>> origin/epic/any-repo
 	}
 }
