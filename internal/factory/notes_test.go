@@ -191,3 +191,13 @@ func TestParseAnswerOnGrok(t *testing.T) {
 	_, err = ParseNotes(grok.Harness{}, `{"text":"prose","stopReason":"end_turn"}`)
 	assert.ErrorContains(t, err, "no structured answer")
 }
+
+func TestPRBodyListsUncommittedFiles(t *testing.T) {
+	n := Notes{Title: "Add a flag", What: "- a flag"}
+	o := testOutcome
+	o.Uncommitted = []string{"mine.go", "pkg/new.go"}
+	body := n.PRBody("run-1", o, "")
+	assert.Assert(t, strings.Contains(body, "## Not from this run\n\n"), body)
+	assert.Assert(t, strings.Contains(body, "- `mine.go`\n- `pkg/new.go`\n"), body)
+	assert.Assert(t, !strings.Contains(n.PRBody("run-1", testOutcome, ""), "Not from this run"))
+}
