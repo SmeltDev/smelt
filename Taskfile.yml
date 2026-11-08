@@ -76,6 +76,11 @@ tasks:
       - mkdir -p dist
       - go tool gotestsum --jsonfile dist/test-report.json -- -race {{.ARGS}}
 
+  e2e:python-repo:
+    desc: Run the Python repo setup test (init, image, validate); needs Docker and network
+    cmds:
+      - go test -tags e2e -race -count=1 -timeout 30m -run TestPythonRepo ./acceptance/
+
   env-harness:
     desc: |
       Run smelt sidecar env/build against target repos, using Claude to improve

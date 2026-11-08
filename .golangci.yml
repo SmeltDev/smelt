@@ -1,4 +1,8 @@
 version: "2"
+run:
+  # Typecheck and lint the e2e-tagged acceptance test too.
+  build-tags:
+    - e2e
 issues:
   # Make sure all the errors are getting returned.
   max-same-issues: 0
