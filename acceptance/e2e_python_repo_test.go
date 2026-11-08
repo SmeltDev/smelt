@@ -180,9 +180,8 @@ func TestPythonRepo(t *testing.T) {
 	tag := e2eImage(t, env, dir)
 
 	val := binary.RunCLIWithTimeout(t, []string{"validate"}, env, dir, e2eImageTimeout)
-	// With no commands configured validate has nothing to pass; it refuses
-	// rather than succeeding vacuously.
-	assert.Assert(t, val.ExitCode != 0, "validate passed with no commands: %s%s", val.Stdout, val.Stderr)
+	// init left no gate on purpose; validate succeeds with a note.
+	assert.Equal(t, val.ExitCode, 0, "stdout: %s\nstderr: %s", val.Stdout, val.Stderr)
 
 	listing := strings.Fields(e2eSnapshotListing(t, dir, tag))
 	assert.Assert(t, !slices.Contains(listing, ".env") && !slices.Contains(listing, "venv"), "ignored paths in snapshot: %v", listing)

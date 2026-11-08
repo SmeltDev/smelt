@@ -950,6 +950,11 @@ func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts
 		if hook != nil {
 			return nil, true, nil // no config in hook context: skip silently
 		}
+		if err == nil {
+			// init ran and deliberately wrote no commands (e.g. no tests yet).
+			statusFn(iostream.LevelWarn, "No validate commands configured; nothing to validate.")
+			return nil, true, nil
+		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
 			blocked:    true,
