@@ -280,7 +280,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", commandutil.WrapPytestNoTests(command))
 	cmd.Dir = workDir
 	if len(envVars) > 0 {
 		env := envctx.Environ(ctx)
