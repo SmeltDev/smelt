@@ -38,6 +38,9 @@ type Record struct {
 	Baseline         string `json:"baseline"`
 	OriginalBaseline string `json:"original_baseline,omitempty"`
 	Head             string `json:"head"`
+	// Uncommitted are the files that rode along in the baseline when the run
+	// started; see Worktree.Uncommitted. Publishing lists them in the PR.
+	Uncommitted []string `json:"uncommitted,omitempty"`
 	// UpdatedFrom is the base the branch was last updated from, nil for a run
 	// that never was.
 	UpdatedFrom *UpdatedFrom `json:"updated_from,omitempty"`
@@ -100,7 +103,7 @@ func (u UpdatedFrom) Note() string {
 func newRecord(runID, prompt string, wt Worktree) Record {
 	return Record{
 		RunID: runID, Prompt: prompt,
-		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head, Uncommitted: wt.Uncommitted,
 		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch, PRBase: wt.PRBase, From: wt.From, UpdatedFrom: wt.UpdatedFrom,
 	}
 }
