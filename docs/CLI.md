@@ -188,6 +188,7 @@ smelt
 │       --backend <name>            # docker or circleci (default: factory.backend, else docker)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 10)
 │       --from <ref>                # Start from a branch or commit instead of your files (not a config key; not with --continue)
+│       --clean-base                # Start from HEAD only: your uncommitted changes stay out of the branch (not with --from or --continue)
 │       --integrate                 # With --from: check the finished branch against the whole spec (the prompt) and fix only what fails
 │       --against <ref>             # With --integrate: what the branch is compared with (default: the default branch)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
@@ -914,6 +915,15 @@ smelt
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
+- **A run warns when it starts from uncommitted work, and `--clean-base` avoids it.** A run's baseline
+  snapshots tracked and untracked (non-ignored) files, and the branch push carries them. When the
+  baseline is not the checkout's `HEAD`, the run prints `starting from uncommitted work: <n> files
+  (<first 5>)` and the PR body lists every file under `## Not from this run` (kept in the run record, so
+  `factory publish` does it too). `--clean-base` starts from `HEAD` with no snapshot; it is a user error
+  with `--from` or `--continue`, which already decide the start. `smelt init` ends with `Commit these so
+  runs start from them:` and a `git add` of exactly the files it wrote or changed (not the `.example.json`
+  fallbacks or the git hook). The Claude harness passes `--setting-sources user,local`, so the repo's
+  `.claude/settings.json` hooks (which call `smelt validate`) do not run in the sandbox; `CLAUDE.md` still loads.
 - **`factory build --from <ref>` bases a run on a branch or commit, not on the checkout.**
   The ref (`epic/x`, `origin/epic/x`, a SHA) is resolved with
   `git rev-parse --verify <ref>^{commit}`. A branch is first fetched from `origin`

@@ -296,6 +296,9 @@ type FactoryRun struct {
 	// daemon derives ownership from its pool state so clients do not have to
 	// reconstruct it from sidecar names.
 	SidecarIDs []string `json:"sidecar_ids,omitempty"`
+	// Uncommitted are the files that rode along in the baseline when the run
+	// started; the PR body lists them.
+	Uncommitted []string `json:"uncommitted,omitempty"`
 	// Worktree is where the work is, on Branch. Baseline is the commit the
 	// branch starts from and Head the user's HEAD when the run started; they
 	// differ when the user's uncommitted work was committed as the baseline.
@@ -742,6 +745,9 @@ type FactoryRequest struct {
 	// project's files, whose uncommitted changes are then left out. It cannot
 	// be combined with Continue.
 	From string `json:"from,omitempty"`
+	// CleanBase starts the run from HEAD alone, leaving out the project's
+	// uncommitted changes. It cannot be combined with From or Continue.
+	CleanBase bool `json:"clean_base,omitempty"`
 	// Integrate checks the work already on From against Prompt, the spec for
 	// all of it, and fixes only what fails. It needs From and a Prompt, and
 	// cannot be combined with Continue. Attempts is ignored.

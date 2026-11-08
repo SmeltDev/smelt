@@ -183,3 +183,28 @@ func TestParseAnswerSaysWhenAStreamHasNoResultEvent(t *testing.T) {
 	assert.ErrorContains(t, err, "no result event in ")
 	assert.ErrorContains(t, err, "bytes of stream output")
 }
+
+func TestScriptsLeaveOutTheProjectSettings(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	assert.NilError(t, os.MkdirAll(bin, 0o755))
+	argv := filepath.Join(home, "argv")
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV\"\ncat > /dev/null\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755))
+
+	scripts := map[string]string{
+		"implement": Harness{}.ImplementScript(harness.ImplementInput{RepoPath: repo, Prompt: "go"}),
+		"review":    Harness{}.ReviewScript(harness.ReviewInput{RepoPath: repo, Prompt: "look", Tools: []string{"Read"}}),
+	}
+	for name, script := range scripts {
+		cmd := exec.Command("sh", "-s")
+		cmd.Stdin = strings.NewReader(script)
+		cmd.Env = append(os.Environ(), "HOME="+home, "ARGV="+argv)
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "%s: %s", name, out)
+		got, err := os.ReadFile(argv)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(string(got), "--setting-sources\nuser,local\n"), "%s: %s", name, got)
+		assert.NilError(t, os.Remove(argv))
+	}
+}

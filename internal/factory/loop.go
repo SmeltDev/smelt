@@ -70,6 +70,9 @@ type Outcome struct {
 	// Unverified are the things the implementer's last summary listed after
 	// UNVERIFIED:. They never change Result.
 	Unverified []string
+	// Uncommitted are the files the run started with that were not committed,
+	// for the PR body; see Worktree.Uncommitted. Only publishing sets it.
+	Uncommitted []string
 	// Plan is the plan the implementer was sent with, nil when the run did
 	// not plan.
 	Plan *Plan
