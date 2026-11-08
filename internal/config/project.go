@@ -27,8 +27,9 @@ const (
 	RoleAutofix = "autofix" // rewrites files (formatters)
 )
 
-// CmdInstall is the conventional name for the dependency install command. It has
-// no role of its own but sidecar setup treats it like a gate command.
+// CmdInstall is the conventional name for the dependency install command. It is
+// an environment setup step, not a gate: validation runs skip it, and a factory
+// run executes it once when a container starts.
 const CmdInstall = "install"
 
 // Backends a factory run's sidecars can execute on. The daemon's request type
@@ -198,6 +199,10 @@ func KeepLongerTimeouts(detected, previous []Command) []Command {
 	}
 	return out
 }
+
+// IsInstall reports whether the command is the environment's install step,
+// which is setup rather than a gate.
+func (c Command) IsInstall() bool { return c.Name == CmdInstall }
 
 // RunsLocally reports whether the command explicitly opts out of remote execution.
 func (c Command) RunsLocally() bool { return c.Local }
@@ -771,7 +776,7 @@ func commandEligibleForSidecarRemote(cmd Command) bool {
 	if cmd.Remote || cmd.Local {
 		return false
 	}
-	if cmd.Name == CmdInstall {
+	if cmd.IsInstall() {
 		return true
 	}
 	return cmd.Role == RoleGate
