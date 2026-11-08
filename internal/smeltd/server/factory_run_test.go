@@ -1210,6 +1210,24 @@ func TestFactoryBackendRunsFollowMachineLimit(t *testing.T) {
 	}
 }
 
+func TestProjectStack(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.ProjectConfig
+		want string
+	}{
+		{"nil config", nil, ""},
+		{"no environment", &config.ProjectConfig{}, ""},
+		{"go", &config.ProjectConfig{Environment: &envspec.Environment{Stack: envspec.StackGo}}, envspec.StackGo},
+		{"python", &config.ProjectConfig{Environment: &envspec.Environment{Stack: "python"}}, "python"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, projectStack(tt.cfg), tt.want)
+		})
+	}
+}
+
 // The files a run started with, uncommitted, reach the session's record, where
 // publishing reads them from.
 func TestFactoryRecorderStartedKeepsTheUncommittedFiles(t *testing.T) {

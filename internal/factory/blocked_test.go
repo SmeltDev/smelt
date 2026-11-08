@@ -14,7 +14,7 @@ import (
 )
 
 func TestImplementerPromptDemandsTheWholeRequest(t *testing.T) {
-	p := implementerSystemPrompt("", nil)
+	p := implementerSystemPrompt("", "", nil)
 	for _, want := range []string{"everything the request asks for", "required work", "BLOCKED: <what and why>", "UNVERIFIED: <what to check and how>", "is not a block"} {
 		assert.Assert(t, strings.Contains(p, want), "missing %q in %s", want, p)
 	}
@@ -104,7 +104,7 @@ func TestOutcomeIncomplete(t *testing.T) {
 }
 
 func TestCodexRulesDemandTheWholeRequest(t *testing.T) {
-	script := codex.Harness{}.ImplementScript(harness.ImplementInput{RepoPath: "/r", Prompt: "do it", SystemPrompt: implementerSystemPrompt("", nil)})
+	script := codex.Harness{}.ImplementScript(harness.ImplementInput{RepoPath: "/r", Prompt: "do it", SystemPrompt: implementerSystemPrompt("", "", nil)})
 	_, line, _ := strings.Cut(script, "echo ")
 	enc, _, _ := strings.Cut(line, " ")
 	b, err := base64.StdEncoding.DecodeString(enc)

@@ -388,6 +388,9 @@ type Notes struct {
 	Fallback string `json:"fallback,omitempty"`
 	// Skipped are the tests the sandbox skipped in the run's last round.
 	Skipped []string `json:"skipped,omitempty"`
+	// SkipsNotMeasured is set when no validation output came from a runner
+	// whose skips smelt reads.
+	SkipsNotMeasured bool `json:"skipsNotMeasured,omitempty"`
 	// Low are the findings downgraded to low in a later round.
 	Low []string `json:"low,omitempty"`
 	// Quality is the run's quality line, before → after.

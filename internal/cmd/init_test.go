@@ -935,3 +935,33 @@ func TestInitPrintsNoTestGateLast(t *testing.T) {
 	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(stderr, "")
 	assert.Assert(t, strings.HasSuffix(strings.TrimSpace(plain), note), plain)
 }
+
+func TestInitChecksTheLoginBeforeTheImage(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644))
+
+	// An existing Dockerfile keeps the image step off Docker, which a test machine may lack.
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.smelt"), []byte("FROM scratch\n"), 0o644))
+
+	cmd := newInitCmd()
+	var errOut bytes.Buffer
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs([]string{
+		"--project-dir", dir, "--skip-validate", "--skip-org-id", "--skip-hooks", "--skip-completions", "--skip-skills",
+		"--factory-backend", "docker", "--skip-image-build",
+	})
+	cmd.SetContext(t.Context())
+	assert.NilError(t, cmd.Execute())
+
+	out := errOut.String()
+	login := strings.Index(out, "Claude credential")
+	image := strings.Index(out, "Dockerfile.smelt is yours to edit")
+	assert.Assert(t, login >= 0, out)
+	assert.Assert(t, image >= 0, "%q", out)
+	assert.Assert(t, login < image, "the login must be checked before the image step:\n%s", out)
+	assert.Equal(t, strings.Count(out, "Claude credential"), 1, out)
+}

@@ -88,11 +88,11 @@ func TestGateCommandsAreOnlyTheGates(t *testing.T) {
 }
 
 func TestSystemPromptListsTheGates(t *testing.T) {
-	p := implementerSystemPrompt("be brief", testGates)
+	p := implementerSystemPrompt("be brief", "", testGates)
 	for _, want := range []string{"smelt runs these after your turn", "- lint: golangci-lint run", "- test: go test ./...", "Run-specific instructions:\nbe brief"} {
 		assert.Assert(t, contains(p, want), "missing %q in:\n%s", want, p)
 	}
-	assert.Assert(t, !contains(implementerSystemPrompt("", nil), "smelt runs"))
+	assert.Assert(t, !contains(implementerSystemPrompt("", "", nil), "smelt runs"))
 }
 
 // claudeTurn is the stream of one claude turn that used tools in order, each

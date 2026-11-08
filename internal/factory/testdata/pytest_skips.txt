@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.2, pluggy-1.5.0
+rootdir: /home/user/music_app
+collected 6 items
+
+tests/test_library.py ..s                                                [ 50%]
+tests/test_player.py .xs                                                 [100%]
+
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_library.py:21: needs the audio device
+SKIPPED [1] tests/test_player.py:40: requires network
+XFAIL tests/test_player.py::test_seek_past_end - not implemented yet
+=================== 3 passed, 2 skipped, 1 xfailed in 0.14s ====================

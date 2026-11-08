@@ -281,6 +281,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
 		Commands:                commands,
+		Stack:                   projectStack(cfg),
 		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
 		Pack:                    packOptions(req, cfg),
 		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
@@ -884,6 +885,15 @@ func wireTiming(t factory.Timing) *smeltd.FactoryTiming {
 		GatesMS: t.Gates.Milliseconds(), ReviewsMS: t.Reviews.Milliseconds(), NotesMS: t.Notes.Milliseconds(),
 		TotalMS: t.Total.Milliseconds(), ContextPeakMax: t.PeakMax(), GateOnlyRounds: t.GateOnlyRounds, SlowCalls: t.Warnings(),
 	}
+}
+
+// projectStack is the stack named in the project's environment config, empty
+// when it has none.
+func projectStack(cfg *config.ProjectConfig) string {
+	if cfg == nil || cfg.Environment == nil {
+		return ""
+	}
+	return cfg.Environment.Stack
 }
 
 // imageInstallCommand is the dependency install to run on each sidecar. Only

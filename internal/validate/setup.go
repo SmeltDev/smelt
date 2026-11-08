@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/smeltdev/smelt/internal/anthropic"
 	"github.com/smeltdev/smelt/internal/config"
 )
 
@@ -48,6 +47,12 @@ type layoutGuess struct {
 	NoTestGate string
 }
 
+// Asker answers a single prompt with text. *anthropic.Client is one, with an
+// API key; callers with only a subscription login supply their own.
+type Asker interface {
+	Ask(ctx context.Context, model string, maxTokens int, prompt string, system ...string) (string, error)
+}
+
 // DetectCommands returns the full set of validate commands for the repo with metadata.
 //
 // A checked-in CircleCI config is preferred over everything else: it names the
@@ -56,9 +61,9 @@ type layoutGuess struct {
 // a bazel monorepo containing a package.json, say — are misdetected otherwise.
 //
 // Failing that, known toolchains return richer commands without calling Claude.
-// Claude is only used as a fallback for unknown toolchains, and only when a
-// client is provided.
-func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) (Detection, error) {
+// Claude is only used as a fallback for unknown toolchains, and only when an
+// Asker is provided.
+func DetectCommands(ctx context.Context, claude Asker, workDir string) (Detection, error) {
 	entries, _ := os.ReadDir(workDir)
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
