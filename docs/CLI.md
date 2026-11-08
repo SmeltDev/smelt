@@ -47,6 +47,7 @@ smelt
 │
 ├── init                            # Initialize project configuration
 │   --force                         # Overwrite existing config
+│   --hooks-only                    # Install the hooks for the existing config once its gates pass
 │   --skip-hooks                    # Skip hook file generation
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions              # Skip shell completion installation
@@ -275,6 +276,18 @@ smelt
 ```
 
 ## Behavior Decisions
+
+- **`init` installs hooks only for gates that pass today.** It runs each `role: gate` command once
+  (never `install` or autofix commands). If one fails, it shows the command and the end of its output,
+  installs no hook (`.claude/settings.json`, `.codex/hooks.json`, `.git/hooks/pre-commit`) and prints
+  `hooks not installed: <gate> fails today; fix it, then run smelt init --hooks-only`. Init still exits 0.
+  `smelt init --hooks-only` repeats the check against the existing config and installs the hooks.
+- **A Python repo gets a `pytest` gate only with tracked test files and pytest declared** (pyproject,
+  requirements, setup.py/cfg or Pipfile). Otherwise init writes no test gate and ends with
+  `no test gate: no tests found (add tests, then run smelt init again)`. A pytest exit 5 (no tests collected)
+  passes only when the repo has no test files, locally and in the factory sandbox.
+- **`install` is setup, not a gate.** `smelt validate` and factory runs skip it; `smelt validate install`
+  still runs it, and a factory run installs once per container.
 
 - `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/smelt/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
 - `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `smelt auth remove circleci` first to clear it. Existing accounts should use `smelt auth login`.

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -346,9 +347,22 @@ func TestInitDetectsCargoCommands(t *testing.T) {
 	assert.Equal(t, test["run"], "cargo test")
 }
 
+// trackPythonTest writes tests/test_app.py and git adds it with the named
+// files: pytest only becomes a gate once a tracked test file exists.
+func trackPythonTest(t *testing.T, workDir string, files ...string) {
+	t.Helper()
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, "tests"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "tests", "test_app.py"), []byte("def test_ok():\n    pass\n"), 0o644))
+	add := exec.Command("git", append([]string{"add", filepath.Join("tests", "test_app.py")}, files...)...)
+	add.Dir = workDir
+	out, err := add.CombinedOutput()
+	assert.NilError(t, err, string(out))
+}
+
 func TestInitDetectsPyprojectCommands(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "pyproject.toml"), []byte("[project]\nname = \"test\"\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "pyproject.toml"), []byte("[project]\nname = \"test\"\n[dependency-groups]\ndev = [\"pytest\"]\n"), 0o644))
+	trackPythonTest(t, workDir, "pyproject.toml")
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -369,6 +383,7 @@ func TestInitDetectsPyprojectCommands(t *testing.T) {
 func TestInitDetectsRequirementsTxtCommands(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "requirements.txt"), []byte("pytest\n"), 0o644))
+	trackPythonTest(t, workDir, "requirements.txt")
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -389,6 +404,8 @@ func TestInitDetectsRequirementsTxtCommands(t *testing.T) {
 func TestInitDetectsSetupPyCommands(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "setup.py"), []byte("from setuptools import setup\nsetup(name='test')\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "requirements.txt"), []byte("pytest\n"), 0o644))
+	trackPythonTest(t, workDir, "setup.py", "requirements.txt")
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -409,6 +426,7 @@ func TestInitDetectsSetupPyCommands(t *testing.T) {
 func TestInitDetectsPipfileCommands(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Pipfile"), []byte("[packages]\npytest = \"*\"\n"), 0o644))
+	trackPythonTest(t, workDir, "Pipfile")
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -424,6 +442,32 @@ func TestInitDetectsPipfileCommands(t *testing.T) {
 	test := commandByName(cfg, "test")
 	assert.Assert(t, test != nil, "expected test command")
 	assert.Equal(t, test["run"], "pytest")
+}
+
+// A Python repo without tests gets no test gate, says so last, and still
+// commits: the hook init installs has no failing gate to block it.
+func TestInitPythonWithoutTestsGetsNoGateAndCommits(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "pyproject.toml"), []byte("[project]\nname = \"test\"\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+	env.CircleToken = ""
+
+	result := binary.RunCLI(t, []string{"init"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	note := "no test gate: no tests found (add tests, then run smelt init again)"
+	assert.Assert(t, strings.HasSuffix(strings.TrimSpace(result.Stderr), note), result.Stderr)
+	assert.Assert(t, commandByName(readInitConfig(t, workDir), "test") == nil, "expected no test gate")
+
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "first"}} {
+		c := exec.Command("git", args...)
+		c.Dir = workDir
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "PATH="+filepath.Dir(binary.Path())+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
 }
 
 func TestInitDetectsGemfileCommands(t *testing.T) {
@@ -604,7 +648,8 @@ func TestInitDetectsUnknownToolchainNoClaude(t *testing.T) {
 
 func TestInitCreatesHookFiles(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	// A gate that passes anywhere, so the dry-run lets the hooks install.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -632,7 +677,8 @@ func TestInitCreatesHookFiles(t *testing.T) {
 // up looking configured while nothing validated at session end.
 func TestInitWritesFiringStopHook(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	// A gate that passes anywhere, so the dry-run lets the hooks install.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -686,7 +732,8 @@ func hookCommands(t *testing.T, groups interface{}) []string {
 
 func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	// A gate that passes anywhere, so the dry-run lets the hooks install.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644))
 
 	// Pre-create .claude/settings.json
 	claudeDir := filepath.Join(workDir, ".claude")
@@ -718,7 +765,8 @@ func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
 
 func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	// A gate that passes anywhere, so the dry-run lets the hooks install.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644))
 
 	// Pre-create .claude/settings.json
 	claudeDir := filepath.Join(workDir, ".claude")

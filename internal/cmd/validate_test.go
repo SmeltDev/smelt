@@ -1739,3 +1739,19 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "format\nlint\ntest\n")
 }
+
+func TestPlanValidationExecutionTreatsInstallAsSetup(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: config.CmdInstall, Run: "pip install -e ."},
+		{Name: "test", Run: "pytest"},
+	}}
+
+	plan := planValidationExecution(cfg, &validateOpts{}, "")
+	assert.Equal(t, len(plan.LocalCommands), 1)
+	assert.Equal(t, plan.LocalCommands[0].Name, "test")
+
+	// Asking for install by name still runs it.
+	plan = planValidationExecution(cfg, &validateOpts{}, config.CmdInstall)
+	assert.Equal(t, len(plan.LocalCommands), 1)
+	assert.Equal(t, plan.LocalCommands[0].Name, config.CmdInstall)
+}

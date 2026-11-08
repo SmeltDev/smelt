@@ -101,6 +101,8 @@ What it creates:
 - **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `smelt validate` locally before every commit; not tracked in git
 
+Init first runs each gate command once. If one fails today it prints the command and the end of its output, installs no hooks (a hook would block every commit), and tells you to fix it and run `smelt init --hooks-only`. A Python repo with no tests gets no test gate, and init says so.
+
 `smelt init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
 
 Review the generated config and adjust commands if needed:
